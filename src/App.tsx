@@ -1,10 +1,27 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, SyntheticEvent } from 'react'
+import Timeline from './Timeline'
+import type { EDL } from './edl/types'
+import {
+  applyRemovedRange,
+  createEdl,
+  nextSourceTime,
+  splitSegmentAt,
+  totalKeptDuration,
+} from './edl/edl'
+
+function fmt(seconds: number): string {
+  return seconds.toFixed(2)
+}
 
 function App() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
-  const [duration, setDuration] = useState<number | null>(null)
+  const [edl, setEdl] = useState<EDL | null>(null)
+  const [playhead, setPlayhead] = useState(0)
+  const [inPoint, setInPoint] = useState<number | null>(null)
+  const [outPoint, setOutPoint] = useState<number | null>(null)
   const objectUrlRef = useRef<string | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
 
   // Revoke the last object URL when it changes or on unmount, to avoid leaks.
   useEffect(() => {
@@ -14,6 +31,11 @@ function App() {
       }
     }
   }, [])
+
+  function clearSelection() {
+    setInPoint(null)
+    setOutPoint(null)
+  }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
@@ -28,11 +50,119 @@ function App() {
     const url = URL.createObjectURL(file)
     objectUrlRef.current = url
     setVideoUrl(url)
-    setDuration(null)
+    setEdl(null)
+    setPlayhead(0)
+    clearSelection()
   }
 
+  // Initialize the EDL from the loaded source as a single full-length segment.
   function handleLoadedMetadata(event: SyntheticEvent<HTMLVideoElement>) {
-    setDuration(event.currentTarget.duration)
+    const video = event.currentTarget
+    setEdl(
+      createEdl({
+        id: crypto.randomUUID(),
+        url: videoUrl ?? video.currentSrc,
+        duration: video.duration,
+        width: video.videoWidth || undefined,
+        height: video.videoHeight || undefined,
+      }),
+    )
+  }
+
+  // EDL-driven playback: the <video> plays in source time; on each timeupdate we
+  // skip from the end of one kept segment to the start of the next, and stop
+  // after the last kept segment. We only steer during playback so the user can
+  // still scrub freely while paused. `nextSourceTime` encodes the skip rule.
+  function handleTimeUpdate(event: SyntheticEvent<HTMLVideoElement>) {
+    const video = event.currentTarget
+    const t = video.currentTime
+
+    if (edl === null || video.paused) {
+      setPlayhead(t)
+      return
+    }
+
+    const next = nextSourceTime(edl, t)
+    if (next === null) {
+      video.pause()
+      setPlayhead(t)
+      return
+    }
+    if (next > t + 1e-3) {
+      video.currentTime = next
+      setPlayhead(next)
+      return
+    }
+    setPlayhead(t)
+  }
+
+  // On play, jump into a kept range: restart from the first segment if we're
+  // past the end, or skip forward if we're sitting inside a removed gap.
+  function handlePlay(event: SyntheticEvent<HTMLVideoElement>) {
+    const video = event.currentTarget
+    if (edl === null || edl.segments.length === 0) {
+      return
+    }
+    const next = nextSourceTime(edl, video.currentTime)
+    if (next === null) {
+      const start = edl.segments[0].start
+      video.currentTime = start
+      setPlayhead(start)
+    } else if (next > video.currentTime + 1e-3) {
+      video.currentTime = next
+      setPlayhead(next)
+    }
+  }
+
+  function handleSeek(sourceTime: number) {
+    if (videoRef.current !== null) {
+      videoRef.current.currentTime = sourceTime
+    }
+    setPlayhead(sourceTime)
+  }
+
+  const hasSelection =
+    inPoint !== null && outPoint !== null && inPoint !== outPoint
+
+  function deleteSelection() {
+    if (edl === null || inPoint === null || outPoint === null) {
+      return
+    }
+    const start = Math.min(inPoint, outPoint)
+    const end = Math.max(inPoint, outPoint)
+    setEdl(applyRemovedRange(edl, start, end))
+    clearSelection()
+  }
+
+  function trimToSelection() {
+    if (edl === null || inPoint === null || outPoint === null) {
+      return
+    }
+    const start = Math.min(inPoint, outPoint)
+    const end = Math.max(inPoint, outPoint)
+    // Keep only [start, end]: remove the head and the tail around it.
+    const trimmed = applyRemovedRange(
+      applyRemovedRange(edl, 0, start),
+      end,
+      edl.source.duration,
+    )
+    setEdl(trimmed)
+    clearSelection()
+  }
+
+  function splitAtPlayhead() {
+    if (edl === null) {
+      return
+    }
+    setEdl(splitSegmentAt(edl, playhead))
+  }
+
+  function resetEdl() {
+    if (edl === null) {
+      return
+    }
+    setEdl(createEdl(edl.source))
+    clearSelection()
   }
 
   return (
@@ -42,14 +172,91 @@ function App() {
       <input type="file" accept="video/*" onChange={handleFileChange} />
 
       {videoUrl !== null && (
-        <div>
+        <div style={{ marginTop: 16 }}>
           <video
+            ref={videoRef}
             src={videoUrl}
             controls
             onLoadedMetadata={handleLoadedMetadata}
-            style={{ maxWidth: '100%', maxHeight: '70vh' }}
+            onTimeUpdate={handleTimeUpdate}
+            onPlay={handlePlay}
+            style={{ maxWidth: '100%', maxHeight: '60vh' }}
           />
-          {duration !== null && <p>Duration: {duration.toFixed(2)} seconds</p>}
+
+          {edl !== null && (
+            <div style={{ marginTop: 16, padding: '0 16px' }}>
+              <Timeline
+                edl={edl}
+                playhead={playhead}
+                inPoint={inPoint}
+                outPoint={outPoint}
+                onSeek={handleSeek}
+              />
+
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 8,
+                  justifyContent: 'center',
+                  marginTop: 12,
+                }}
+              >
+                <button type="button" onClick={() => setInPoint(playhead)}>
+                  Set In
+                </button>
+                <button type="button" onClick={() => setOutPoint(playhead)}>
+                  Set Out
+                </button>
+                <button type="button" onClick={deleteSelection} disabled={!hasSelection}>
+                  Delete range
+                </button>
+                <button type="button" onClick={trimToSelection} disabled={!hasSelection}>
+                  Trim to selection
+                </button>
+                <button type="button" onClick={splitAtPlayhead}>
+                  Split at playhead
+                </button>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  disabled={inPoint === null && outPoint === null}
+                >
+                  Clear selection
+                </button>
+                <button type="button" onClick={resetEdl}>
+                  Reset
+                </button>
+              </div>
+
+              <div style={{ marginTop: 12, fontSize: 15 }}>
+                <p>
+                  In: {inPoint === null ? '—' : `${fmt(inPoint)}s`} · Out:{' '}
+                  {outPoint === null ? '—' : `${fmt(outPoint)}s`} · Playhead:{' '}
+                  {fmt(playhead)}s
+                </p>
+                <p>
+                  Source: {fmt(edl.source.duration)}s · Kept:{' '}
+                  {fmt(totalKeptDuration(edl))}s · {edl.segments.length} segment
+                  {edl.segments.length === 1 ? '' : 's'}
+                </p>
+                <ol
+                  style={{
+                    textAlign: 'left',
+                    display: 'inline-block',
+                    margin: '8px 0 0',
+                    paddingLeft: 20,
+                  }}
+                >
+                  {edl.segments.map((seg) => (
+                    <li key={seg.id}>
+                      {fmt(seg.start)}s – {fmt(seg.end)}s
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </>
