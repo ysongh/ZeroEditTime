@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, SyntheticEvent } from 'react'
 import Timeline from './Timeline'
+import TranscriptView from './transcript/Transcript'
+import { transcribe } from './transcript/api'
 import type { EDL } from './edl/types'
+import type { Transcript } from './transcript/types'
 import {
   applyRemovedRange,
   createEdl,
@@ -20,6 +23,10 @@ function App() {
   const [playhead, setPlayhead] = useState(0)
   const [inPoint, setInPoint] = useState<number | null>(null)
   const [outPoint, setOutPoint] = useState<number | null>(null)
+  const [file, setFile] = useState<File | null>(null)
+  const [transcript, setTranscript] = useState<Transcript | null>(null)
+  const [isTranscribing, setIsTranscribing] = useState(false)
+  const [transcribeError, setTranscribeError] = useState<string | null>(null)
   const objectUrlRef = useRef<string | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
 
@@ -38,8 +45,8 @@ function App() {
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    if (file === undefined) {
+    const selected = event.target.files?.[0]
+    if (selected === undefined) {
       return
     }
 
@@ -47,11 +54,14 @@ function App() {
       URL.revokeObjectURL(objectUrlRef.current)
     }
 
-    const url = URL.createObjectURL(file)
+    const url = URL.createObjectURL(selected)
     objectUrlRef.current = url
+    setFile(selected)
     setVideoUrl(url)
     setEdl(null)
     setPlayhead(0)
+    setTranscript(null)
+    setTranscribeError(null)
     clearSelection()
   }
 
@@ -119,6 +129,23 @@ function App() {
       videoRef.current.currentTime = sourceTime
     }
     setPlayhead(sourceTime)
+  }
+
+  async function handleTranscribe() {
+    if (file === null) {
+      return
+    }
+    setIsTranscribing(true)
+    setTranscribeError(null)
+    try {
+      setTranscript(await transcribe(file))
+    } catch (err) {
+      setTranscribeError(
+        err instanceof Error ? err.message : 'Transcription failed.',
+      )
+    } finally {
+      setIsTranscribing(false)
+    }
   }
 
   const hasSelection =
@@ -257,6 +284,28 @@ function App() {
               </div>
             </div>
           )}
+
+          <div style={{ marginTop: 16 }}>
+            <button
+              type="button"
+              onClick={handleTranscribe}
+              disabled={file === null || isTranscribing}
+            >
+              {isTranscribing ? 'Transcribing…' : 'Transcribe'}
+            </button>
+
+            {transcribeError !== null && (
+              <p style={{ color: 'crimson', marginTop: 8 }}>{transcribeError}</p>
+            )}
+
+            {transcript !== null && (
+              <TranscriptView
+                transcript={transcript}
+                currentTime={playhead}
+                onSeek={handleSeek}
+              />
+            )}
+          </div>
         </div>
       )}
     </>

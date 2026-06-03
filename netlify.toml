@@ -1,0 +1,21 @@
+# Netlify configuration. The redirect makes the browser's /api/* calls resolve to
+# our serverless functions, so the OpenAI key stays server-side and is never
+# shipped to the client. `netlify dev` runs Vite + the functions together.
+
+[build]
+  command = "pnpm build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[dev]
+  command = "pnpm dev"
+  targetPort = 5173
+  framework = "#custom"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
