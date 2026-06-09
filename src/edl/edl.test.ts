@@ -4,6 +4,7 @@ import {
   applyRemovedRange,
   createEdl,
   edlTimeToSource,
+  isSourceTimeKept,
   nextSourceTime,
   sourceTimeToEdlTime,
   splitSegmentAt,
@@ -161,6 +162,41 @@ describe('time mapping', () => {
     expect(sourceTimeToEdlTime(edl, 4.5)).toBe(3) // inside the gap -> boundary
     expect(sourceTimeToEdlTime(edl, 7)).toBe(4)
     expect(sourceTimeToEdlTime(edl, 10)).toBe(7)
+  })
+})
+
+describe('isSourceTimeKept', () => {
+  // [0,3] then [6,10]: [3,6) is a removed gap.
+  const edl = applyRemovedRange(createEdl(SOURCE), 3, 6)
+
+  it('is true for a time inside a kept segment', () => {
+    expect(isSourceTimeKept(edl, 1)).toBe(true)
+    expect(isSourceTimeKept(edl, 8)).toBe(true)
+  })
+
+  it('is false for a time inside a removed gap', () => {
+    expect(isSourceTimeKept(edl, 4.5)).toBe(false)
+  })
+
+  it('treats segments as half-open [start, end)', () => {
+    expect(isSourceTimeKept(edl, 0)).toBe(true) // segment start is kept
+    expect(isSourceTimeKept(edl, 3)).toBe(false) // removed boundary is not kept
+    expect(isSourceTimeKept(edl, 6)).toBe(true) // start of the next segment
+    expect(isSourceTimeKept(edl, 10)).toBe(false) // past the last segment end
+  })
+
+  it('derives word kept-ness from the midpoint of its span', () => {
+    // A word's kept-ness is decided by its midpoint, not by whether its span
+    // overlaps a cut boundary.
+    const mid = (start: number, end: number) => (start + end) / 2
+    expect(isSourceTimeKept(edl, mid(1, 2))).toBe(true) // wholly in [0,3) -> kept
+    expect(isSourceTimeKept(edl, mid(4, 5))).toBe(false) // wholly in the gap -> struck
+    expect(isSourceTimeKept(edl, mid(2.8, 3.4))).toBe(false) // straddles cut, midpoint 3.1 in gap
+    expect(isSourceTimeKept(edl, mid(5.6, 6.4))).toBe(true) // straddles cut, midpoint 6.0 kept
+  })
+
+  it('is false for every time when the EDL has no segments', () => {
+    expect(isSourceTimeKept(applyRemovedRange(edl, 0, 10), 5)).toBe(false)
   })
 })
 

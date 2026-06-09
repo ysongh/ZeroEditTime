@@ -102,6 +102,20 @@ export function totalKeptDuration(edl: EDL): number {
 }
 
 /**
+ * Is the source time `t` inside a kept segment? This is the derived-truth
+ * predicate for "is this still in the edit": a transcript word is struck through
+ * iff its MIDPOINT is not kept, so a word that merely straddles a cut boundary is
+ * not ambiguously struck. Nothing stores per-word deleted state — kept-ness is
+ * recomputed from the EDL every render.
+ *
+ * Segments are half-open [start, end): a time exactly on a removed boundary reads
+ * as not kept, matching how playback and the active-word highlight treat `end`.
+ */
+export function isSourceTimeKept(edl: EDL, t: number): boolean {
+  return edl.segments.some((seg) => t >= seg.start && t < seg.end)
+}
+
+/**
  * Map a position on the concatenated kept timeline (EDL-time) to a source time.
  * EDL-time is clamped to [0, totalKeptDuration]. Returns 0 for an empty EDL.
  */
