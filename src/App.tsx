@@ -20,6 +20,7 @@ function fmt(seconds: number): string {
 function App() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
   const [edl, setEdl] = useState<EDL | null>(null)
+  const [history, setHistory] = useState<EDL[]>([])
   const [playhead, setPlayhead] = useState(0)
   const [inPoint, setInPoint] = useState<number | null>(null)
   const [outPoint, setOutPoint] = useState<number | null>(null)
@@ -44,6 +45,28 @@ function App() {
     setOutPoint(null)
   }
 
+  // The one entry point for every EDL mutation — timeline ops AND (Phase 3)
+  // transcript deletes all funnel through here. It pushes the current EDL onto
+  // the history before applying the next, so a single `undo` restores the
+  // preview, the timeline, and the struck-through words together (all derived
+  // from the one EDL). A no-op (`applyRemovedRange`/`splitSegmentAt` returning
+  // the same EDL) is not recorded.
+  function commitEdl(next: EDL) {
+    if (edl === null || next === edl) {
+      return
+    }
+    setHistory((past) => [...past, edl])
+    setEdl(next)
+  }
+
+  function undo() {
+    if (history.length === 0) {
+      return
+    }
+    setEdl(history[history.length - 1])
+    setHistory((past) => past.slice(0, -1))
+  }
+
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0]
     if (selected === undefined) {
@@ -59,6 +82,7 @@ function App() {
     setFile(selected)
     setVideoUrl(url)
     setEdl(null)
+    setHistory([])
     setPlayhead(0)
     setTranscript(null)
     setTranscribeError(null)
@@ -157,7 +181,7 @@ function App() {
     }
     const start = Math.min(inPoint, outPoint)
     const end = Math.max(inPoint, outPoint)
-    setEdl(applyRemovedRange(edl, start, end))
+    commitEdl(applyRemovedRange(edl, start, end))
     clearSelection()
   }
 
@@ -173,7 +197,7 @@ function App() {
       end,
       edl.source.duration,
     )
-    setEdl(trimmed)
+    commitEdl(trimmed)
     clearSelection()
   }
 
@@ -181,14 +205,14 @@ function App() {
     if (edl === null) {
       return
     }
-    setEdl(splitSegmentAt(edl, playhead))
+    commitEdl(splitSegmentAt(edl, playhead))
   }
 
   function resetEdl() {
     if (edl === null) {
       return
     }
-    setEdl(createEdl(edl.source))
+    commitEdl(createEdl(edl.source))
     clearSelection()
   }
 
@@ -250,6 +274,13 @@ function App() {
                   disabled={inPoint === null && outPoint === null}
                 >
                   Clear selection
+                </button>
+                <button
+                  type="button"
+                  onClick={undo}
+                  disabled={history.length === 0}
+                >
+                  Undo
                 </button>
                 <button type="button" onClick={resetEdl}>
                   Reset
