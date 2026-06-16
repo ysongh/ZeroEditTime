@@ -201,6 +201,21 @@ function App() {
     clearSelection()
   }
 
+  // Transcript-delete entry point: a selected word/sentence span arrives as a
+  // source range and removes it from the EDL via the same primitive as timeline
+  // edits. We refuse a delete that would leave nothing kept, so the preview
+  // never goes empty (recovery from any other delete is via Undo).
+  function deleteSourceRange(start: number, end: number) {
+    if (edl === null) {
+      return
+    }
+    const next = applyRemovedRange(edl, start, end)
+    if (next.segments.length === 0) {
+      return
+    }
+    commitEdl(next)
+  }
+
   function splitAtPlayhead() {
     if (edl === null) {
       return
@@ -329,11 +344,13 @@ function App() {
               <p style={{ color: 'crimson', marginTop: 8 }}>{transcribeError}</p>
             )}
 
-            {transcript !== null && (
+            {transcript !== null && edl !== null && (
               <TranscriptView
                 transcript={transcript}
+                edl={edl}
                 currentTime={playhead}
                 onSeek={handleSeek}
+                onDeleteRange={deleteSourceRange}
               />
             )}
           </div>
