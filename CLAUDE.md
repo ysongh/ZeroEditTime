@@ -25,8 +25,8 @@ empty folders for future phases.
   to Claude, executing no tools and holding no EDL. The CLIENT runs an agent loop, executes the
   returned tool calls against a working EDL via the existing pure functions, and commits the whole
   run as ONE `commitEdl` change (one Undo). So far: `src/agent/detect.ts` and `src/agent/tools.ts`
-  (the pure detection + executors). Still landing this phase: the loop (`run.ts`), the proxy
-  (`netlify/functions/agent.ts`), the `AgentBar` UI, and the new unit tests.
+  (the pure detection + executors, now unit-tested). Still landing this phase: the loop
+  (`run.ts`), the proxy (`netlify/functions/agent.ts`), and the `AgentBar` UI.
 - **Later phases (do NOT build yet):** captions and `ffmpeg.wasm` export.
 
 ## Stack
@@ -113,6 +113,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     for `cut_segment`, `remove_silences`, `remove_filler_words`, and `trim_to_duration`. Every
     removal funnels through `applyRemovedRange`; `trim_to_duration` reuses `edlTimeToSource` to crop
     the tail. A model-supplied silence threshold is clamped to a floor (`MIN_SILENCE_MS`).
+  - `detect.test.ts` / `tools.test.ts` — Vitest unit tests for the detection and the executors
+    (including `trim_to_duration` via `edlTimeToSource`), run offline with no API.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the media to Whisper, returns
   `{ words: Word[] }`, and hides the API key. Run `netlify dev` for local transcription.
 - `src/main.tsx` — React entry (`StrictMode`).
