@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, SyntheticEvent } from 'react'
 import Timeline from './Timeline'
 import TranscriptView from './transcript/Transcript'
+import AgentBar from './agent/AgentBar'
 import { transcribe } from './transcript/api'
 import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
@@ -345,13 +346,20 @@ function App() {
             )}
 
             {transcript !== null && edl !== null && (
-              <TranscriptView
-                transcript={transcript}
-                edl={edl}
-                currentTime={playhead}
-                onSeek={handleSeek}
-                onDeleteRange={deleteSourceRange}
-              />
+              <>
+                <AgentBar
+                  edl={edl}
+                  transcript={transcript}
+                  onCommit={commitEdl}
+                />
+                <TranscriptView
+                  transcript={transcript}
+                  edl={edl}
+                  currentTime={playhead}
+                  onSeek={handleSeek}
+                  onDeleteRange={deleteSourceRange}
+                />
+              </>
             )}
           </div>
         </div>

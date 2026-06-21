@@ -19,15 +19,13 @@ empty folders for future phases.
   a source range and removes it through the same EDL primitive as timeline edits. Struck-through
   words derive from the EDL (no per-word flag), and a single Undo restores the words, the EDL
   range, and the timeline together.
-- **Phase 4 (in progress):** an AI agent. A natural-language command box ("remove the silences",
-  "cut the filler words", "get it under 30 seconds") drives edits. A new Netlify Function
+- **Phase 4 (done):** an AI agent. A natural-language command box ("remove the silences",
+  "cut the filler words", "get it under 30 seconds") drives edits. A Netlify Function
   (`/api/agent`) is a **stateless relay**: it injects a system prompt + tool schemas and forwards
-  to Claude, executing no tools and holding no EDL. The CLIENT runs an agent loop, executes the
-  returned tool calls against a working EDL via the existing pure functions, and commits the whole
-  run as ONE `commitEdl` change (one Undo). So far: `src/agent/detect.ts` and `src/agent/tools.ts`
-  (the pure detection + executors, now unit-tested) plus the stateless proxy
-  (`netlify/functions/agent.ts`). Still landing this phase: the client loop (`run.ts`)
-  and the `AgentBar` UI.
+  to Claude, executing no tools and holding no EDL. The CLIENT runs an agent loop (`run.ts`),
+  executes the returned tool calls against a working EDL via the existing pure functions, and
+  commits the whole run as ONE `commitEdl` change (one Undo). Reported numbers (tools run, kept
+  duration before→after) are computed client-side; Claude's text is narration only.
 - **Later phases (do NOT build yet):** captions and `ffmpeg.wasm` export.
 
 ## Stack
@@ -105,8 +103,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `Transcript.tsx` — clickable words with index-based selection (click / shift-click span)
     and per-sentence delete; words render struck-through derived from `isSourceTimeKept`, never
     a stored flag. Deleting a span calls back into `App`'s `commitEdl` path.
-- `src/agent/` — the Phase-4 agent, a third view onto the one EDL (so far the pure core; the
-  loop and UI land later this phase). All detection and executors are framework-free and unit-tested.
+- `src/agent/` — the Phase-4 agent, a third view onto the one EDL. Detection and executors are
+  framework-free and unit-tested; the loop is offline-testable via an injectable transport.
   - `detect.ts` — pure range detection: `findSilences` (inter-word gaps over a threshold) and
     `findFillerSpans` (case-insensitive, punctuation-stripped, greedy longest-first matching of
     filler words/phrases). Returns `Range[]`; touches no EDL.
@@ -114,8 +112,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     for `cut_segment`, `remove_silences`, `remove_filler_words`, and `trim_to_duration`. Every
     removal funnels through `applyRemovedRange`; `trim_to_duration` reuses `edlTimeToSource` to crop
     the tail. A model-supplied silence threshold is clamped to a floor (`MIN_SILENCE_MS`).
-  - `detect.test.ts` / `tools.test.ts` — Vitest unit tests for the detection and the executors
-    (including `trim_to_duration` via `edlTimeToSource`), run offline with no API.
+  - `run.ts` — the client agent loop: owns the Anthropic `messages` array and a working EDL,
+    POSTs to `/api/agent`, runs each `tool_use` through the matching executor (working EDL threads
+    across turns), feeds back a `tool_result`, and re-POSTs until `end_turn` or a 6-iteration cap.
+    Returns the uncommitted EDL plus the client-computed summary; the `transport` is injectable.
+  - `AgentBar.tsx` — the command box (input + Run, thinking/disabled state, error + summary).
+    Calls `runAgent` and commits the result ONCE via App's `commitEdl`; shows the client-side
+    tools-run + kept-duration delta.
+  - `detect.test.ts` / `tools.test.ts` / `run.test.ts` — Vitest unit tests for the detection, the
+    executors (including `trim_to_duration` via `edlTimeToSource`), and the loop (scripted
+    transport), all run offline with no API.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the media to Whisper, returns
   `{ words: Word[] }`, and hides the API key. Run `netlify dev` for local transcription.
 - `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 4
