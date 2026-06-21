@@ -25,8 +25,9 @@ empty folders for future phases.
   to Claude, executing no tools and holding no EDL. The CLIENT runs an agent loop, executes the
   returned tool calls against a working EDL via the existing pure functions, and commits the whole
   run as ONE `commitEdl` change (one Undo). So far: `src/agent/detect.ts` and `src/agent/tools.ts`
-  (the pure detection + executors, now unit-tested). Still landing this phase: the loop
-  (`run.ts`), the proxy (`netlify/functions/agent.ts`), and the `AgentBar` UI.
+  (the pure detection + executors, now unit-tested) plus the stateless proxy
+  (`netlify/functions/agent.ts`). Still landing this phase: the client loop (`run.ts`)
+  and the `AgentBar` UI.
 - **Later phases (do NOT build yet):** captions and `ffmpeg.wasm` export.
 
 ## Stack
@@ -117,6 +118,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     (including `trim_to_duration` via `edlTimeToSource`), run offline with no API.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the media to Whisper, returns
   `{ words: Word[] }`, and hides the API key. Run `netlify dev` for local transcription.
+- `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 4
+  tool schemas and forwards `{ messages }` to the Claude Messages API (`claude-sonnet-4-6`),
+  returning `{ content, stop_reason }` unchanged. Executes no tools, holds no EDL; reads
+  `ANTHROPIC_API_KEY` from env only. Reachable at `/api/agent` via the `/api/*` redirect.
 - `src/main.tsx` — React entry (`StrictMode`).
 - `src/index.css` — Vite template styles (`#root` is a centered 1126px column).
 - `public/_headers` — sets COOP `same-origin` + COEP `require-corp`. **Do not remove.** These
