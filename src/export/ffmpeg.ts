@@ -18,8 +18,15 @@ export type ExportSegment = { start: number; end: number }
 // bounds", that's a version mismatch — align this to @ffmpeg/ffmpeg (try
 // 0.12.10 / 0.12.15). Loaded from CDN so Vite's build never has to bundle the
 // ~31 MB core out of /public.
+//
+// We load the ESM core (`/dist/esm`), NOT umd: Vite bundles @ffmpeg/ffmpeg's
+// internal worker as a *module* worker, and only the ESM core has the
+// `export default createFFmpegCore` that the worker imports. The umd core
+// assigns to module.exports/exports only — no global fallback — so importing it
+// in a module worker leaves createFFmpegCore undefined and load() fails with
+// "failed to import ffmpeg-core.js".
 const CORE_VERSION = '0.12.10'
-const CORE_BASE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/umd`
+const CORE_BASE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/esm`
 
 /**
  * Build the full ffmpeg exec argument array for trimming each kept segment off

@@ -146,7 +146,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     re-encodes (never `-c copy`, which only cuts on keyframes). Alongside it, `loadFfmpeg` loads
     the single-threaded core from the CDN once (guarded on `ffmpeg.loaded`), and `runExport`
     writes the source into the VFS, runs the one exec, reads the MP4 back as a Blob, and frees
-    the VFS.
+    the VFS. **Load the ESM core (`@ffmpeg/core@<ver>/dist/esm`), not umd** — Vite bundles
+    `@ffmpeg/ffmpeg`'s worker as a *module* worker, and only the ESM build has the
+    `export default createFFmpegCore` it imports; the umd build leaves `createFFmpegCore`
+    undefined there and load fails with "failed to import ffmpeg-core.js".
   - `ExportButton.tsx` — the Export section: lazily holds one `FFmpeg` instance in a ref, loads
     the engine if needed (distinct "Loading engine…" state), encodes with a progress bar, and
     downloads `zero-edit-time.mp4`. Disabled while busy and when nothing is kept.

@@ -71,7 +71,8 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
         ffmpeg.off('progress', onProgress)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Export failed.')
+      console.error('Export failed:', err)
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setPhase('idle')
       setProgress(0)
