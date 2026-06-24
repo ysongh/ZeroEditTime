@@ -1,73 +1,94 @@
-# React + TypeScript + Vite
+# Zero Edit Time
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A browser-based, AI-assisted video editor that runs **entirely client-side**. Pick a local video,
+edit it non-destructively (by hand, by deleting words in the transcript, or by typing a natural-
+language command), and export a trimmed MP4 — all in the browser. The source is never uploaded for
+editing and never re-encoded until you export.
 
-Currently, two official plugins are available:
+## How it works
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The single source of truth is an **EDL** (Edit Decision List): the ordered set of source
+time-ranges that play. Every edit — a timeline trim, a transcript-word delete, an AI agent command
+— records a removed range and recomputes the kept segments. The UI derives from the EDL one-way, so
+the preview, the timeline, and the struck-through transcript words all stay in lockstep, and a
+single **Undo** restores them together. Nothing is re-encoded until **Export**, which reads the kept
+segments and produces a downloadable MP4 with `ffmpeg.wasm`.
 
-## React Compiler
+### Built in phases
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Phase 0** — pick a local video, play it, show its duration.
+- **Phase 1** — the EDL model + trimming. Preview plays the kept ranges and skips removed ones.
+- **Phase 2** — transcription. A Netlify Function proxies the media to Whisper and returns
+  word-level timings; the transcript is clickable (click-to-seek) with an active-word highlight.
+- **Phase 3** — transcript editing. Delete a word span or a whole sentence; each maps to a source
+  range and is removed through the same EDL primitive as timeline edits.
+- **Phase 4** — an AI agent. A natural-language command box ("remove the silences", "cut the filler
+  words", "get it under 30 seconds") drives edits. A Netlify Function relays to Claude, which only
+  *selects* tools; the client computes the ranges, applies them, and commits the whole run as one
+  Undo.
+- **Phase 5** — export. A fully client-side `ffmpeg.wasm` encode trims each kept segment off decoded
+  frames and concatenates them into one re-encoded MP4 — no network calls, no proxy.
 
-## Expanding the ESLint configuration
+## Stack
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- **React 19 + TypeScript** (strict, no `any`), bundled with **Vite 8**.
+- **pnpm** only — never `npm` or `yarn`.
+- No UI/styling/state libraries — plain React.
+- **Vitest** for the pure EDL math, the agent detection/executors/loop, and the export-args builder.
+- **Netlify Functions** for the Whisper transcription proxy (Phase 2) and the Claude agent relay
+  (Phase 4). API keys live only in the functions' `.env`.
+- **`ffmpeg.wasm`** (`@ffmpeg/ffmpeg` + `@ffmpeg/util`) for Phase-5 export; the single-threaded
+  `@ffmpeg/core` is loaded from a CDN, so export needs no proxy and no cross-origin isolation.
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Commands
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+pnpm install   # install dependencies
+pnpm dev       # start the Vite dev server (playback, editing, and EXPORT work here)
+pnpm build     # tsc -b && vite build — typecheck + production build
+pnpm lint      # eslint
+pnpm preview   # serve the production build locally
+pnpm test      # vitest run — the unit tests
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Local end-to-end
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- **Editing and export** run under plain `pnpm dev` — they are 100% client-side.
+- **Transcription and the AI agent** need the Netlify Functions, so run the app with `netlify dev`
+  and provide the keys in a `.env`:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+  ```bash
+  # .env (never committed)
+  OPENAI_API_KEY=...        # used by the Whisper transcription proxy
+  ANTHROPIC_API_KEY=...     # used by the Claude agent relay
+  ```
+
+  Notes: Whisper rejects `.mov`; keep clips small (there is a ~4.5 MB request-body cap on the proxy).
+
+## Using it
+
+1. Load a video. It plays and shows its duration; the EDL starts as one full-length segment.
+2. Edit:
+   - **Timeline** — Set In / Set Out, then Delete range or Trim to selection; Split at playhead.
+   - **Transcript** (after Transcribe) — click words to select a span, or delete a whole sentence;
+     struck-through words show what's been cut.
+   - **Agent** — type a command and Run; it edits via the same EDL primitives in one Undo.
+   - **Undo / Reset** at any time.
+3. **Export MP4** — loads the encode engine (≈31 MB, first time only), shows a progress bar, then
+   downloads `zero-edit-time.mp4` containing only the kept segments, in order, audio in sync.
+
+## Project layout
+
+- `src/edl/` — framework-free EDL core: types and pure math (`createEdl`, `applyRemovedRange`,
+  `splitSegmentAt`, time mapping, `isSourceTimeKept`). All times are seconds into the source.
+- `src/App.tsx` — the app shell: file picker, EDL state + history (`commitEdl` / `undo`), the
+  skip-removed-ranges playback controller, and the edit controls.
+- `src/Timeline.tsx` — the one-track timeline, rendered one-way from the EDL.
+- `src/transcript/` — the clickable transcript view, sentence grouping, and the proxy client.
+- `src/agent/` — the AI agent: pure range detection and tool executors, the client agent loop, and
+  the command-box UI.
+- `src/export/` — Phase-5 export: the pure `buildExportArgs` filter-graph builder plus the
+  ffmpeg load/run mechanics, and the Export button.
+- `netlify/functions/` — the Whisper transcription proxy and the stateless Claude agent relay.
+
+See [CLAUDE.md](CLAUDE.md) for the detailed architecture and contributor guidance.

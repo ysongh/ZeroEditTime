@@ -26,7 +26,13 @@ empty folders for future phases.
   executes the returned tool calls against a working EDL via the existing pure functions, and
   commits the whole run as ONE `commitEdl` change (one Undo). Reported numbers (tools run, kept
   duration before→after) are computed client-side; Claude's text is narration only.
-- **Later phases (do NOT build yet):** captions and `ffmpeg.wasm` export.
+- **Phase 5 (done):** export. A fully client-side `ffmpeg.wasm` encode turns the EDL into a
+  downloadable MP4. It READS `edl.segments` (already the kept ranges, in order), trims each off
+  decoded frames (resetting PTS) and concatenates them re-encoded — all in the browser with no
+  network calls, no proxy, and no cross-origin isolation. A pure `buildExportArgs` maps the
+  segments to the exact ffmpeg filter graph and is unit-tested; the encode itself is verified
+  manually under plain `pnpm dev`.
+- **Later phases (do NOT build):** captions. Out of scope this project; do not scaffold for it.
 
 ## Stack
 
@@ -40,6 +46,10 @@ empty folders for future phases.
 - The Phase-4 agent proxy is a second Netlify Function calling the **Claude Messages API**
   (`claude-sonnet-4-6`) via a hand-rolled `fetch` — no SDK, no new dependency. `ANTHROPIC_API_KEY`
   lives only in the function (in `.env`), mirroring how the transcribe proxy hides its key.
+- Phase-5 export runs **`ffmpeg.wasm`** entirely in the browser via `@ffmpeg/ffmpeg` +
+  `@ffmpeg/util` (the only Phase-5 deps). The single-threaded `@ffmpeg/core` is loaded from a
+  CDN (pinned version) — not bundled — so there is no proxy, no server, and no cross-origin
+  isolation requirement; export works under plain `pnpm dev`.
 
 ## Commands
 
@@ -74,6 +84,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   agent loop mutates a working EDL through its turns and commits ONCE via the existing `commitEdl`,
   so a single Undo reverts the whole command. Reported numbers (tools run, kept duration
   before→after) are computed CLIENT-side; Claude's text is narration only.
+- **Export reads, never mutates.** Phase-5 export READS `edl.segments` and re-encodes them
+  client-side; it changes no EDL state, adds no editing features, and makes no network calls. Keep
+  the testable core (`buildExportArgs`) pure and React-free, and keep it unit-tested. Do not add
+  captions, server-side export, or a bundled `@ffmpeg/core` (load it from the CDN).
 - Do not re-init the project or overwrite toolchain config (`vite.config.ts`, `tsconfig*.json`,
   `eslint.config.js`).
 
@@ -122,6 +136,22 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `detect.test.ts` / `tools.test.ts` / `run.test.ts` — Vitest unit tests for the detection, the
     executors (including `trim_to_duration` via `edlTimeToSource`), and the loop (scripted
     transport), all run offline with no API.
+- `src/export/` — the Phase-5 export, a read-only consumer of the one EDL. Fully client-side; no
+  network, no proxy, no React in the testable core.
+  - `ffmpeg.ts` — `buildExportArgs(segments, inputName?, outputName?)` is the **pure** core: it
+    maps the kept segments to the exact ffmpeg exec args — one `-filter_complex` string that
+    `trim`/`atrim`s each segment off decoded frames, resets PTS (`setpts`/`asetpts=PTS-STARTPTS`)
+    so audio stays in sync across joins, and `concat`s them (a single segment skips concat and
+    labels `[outv]`/`[outa]` directly). Float seconds pass straight through for frame accuracy;
+    re-encodes (never `-c copy`, which only cuts on keyframes). Alongside it, `loadFfmpeg` loads
+    the single-threaded core from the CDN once (guarded on `ffmpeg.loaded`), and `runExport`
+    writes the source into the VFS, runs the one exec, reads the MP4 back as a Blob, and frees
+    the VFS.
+  - `ExportButton.tsx` — the Export section: lazily holds one `FFmpeg` instance in a ref, loads
+    the engine if needed (distinct "Loading engine…" state), encodes with a progress bar, and
+    downloads `zero-edit-time.mp4`. Disabled while busy and when nothing is kept.
+  - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
+    no-concat, exact float bounds), run offline with no ffmpeg.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the media to Whisper, returns
   `{ words: Word[] }`, and hides the API key. Run `netlify dev` for local transcription.
 - `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 4
@@ -131,5 +161,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
 - `src/main.tsx` — React entry (`StrictMode`).
 - `src/index.css` — Vite template styles (`#root` is a centered 1126px column).
 - `public/_headers` — sets COOP `same-origin` + COEP `require-corp`. **Do not remove.** These
-  enable cross-origin isolation / `SharedArrayBuffer`, which `ffmpeg.wasm` export needs later.
+  enable cross-origin isolation / `SharedArrayBuffer`. Phase-5 export deliberately uses the
+  *single-threaded* `ffmpeg.wasm` core, so it does NOT require these headers (export runs under
+  plain `pnpm dev`); they remain in place for the deployed app and any future multi-threaded use.
   Vite copies `public/` verbatim into `dist/`.

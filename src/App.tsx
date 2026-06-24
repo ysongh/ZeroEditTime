@@ -3,6 +3,7 @@ import type { ChangeEvent, SyntheticEvent } from 'react'
 import Timeline from './Timeline'
 import TranscriptView from './transcript/Transcript'
 import AgentBar from './agent/AgentBar'
+import ExportButton from './export/ExportButton'
 import { transcribe } from './transcript/api'
 import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
@@ -328,6 +329,10 @@ function App() {
                     </li>
                   ))}
                 </ol>
+              </div>
+
+              <div style={{ marginTop: 16 }}>
+                <ExportButton edl={edl} file={file} />
               </div>
             </div>
           )}
