@@ -32,6 +32,15 @@ empty folders for future phases.
   network calls, no proxy, and no cross-origin isolation. A pure `buildExportArgs` maps the
   segments to the exact ffmpeg filter graph and is unit-tested; the encode itself is verified
   manually under plain `pnpm dev`.
+- **Phase 2.5 (in progress):** client-side audio extraction so real footage clears the
+  transcription upload limit. A synchronous Netlify Function base64-encodes its body (an effective
+  ~4.5 MB cap), so a real 1–2 min video can't be transcribed today. Fix: extract + downsample the
+  audio to a tiny 16 kHz mono file in the browser BEFORE uploading, reusing the SAME `ffmpeg.wasm`
+  engine Phase 5 proved (no WebAudio, no hand-rolled encoder). **Steps 1–2 (done):** the engine is
+  consolidated into ONE shared instance (`src/ffmpeg/engine.ts`), and export now uses it.
+  **Remaining:** an `extractAudio` helper, rewiring the Transcribe flow (distinct "preparing
+  audio…" vs "transcribing…" states), the proxy's content-type→extension fix, and preloading the
+  engine on file-select. Adds NO new dependency and no new editing features.
 - **Later phases (do NOT build):** captions. Out of scope this project; do not scaffold for it.
 
 ## Stack
@@ -49,7 +58,9 @@ empty folders for future phases.
 - Phase-5 export runs **`ffmpeg.wasm`** entirely in the browser via `@ffmpeg/ffmpeg` +
   `@ffmpeg/util` (the only Phase-5 deps). The single-threaded `@ffmpeg/core` is loaded from a
   CDN (pinned version) — not bundled — so there is no proxy, no server, and no cross-origin
-  isolation requirement; export works under plain `pnpm dev`.
+  isolation requirement; export works under plain `pnpm dev`. As of Phase 2.5 the single `FFmpeg`
+  instance and its CDN loader live in a shared `src/ffmpeg/engine.ts` (built lazily, loaded once
+  per session), shared by export and the in-progress audio extraction — no new dependency.
 
 ## Commands
 
@@ -88,6 +99,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   client-side; it changes no EDL state, adds no editing features, and makes no network calls. Keep
   the testable core (`buildExportArgs`) pure and React-free, and keep it unit-tested. Do not add
   captions, server-side export, or a bundled `@ffmpeg/core` (load it from the CDN).
+- **One shared `ffmpeg.wasm` engine.** There is exactly ONE `FFmpeg` instance for the whole app,
+  in `src/ffmpeg/engine.ts` — never construct a second. It is built LAZILY in `getFfmpeg()` (not at
+  module load) so node-side unit tests that import the module's pure helpers don't trip
+  `new FFmpeg()`, which throws "ffmpeg.wasm does not support nodejs"; it loads at most once per
+  session via the ESM CDN core, shared by export and (Phase 2.5) audio extraction.
 - Do not re-init the project or overwrite toolchain config (`vite.config.ts`, `tsconfig*.json`,
   `eslint.config.js`).
 
@@ -136,6 +152,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `detect.test.ts` / `tools.test.ts` / `run.test.ts` — Vitest unit tests for the detection, the
     executors (including `trim_to_duration` via `edlTimeToSource`), and the loop (scripted
     transport), all run offline with no API.
+- `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
+  audio extraction so the ~31 MB core loads at most once per session.
+  - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
+    never at module load: `new FFmpeg()` throws under node and would crash the offline unit tests
+    that import the pure `inputExtension` from here), the CDN `loadFfmpeg` (single-threaded, guarded
+    on `ffmpeg.loaded`), and the `inputExtension` helper. **Load the ESM core
+    (`@ffmpeg/core@<ver>/dist/esm`), not umd** — Vite bundles `@ffmpeg/ffmpeg`'s worker as a
+    *module* worker, and only the ESM build has the `export default createFFmpegCore` it imports;
+    the umd build leaves `createFFmpegCore` undefined there and load fails with "failed to import
+    ffmpeg-core.js".
 - `src/export/` — the Phase-5 export, a read-only consumer of the one EDL. Fully client-side; no
   network, no proxy, no React in the testable core.
   - `ffmpeg.ts` — `buildExportArgs(segments, inputName?, outputName?)` is the **pure** core: it
@@ -143,16 +169,14 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `trim`/`atrim`s each segment off decoded frames, resets PTS (`setpts`/`asetpts=PTS-STARTPTS`)
     so audio stays in sync across joins, and `concat`s them (a single segment skips concat and
     labels `[outv]`/`[outa]` directly). Float seconds pass straight through for frame accuracy;
-    re-encodes (never `-c copy`, which only cuts on keyframes). Alongside it, `loadFfmpeg` loads
-    the single-threaded core from the CDN once (guarded on `ffmpeg.loaded`), and `runExport`
-    writes the source into the VFS, runs the one exec, reads the MP4 back as a Blob, and frees
-    the VFS. **Load the ESM core (`@ffmpeg/core@<ver>/dist/esm`), not umd** — Vite bundles
-    `@ffmpeg/ffmpeg`'s worker as a *module* worker, and only the ESM build has the
-    `export default createFFmpegCore` it imports; the umd build leaves `createFFmpegCore`
-    undefined there and load fails with "failed to import ffmpeg-core.js".
-  - `ExportButton.tsx` — the Export section: lazily holds one `FFmpeg` instance in a ref, loads
-    the engine if needed (distinct "Loading engine…" state), encodes with a progress bar, and
-    downloads `zero-edit-time.mp4`. Disabled while busy and when nothing is kept.
+    re-encodes (never `-c copy`, which only cuts on keyframes). Alongside it, `runExport` (using the
+    shared engine's `inputExtension`) writes the source into the VFS, runs the one exec, reads the
+    MP4 back as a Blob, and frees the VFS. The engine instance + CDN loader live in
+    `src/ffmpeg/engine.ts`.
+  - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
+    from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
+    "Loading engine…" state), encodes with a progress bar, and downloads `zero-edit-time.mp4`.
+    Disabled while busy and when nothing is kept.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds), run offline with no ffmpeg.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the media to Whisper, returns

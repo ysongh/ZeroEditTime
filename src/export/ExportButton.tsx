@@ -3,10 +3,10 @@
 // then downloads the file. Export READS edl.segments and mutates nothing — the
 // EDL stays the single source of truth.
 
-import { useRef, useState } from 'react'
-import { FFmpeg } from '@ffmpeg/ffmpeg'
+import { useState } from 'react'
 import type { EDL } from '../edl/types'
-import { loadFfmpeg, runExport } from './ffmpeg'
+import { getFfmpeg, loadFfmpeg } from '../ffmpeg/engine'
+import { runExport } from './ffmpeg'
 
 type ExportButtonProps = {
   edl: EDL
@@ -28,19 +28,12 @@ function downloadBlob(blob: Blob, filename: string): void {
 }
 
 export default function ExportButton({ edl, file }: ExportButtonProps) {
-  // One FFmpeg instance for the component's life, created lazily so StrictMode's
-  // double render doesn't build two; `loadFfmpeg` is itself idempotent.
-  const ffmpegRef = useRef<FFmpeg | null>(null)
+  // The ffmpeg engine is the single shared instance from `../ffmpeg/engine`
+  // (loaded at most once per session, shared with audio extraction); we only
+  // hold UI state here. `loadFfmpeg` is itself idempotent.
   const [phase, setPhase] = useState<Phase>('idle')
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
-
-  function getFfmpeg(): FFmpeg {
-    if (ffmpegRef.current === null) {
-      ffmpegRef.current = new FFmpeg()
-    }
-    return ffmpegRef.current
-  }
 
   const hasSegments = edl.segments.length > 0
   const canExport = file !== null && hasSegments && phase === 'idle'
@@ -55,7 +48,7 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
     try {
       if (!ffmpeg.loaded) {
         setPhase('loading')
-        await loadFfmpeg(ffmpeg)
+        await loadFfmpeg()
       }
 
       setProgress(0)

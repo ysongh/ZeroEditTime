@@ -5,28 +5,15 @@
 //
 // The testable core is `buildExportArgs`: a PURE function (no ffmpeg, no React,
 // no DOM) that maps the kept segments to the exact ffmpeg exec arguments. The
-// loading/running mechanics live alongside it but are exercised only manually.
+// running mechanics (`runExport`) live alongside it but are exercised only
+// manually; the shared engine instance and its loader live in `../ffmpeg/engine`.
 
 import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { fetchFile, toBlobURL } from '@ffmpeg/util'
+import { fetchFile } from '@ffmpeg/util'
+import { inputExtension } from '../ffmpeg/engine'
 
 /** A kept source range, in seconds. Structurally a subset of `Segment`. */
 export type ExportSegment = { start: number; end: number }
-
-// The @ffmpeg/core CDN version must stay compatible with the installed
-// @ffmpeg/ffmpeg. If load() hangs or exec() throws "memory access out of
-// bounds", that's a version mismatch — align this to @ffmpeg/ffmpeg (try
-// 0.12.10 / 0.12.15). Loaded from CDN so Vite's build never has to bundle the
-// ~31 MB core out of /public.
-//
-// We load the ESM core (`/dist/esm`), NOT umd: Vite bundles @ffmpeg/ffmpeg's
-// internal worker as a *module* worker, and only the ESM core has the
-// `export default createFFmpegCore` that the worker imports. The umd core
-// assigns to module.exports/exports only — no global fallback — so importing it
-// in a module worker leaves createFFmpegCore undefined and load() fails with
-// "failed to import ffmpeg-core.js".
-const CORE_VERSION = '0.12.10'
-const CORE_BASE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/esm`
 
 /**
  * Build the full ffmpeg exec argument array for trimming each kept segment off
@@ -76,30 +63,6 @@ export function buildExportArgs(
     '-c:a', 'aac', '-b:a', '128k',
     outputName,
   ]
-}
-
-/**
- * Load the single-threaded ffmpeg core from the CDN, once. Guarded on
- * `ffmpeg.loaded` so React 19 StrictMode's double-invocation can't load twice.
- * Single-threaded → no `workerURL`, no SharedArrayBuffer / cross-origin isolation.
- */
-export async function loadFfmpeg(ffmpeg: FFmpeg): Promise<void> {
-  if (ffmpeg.loaded) {
-    return
-  }
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${CORE_BASE_URL}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${CORE_BASE_URL}/ffmpeg-core.wasm`, 'application/wasm'),
-  })
-}
-
-/** The source extension (lowercased) so the VFS write keeps a decodable name. */
-function inputExtension(filename: string): string {
-  const dot = filename.lastIndexOf('.')
-  if (dot === -1 || dot === filename.length - 1) {
-    return 'mp4'
-  }
-  return filename.slice(dot + 1).toLowerCase()
 }
 
 /**
