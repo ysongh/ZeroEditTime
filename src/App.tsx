@@ -5,6 +5,7 @@ import TranscriptView from './transcript/Transcript'
 import AgentBar from './agent/AgentBar'
 import ExportButton from './export/ExportButton'
 import { transcribe } from './transcript/api'
+import { extractAudio } from './transcript/extractAudio'
 import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
 import {
@@ -28,7 +29,10 @@ function App() {
   const [outPoint, setOutPoint] = useState<number | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [transcript, setTranscript] = useState<Transcript | null>(null)
-  const [isTranscribing, setIsTranscribing] = useState(false)
+  // The Transcribe action runs in two visible phases: 'preparing' extracts the
+  // audio client-side (engine load + ffmpeg.wasm), then 'transcribing' uploads it.
+  const [transcribePhase, setTranscribePhase] =
+    useState<'idle' | 'preparing' | 'transcribing'>('idle')
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
   const objectUrlRef = useRef<string | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -158,19 +162,23 @@ function App() {
   }
 
   async function handleTranscribe() {
-    if (file === null) {
+    if (file === null || transcribePhase !== 'idle') {
       return
     }
-    setIsTranscribing(true)
     setTranscribeError(null)
     try {
-      setTranscript(await transcribe(file))
+      // Extract a tiny mono 16 kHz audio file client-side first, so a real clip
+      // clears the proxy's body wall; only then upload it for transcription.
+      setTranscribePhase('preparing')
+      const audio = await extractAudio(file)
+      setTranscribePhase('transcribing')
+      setTranscript(await transcribe(audio))
     } catch (err) {
       setTranscribeError(
         err instanceof Error ? err.message : 'Transcription failed.',
       )
     } finally {
-      setIsTranscribing(false)
+      setTranscribePhase('idle')
     }
   }
 
@@ -341,9 +349,13 @@ function App() {
             <button
               type="button"
               onClick={handleTranscribe}
-              disabled={file === null || isTranscribing}
+              disabled={file === null || transcribePhase !== 'idle'}
             >
-              {isTranscribing ? 'Transcribing…' : 'Transcribe'}
+              {transcribePhase === 'preparing'
+                ? 'Preparing audio…'
+                : transcribePhase === 'transcribing'
+                  ? 'Transcribing…'
+                  : 'Transcribe'}
             </button>
 
             {transcribeError !== null && (

@@ -1,7 +1,8 @@
 // Client-side call to the transcription proxy. The browser never talks to OpenAI
-// directly; it POSTs the media file to our /api/transcribe function, which hides
-// the key. We send the raw File as the request body and pass the original
-// filename so the server can give OpenAI a name with a supported extension.
+// directly; it POSTs the already-extracted audio Blob (Phase 2.5: a tiny mono
+// 16 kHz mp3/wav, well under the proxy's ~4.5 MB body wall) to our /api/transcribe
+// function, which hides the key. The Blob's `type` rides along as the request
+// Content-Type so the server can give OpenAI a name with the right extension.
 
 import type { Transcript, Word } from './types'
 
@@ -40,11 +41,12 @@ async function errorMessage(res: Response): Promise<string> {
   return `Transcription failed (HTTP ${res.status}).`
 }
 
-export async function transcribe(file: File): Promise<Transcript> {
-  const res = await fetch(
-    `/api/transcribe?filename=${encodeURIComponent(file.name)}`,
-    { method: 'POST', body: file },
-  )
+export async function transcribe(audio: Blob): Promise<Transcript> {
+  const res = await fetch('/api/transcribe', {
+    method: 'POST',
+    headers: { 'Content-Type': audio.type },
+    body: audio,
+  })
 
   if (!res.ok) {
     throw new Error(await errorMessage(res))

@@ -36,11 +36,13 @@ empty folders for future phases.
   transcription upload limit. A synchronous Netlify Function base64-encodes its body (an effective
   ~4.5 MB cap), so a real 1–2 min video can't be transcribed today. Fix: extract + downsample the
   audio to a tiny 16 kHz mono file in the browser BEFORE uploading, reusing the SAME `ffmpeg.wasm`
-  engine Phase 5 proved (no WebAudio, no hand-rolled encoder). **Steps 1–2 (done):** the engine is
-  consolidated into ONE shared instance (`src/ffmpeg/engine.ts`), and export now uses it.
-  **Remaining:** an `extractAudio` helper, rewiring the Transcribe flow (distinct "preparing
-  audio…" vs "transcribing…" states), the proxy's content-type→extension fix, and preloading the
-  engine on file-select. Adds NO new dependency and no new editing features.
+  engine Phase 5 proved (no WebAudio, no hand-rolled encoder). **Done so far:** the engine is
+  consolidated into ONE shared instance (`src/ffmpeg/engine.ts`) used by export; an `extractAudio`
+  helper produces a tiny mono 16 kHz mp3 (PCM-WAV fallback); and the Transcribe flow extracts
+  first, then uploads the small audio Blob (distinct "Preparing audio…" vs "Transcribing…" states).
+  **Remaining:** the proxy's content-type→extension fix — the client now sends the audio's
+  Content-Type and no longer a filename, so the proxy must read it — and preloading the engine on
+  file-select. Adds NO new dependency and no new editing features.
 - **Later phases (do NOT build):** captions. Out of scope this project; do not scaffold for it.
 
 ## Stack
@@ -60,7 +62,7 @@ empty folders for future phases.
   CDN (pinned version) — not bundled — so there is no proxy, no server, and no cross-origin
   isolation requirement; export works under plain `pnpm dev`. As of Phase 2.5 the single `FFmpeg`
   instance and its CDN loader live in a shared `src/ffmpeg/engine.ts` (built lazily, loaded once
-  per session), shared by export and the in-progress audio extraction — no new dependency.
+  per session), shared by export and Phase-2.5 audio extraction — no new dependency.
 
 ## Commands
 
@@ -127,7 +129,14 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
   - `types.ts` — `Word` (`text`, `start`, `end`) and `Transcript`.
-  - `api.ts` — client call to the proxy; validates and returns `{ words }`.
+  - `api.ts` — client call to the proxy: POSTs the extracted audio Blob with its `type` as the
+    request Content-Type (no filename query param); validates and returns `{ words }`.
+  - `extractAudio.ts` — Phase-2.5 `extractAudio(file)`: via the shared engine it writes the source
+    into the VFS and runs ONE ffmpeg exec to a tiny mono 16 kHz mp3 (`libmp3lame`, ~0.5 MB/min;
+    `-vn -ac 1 -ar 16000`), returning it as a Blob whose `type` (`audio/mpeg`, or `audio/wav` if the
+    core lacks `libmp3lame`) becomes the upload Content-Type. Captures ffmpeg's log to surface a
+    clear "no audio track" error and to trigger the WAV fallback; frees the VFS in `finally`.
+    mov/mp4/webm/mkv all decode here, which moots the old ".mov rejected" problem.
   - `sentences.ts` — pure `groupSentences` (words → inclusive index spans at terminal
     punctuation), unit-tested in `sentences.test.ts`. Backs "delete a sentence in one action".
   - `Transcript.tsx` — clickable words with index-based selection (click / shift-click span)
