@@ -16,7 +16,7 @@ type TranscribeEvent = {
   httpMethod: string
   body: string | null
   isBase64Encoded: boolean
-  queryStringParameters: Record<string, string | undefined> | null
+  headers: Record<string, string | undefined> | null
 }
 
 type TranscribeResponse = {
@@ -28,8 +28,31 @@ type TranscribeResponse = {
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1/audio/transcriptions'
 
 // OpenAI infers the audio format from the upload's filename extension and rejects
-// a nameless buffer, so we must send a name with a supported extension.
-const SUPPORTED_EXTENSIONS = ['mp3', 'mp4', 'mpeg', 'mpga', 'm4a', 'wav', 'webm']
+// a nameless buffer, so we name the upload from the request's Content-Type. The
+// client (Phase 2.5) extracts audio and sends `audio/mpeg` or `audio/wav`; map the
+// common media types to an OpenAI-supported extension and default to mp3.
+const CONTENT_TYPE_EXTENSIONS: Record<string, string> = {
+  'audio/mpeg': 'mp3',
+  'audio/mp3': 'mp3',
+  'audio/wav': 'wav',
+  'audio/x-wav': 'wav',
+  'audio/webm': 'webm',
+  'audio/mp4': 'm4a',
+  'audio/x-m4a': 'm4a',
+  'video/mp4': 'mp4',
+  'video/webm': 'webm',
+}
+
+// Pure and exported for unit testing: strip any `; charset=…`, lowercase, and look
+// up the extension; unknown or missing types fall back to mp3 (the extractor's
+// primary output).
+export function extensionForContentType(contentType: string | undefined): string {
+  const base = contentType?.split(';')[0]?.trim().toLowerCase()
+  if (base !== undefined && base in CONTENT_TYPE_EXTENSIONS) {
+    return CONTENT_TYPE_EXTENSIONS[base]
+  }
+  return 'mp3'
+}
 
 function json(statusCode: number, payload: unknown): TranscribeResponse {
   return {
@@ -37,14 +60,6 @@ function json(statusCode: number, payload: unknown): TranscribeResponse {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   }
-}
-
-function pickFilename(raw: string | undefined): string {
-  const ext = raw?.split('.').pop()?.toLowerCase()
-  if (ext !== undefined && SUPPORTED_EXTENSIONS.includes(ext)) {
-    return `input.${ext}`
-  }
-  return 'input.mp4'
 }
 
 // Reshape OpenAI's verbose_json (a top-level `words` array of { word, start, end })
@@ -99,7 +114,7 @@ export const handler = async (
     event.body,
     event.isBase64Encoded ? 'base64' : 'utf8',
   )
-  const filename = pickFilename(event.queryStringParameters?.filename)
+  const filename = `input.${extensionForContentType(event.headers?.['content-type'])}`
 
   const form = new FormData()
   form.append('file', new Blob([audio]), filename)

@@ -38,11 +38,11 @@ empty folders for future phases.
   audio to a tiny 16 kHz mono file in the browser BEFORE uploading, reusing the SAME `ffmpeg.wasm`
   engine Phase 5 proved (no WebAudio, no hand-rolled encoder). **Done so far:** the engine is
   consolidated into ONE shared instance (`src/ffmpeg/engine.ts`) used by export; an `extractAudio`
-  helper produces a tiny mono 16 kHz mp3 (PCM-WAV fallback); and the Transcribe flow extracts
-  first, then uploads the small audio Blob (distinct "Preparing audio…" vs "Transcribing…" states).
-  **Remaining:** the proxy's content-type→extension fix — the client now sends the audio's
-  Content-Type and no longer a filename, so the proxy must read it — and preloading the engine on
-  file-select. Adds NO new dependency and no new editing features.
+  helper produces a tiny mono 16 kHz mp3 (PCM-WAV fallback); the Transcribe flow extracts first,
+  then uploads the small audio Blob (distinct "Preparing audio…" vs "Transcribing…" states); and
+  the proxy now names the OpenAI upload from the request's Content-Type (a pure, unit-tested
+  `extensionForContentType`). **Remaining:** preloading the engine on file-select. Adds NO new
+  dependency and no new editing features.
 - **Later phases (do NOT build):** captions. Out of scope this project; do not scaffold for it.
 
 ## Stack
@@ -188,8 +188,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     Disabled while busy and when nothing is kept.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds), run offline with no ffmpeg.
-- `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the media to Whisper, returns
-  `{ words: Word[] }`, and hides the API key. Run `netlify dev` for local transcription.
+- `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the audio to Whisper, returns
+  `{ words: Word[] }`, and hides the API key. The OpenAI upload is named from the request's
+  Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in
+  `netlify/transcribe.test.ts`, which sits ABOVE `functions/` so Netlify doesn't bundle the test
+  as a stray function. Run `netlify dev` for local transcription.
 - `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 4
   tool schemas and forwards `{ messages }` to the Claude Messages API (`claude-sonnet-4-6`),
   returning `{ content, stop_reason }` unchanged. Executes no tools, holds no EDL; reads
