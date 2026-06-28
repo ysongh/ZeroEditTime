@@ -20,6 +20,9 @@ segments and produces a downloadable MP4 with `ffmpeg.wasm`.
 - **Phase 1** — the EDL model + trimming. Preview plays the kept ranges and skips removed ones.
 - **Phase 2** — transcription. A Netlify Function proxies the media to Whisper and returns
   word-level timings; the transcript is clickable (click-to-seek) with an active-word highlight.
+- **Phase 2.5** — client-side audio extraction. Before uploading, the browser extracts and
+  downsamples the audio to a tiny 16 kHz mono file (reusing the export engine), so real 1–2 min
+  footage clears the proxy's request-body limit and any source format (including `.mov`) works.
 - **Phase 3** — transcript editing. Delete a word span or a whole sentence; each maps to a source
   range and is removed through the same EDL primitive as timeline edits.
 - **Phase 4** — an AI agent. A natural-language command box ("remove the silences", "cut the filler
@@ -37,8 +40,9 @@ segments and produces a downloadable MP4 with `ffmpeg.wasm`.
 - **Vitest** for the pure EDL math, the agent detection/executors/loop, and the export-args builder.
 - **Netlify Functions** for the Whisper transcription proxy (Phase 2) and the Claude agent relay
   (Phase 4). API keys live only in the functions' `.env`.
-- **`ffmpeg.wasm`** (`@ffmpeg/ffmpeg` + `@ffmpeg/util`) for Phase-5 export; the single-threaded
-  `@ffmpeg/core` is loaded from a CDN, so export needs no proxy and no cross-origin isolation.
+- **`ffmpeg.wasm`** (`@ffmpeg/ffmpeg` + `@ffmpeg/util`) for Phase-5 export and Phase-2.5 audio
+  extraction, sharing one engine; the single-threaded `@ffmpeg/core` is loaded from a CDN, so it
+  needs no proxy and no cross-origin isolation.
 
 ## Commands
 
@@ -63,7 +67,9 @@ pnpm test      # vitest run — the unit tests
   ANTHROPIC_API_KEY=...     # used by the Claude agent relay
   ```
 
-  Notes: Whisper rejects `.mov`; keep clips small (there is a ~4.5 MB request-body cap on the proxy).
+  Note: the browser extracts a small audio file before uploading (Phase 2.5), so multi-minute clips
+  and any source format (including `.mov`) transcribe fine — the proxy's ~4.5 MB request-body limit
+  no longer bites for normal footage.
 
 ## Using it
 
@@ -84,11 +90,14 @@ pnpm test      # vitest run — the unit tests
 - `src/App.tsx` — the app shell: file picker, EDL state + history (`commitEdl` / `undo`), the
   skip-removed-ranges playback controller, and the edit controls.
 - `src/Timeline.tsx` — the one-track timeline, rendered one-way from the EDL.
-- `src/transcript/` — the clickable transcript view, sentence grouping, and the proxy client.
+- `src/transcript/` — the clickable transcript view, sentence grouping, client-side audio
+  extraction (Phase 2.5), and the proxy client.
 - `src/agent/` — the AI agent: pure range detection and tool executors, the client agent loop, and
   the command-box UI.
-- `src/export/` — Phase-5 export: the pure `buildExportArgs` filter-graph builder plus the
-  ffmpeg load/run mechanics, and the Export button.
+- `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine (a lazy single instance + CDN loader), used
+  by both export and audio extraction so the core loads at most once per session.
+- `src/export/` — Phase-5 export: the pure `buildExportArgs` filter-graph builder, the run
+  mechanics, and the Export button.
 - `netlify/functions/` — the Whisper transcription proxy and the stateless Claude agent relay.
 
 See [CLAUDE.md](CLAUDE.md) for the detailed architecture and contributor guidance.

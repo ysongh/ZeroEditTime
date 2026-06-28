@@ -32,16 +32,16 @@ empty folders for future phases.
   network calls, no proxy, and no cross-origin isolation. A pure `buildExportArgs` maps the
   segments to the exact ffmpeg filter graph and is unit-tested; the encode itself is verified
   manually under plain `pnpm dev`.
-- **Phase 2.5 (in progress):** client-side audio extraction so real footage clears the
-  transcription upload limit. A synchronous Netlify Function base64-encodes its body (an effective
-  ~4.5 MB cap), so a real 1–2 min video can't be transcribed today. Fix: extract + downsample the
-  audio to a tiny 16 kHz mono file in the browser BEFORE uploading, reusing the SAME `ffmpeg.wasm`
-  engine Phase 5 proved (no WebAudio, no hand-rolled encoder). **Done so far:** the engine is
-  consolidated into ONE shared instance (`src/ffmpeg/engine.ts`) used by export; an `extractAudio`
-  helper produces a tiny mono 16 kHz mp3 (PCM-WAV fallback); the Transcribe flow extracts first,
-  then uploads the small audio Blob (distinct "Preparing audio…" vs "Transcribing…" states); and
-  the proxy now names the OpenAI upload from the request's Content-Type (a pure, unit-tested
-  `extensionForContentType`). **Remaining:** preloading the engine on file-select. Adds NO new
+- **Phase 2.5 (done):** client-side audio extraction so real footage clears the transcription
+  upload limit. A synchronous Netlify Function base64-encodes its body (an effective ~4.5 MB cap),
+  so a real 1–2 min video couldn't be transcribed. Fix: BEFORE uploading, extract + downsample the
+  audio to a tiny 16 kHz mono file in the browser, reusing the SAME `ffmpeg.wasm` engine Phase 5
+  proved (no WebAudio, no hand-rolled encoder). The single `FFmpeg` instance is consolidated into
+  ONE shared `src/ffmpeg/engine.ts` (used by export too); `extractAudio` produces a tiny mono
+  16 kHz mp3 (PCM-WAV fallback); the Transcribe flow extracts first, then uploads the small audio
+  Blob (distinct "Preparing audio…" vs "Transcribing…" states); the proxy names the OpenAI upload
+  from the request's Content-Type (a pure, unit-tested `extensionForContentType`); and the engine
+  is preloaded fire-and-forget on file-select so it's warm by the time the user acts. Adds NO new
   dependency and no new editing features.
 - **Later phases (do NOT build):** captions. Out of scope this project; do not scaffold for it.
 
@@ -121,8 +121,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `edl.test.ts` — Vitest unit tests for the math.
 - `src/App.tsx` — the app. Holds EDL state (initialized from the loaded source as one
   full-length segment) plus an EDL history stack; the single `commitEdl` snapshots before each
-  mutation and `undo` pops it back. Owns the file picker, edit controls (set in/out, trim,
-  delete range, split, undo, reset), transcription, and the EDL-driven playback controller that
+  mutation and `undo` pops it back. Owns the file picker (which preloads the shared ffmpeg engine
+  fire-and-forget so it's warm for Transcribe/Export), edit controls (set in/out, trim, delete
+  range, split, undo, reset), the two-phase Transcribe action (extract audio client-side, then
+  upload — `'preparing' | 'transcribing'` states), and the EDL-driven playback controller that
   skips removed ranges on the video's `timeupdate` and stops after the last kept segment. Object
   URLs are revoked on replace/unmount to avoid leaks.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,

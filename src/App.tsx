@@ -6,6 +6,7 @@ import AgentBar from './agent/AgentBar'
 import ExportButton from './export/ExportButton'
 import { transcribe } from './transcript/api'
 import { extractAudio } from './transcript/extractAudio'
+import { loadFfmpeg } from './ffmpeg/engine'
 import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
 import {
@@ -93,6 +94,12 @@ function App() {
     setTranscript(null)
     setTranscribeError(null)
     clearSelection()
+
+    // Warm the ~31 MB ffmpeg.wasm core in the background while the user reviews the
+    // video, so Transcribe/Export are likely ready by the time they click. Strictly
+    // fire-and-forget: the awaited loadFfmpeg in extraction/export is the real guard,
+    // so a preload failure here must never surface or break the UI.
+    void loadFfmpeg().catch(() => {})
   }
 
   // Initialize the EDL from the loaded source as a single full-length segment.
