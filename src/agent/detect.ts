@@ -100,3 +100,111 @@ export function findFillerSpans(
   }
   return ranges
 }
+
+// ——— Stumble detection (Phase 4.5) ———
+//
+// Repetition is also how normal speech works, so these thresholds are tuned for
+// precision over recall: a missed stumble is a shrug, a false positive deletes
+// real content. Whisper cleans up most small flubs, so what survives — and what
+// this detects — is full restarts and repeated words/phrases.
+
+// Longest phrase (in words) tried as a retake unit. Tried longest-first at each
+// position so a single-word rule never fires inside a longer phrase repeat.
+export const MAX_NGRAM = 4
+// A phrase recurrence must start within this many words after the abandoned
+// take ends (lets a filler like "um" sit between the takes)…
+export const MAX_BETWEEN_WORDS = 2
+// …and within this many seconds (end of the abandoned take's last word to the
+// retake's first word). The same phrase recurring later is normal speech.
+export const MAX_RETAKE_GAP_S = 3.0
+// Minimum length of a partial-word restart ("archi architecture"). Shorter
+// prefixes ("a about") are far more likely to be ordinary words.
+export const MIN_PREFIX_LEN = 3
+
+/**
+ * Find verbal stumbles — immediate word repeats, partial-word restarts, and
+ * re-said phrases — keeping the LAST take. Each detected region yields the range
+ * [abandonedTakeFirstWord.start, keptTakeFirstWord.start): unlike filler spans,
+ * it ends at the START of the kept take, so the dead air and any filler between
+ * the takes is swallowed with the abandoned take.
+ *
+ * Rules (greedy left-to-right scan):
+ * - Single-word repeats fire only on immediate adjacency ("the the"), never at
+ *   a distance ("the cat and the dog").
+ * - Phrase repeats (2+ words) fire only when the recurrence starts within
+ *   MAX_BETWEEN_WORDS words and MAX_RETAKE_GAP_S seconds of the abandoned take.
+ * - The FINAL word of the abandoned take may be a prefix (≥ MIN_PREFIX_LEN
+ *   chars) of its counterpart instead of equal — a mid-word restart.
+ * - After a match the scan continues FROM the retake, so chained takes
+ *   ("we we we should") collapse to ranges that keep only the final one.
+ */
+export function findStumbleSpans(transcript: Transcript): Range[] {
+  const words = transcript.words
+  const normalized = words.map((w) => normalize(w.text))
+  const ranges: Range[] = []
+
+  // Does the k-word take starting at `i` recur starting at `j`? Earlier words
+  // must be normalized-equal; the final word may instead be a prefix of its
+  // counterpart. Empty-normalized tokens (pure punctuation) never match.
+  function matchesAt(i: number, j: number, k: number): boolean {
+    for (let m = 0; m < k; m++) {
+      const abandoned = normalized[i + m]
+      const retake = normalized[j + m]
+      if (abandoned === '' || retake === '') {
+        return false
+      }
+      if (abandoned === retake) {
+        continue
+      }
+      const isFinalWord = m === k - 1
+      if (
+        isFinalWord &&
+        abandoned.length >= MIN_PREFIX_LEN &&
+        retake.startsWith(abandoned)
+      ) {
+        continue
+      }
+      return false
+    }
+    return true
+  }
+
+  let i = 0
+  while (i < words.length) {
+    // Prefer the longest match: k counts down so a k=1 repeat never fires
+    // inside a longer phrase repeat. `retakeStart` is the kept take's first word.
+    let retakeStart = -1
+    for (let k = MAX_NGRAM; k >= 1 && retakeStart === -1; k--) {
+      if (k === 1) {
+        // Single-word rule: immediate adjacency only.
+        if (i + 1 < words.length && matchesAt(i, i + 1, 1)) {
+          retakeStart = i + 1
+        }
+        continue
+      }
+      // Phrase rule: the retake may start up to MAX_BETWEEN_WORDS after the
+      // abandoned take ends, but must begin within MAX_RETAKE_GAP_S of it.
+      for (let j = i + k; j <= i + k + MAX_BETWEEN_WORDS; j++) {
+        if (j + k > words.length) {
+          break
+        }
+        const gap = words[j].start - words[i + k - 1].end
+        if (gap > MAX_RETAKE_GAP_S) {
+          continue
+        }
+        if (matchesAt(i, j, k)) {
+          retakeStart = j
+          break
+        }
+      }
+    }
+
+    if (retakeStart !== -1) {
+      ranges.push({ start: words[i].start, end: words[retakeStart].start })
+      i = retakeStart
+    } else {
+      i++
+    }
+  }
+  return ranges
+}

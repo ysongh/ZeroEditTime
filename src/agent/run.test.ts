@@ -127,6 +127,30 @@ describe('runAgent', () => {
     ])
   })
 
+  it('dispatches remove_stumbles and feeds the result back', async () => {
+    // "the the cat": an immediate repeat; the range ends at the kept "the".
+    const transcript = {
+      words: timed(['the', 0, 1], ['the', 1, 2], ['cat', 2, 3]),
+    }
+    const { transport, calls } = scripted([
+      toolUse('remove_stumbles', {}, 'tu_1'),
+      endTurn('Cleaned up the stumbles.'),
+    ])
+
+    const result = await runAgent(
+      'remove my stumbles',
+      createEdl(SOURCE),
+      transcript,
+      transport,
+    )
+
+    expect(ranges(result.edl)).toEqual([[1, 10]])
+    expect(result.toolsRun.map((t) => t.name)).toEqual(['remove_stumbles'])
+    expect(toolResultPayloads(calls[1])).toEqual([
+      { ok: true, removed_count: 1, removed_seconds: 1, new_kept_duration: 9 },
+    ])
+  })
+
   it('stops at the iteration cap when the model keeps calling tools', async () => {
     const { transport } = scripted([
       toolUse('remove_silences', { threshold_ms: 600 }, 'tu'),

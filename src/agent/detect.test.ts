@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { Word } from '../transcript/types'
-import { findFillerSpans, findSilences } from './detect'
+import { findFillerSpans, findSilences, findStumbleSpans } from './detect'
 
 /** Words with explicit source timings (silence detection needs real gaps). */
 function timed(...specs: Array<[string, number, number]>): Word[] {
@@ -71,5 +71,83 @@ describe('findFillerSpans', () => {
   it('honors a custom filler list', () => {
     const t = { words: texts('basically', 'a', 'test') }
     expect(findFillerSpans(t, ['basically'])).toEqual([{ start: 0, end: 1 }])
+  })
+})
+
+describe('findStumbleSpans', () => {
+  // With texts(), word i spans [i, i+1] — so a range ending at the kept take's
+  // first-word START is [i, j], never [i, j-1+1] via the last word's end.
+
+  it('cuts an immediate word repeat, ending at the kept word start', () => {
+    const t = { words: texts('the', 'the', 'cat') }
+    expect(findStumbleSpans(t)).toEqual([{ start: 0, end: 1 }])
+  })
+
+  it('collapses a triple take to keep only the final word', () => {
+    const t = { words: texts('we', 'we', 'we', 'should') }
+    // Two adjacent ranges; applyRemovedRange merges them, keeping the last "we".
+    expect(findStumbleSpans(t)).toEqual([
+      { start: 0, end: 1 },
+      { start: 1, end: 2 },
+    ])
+  })
+
+  it('cuts a partial-word restart by prefix', () => {
+    const t = { words: texts('archi', 'architecture') }
+    expect(findStumbleSpans(t)).toEqual([{ start: 0, end: 1 }])
+  })
+
+  it('normalizes a Whisper cutoff token before prefix-matching', () => {
+    const t = { words: texts('Archi-', 'architecture') }
+    expect(findStumbleSpans(t)).toEqual([{ start: 0, end: 1 }])
+  })
+
+  it('cuts a phrase restart whose final word is a prefix', () => {
+    const t = {
+      words: texts('we', 'built', 'the', 'arch', 'we', 'built', 'the', 'architecture'),
+    }
+    // The whole abandoned take [0..3] goes; the kept take starts at word 4.
+    expect(findStumbleSpans(t)).toEqual([{ start: 0, end: 4 }])
+  })
+
+  it('swallows a filler between takes, ending at the kept take start', () => {
+    const t = { words: texts('the', 'architecture', 'um', 'the', 'architecture') }
+    // The range covers the abandoned take AND the "um" (words 0-2).
+    expect(findStumbleSpans(t)).toEqual([{ start: 0, end: 3 }])
+  })
+
+  it('prefers the longest match so k=1 never fires inside a phrase repeat', () => {
+    const t = { words: texts('we', 'we', 'should', 'we', 'we', 'should') }
+    // k=3 wins at word 0 (removing the whole first take); the kept take's own
+    // internal "we we" then fires the adjacency rule.
+    expect(findStumbleSpans(t)).toEqual([
+      { start: 0, end: 3 },
+      { start: 3, end: 4 },
+    ])
+  })
+
+  it('does NOT cut distant single-word repetition', () => {
+    const t = { words: texts('the', 'cat', 'and', 'the', 'dog') }
+    expect(findStumbleSpans(t)).toEqual([])
+  })
+
+  it('does NOT cut a phrase recurrence beyond the retake gap', () => {
+    // "we built" recurs, but 4s after the first take ends (> MAX_RETAKE_GAP_S).
+    const t = {
+      words: timed(['we', 0, 0.5], ['built', 0.5, 1], ['we', 5, 5.5], ['built', 5.5, 6]),
+    }
+    expect(findStumbleSpans(t)).toEqual([])
+  })
+
+  it('does NOT fire on a 1-2 char prefix', () => {
+    const t = { words: texts('a', 'about') }
+    expect(findStumbleSpans(t)).toEqual([])
+  })
+
+  it('never mutates the input transcript', () => {
+    const t = { words: texts('we', 'we', 'we', 'should') }
+    const snapshot = JSON.parse(JSON.stringify(t)) as typeof t
+    findStumbleSpans(t)
+    expect(t).toEqual(snapshot)
   })
 })

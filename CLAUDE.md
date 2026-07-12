@@ -43,6 +43,18 @@ empty folders for future phases.
   from the request's Content-Type (a pure, unit-tested `extensionForContentType`); and the engine
   is preloaded fire-and-forget on file-select so it's warm by the time the user acts. Adds NO new
   dependency and no new editing features.
+- **Phase 4.5 (done):** a `remove_stumbles` agent tool. Pure `findStumbleSpans` detects verbal
+  stumbles in the transcript — immediate word repeats, partial-word restarts (final-word prefix,
+  ≥ 3 chars), and re-said phrases in a tight window (recurrence starts ≤ 2 words and ≤ 3.0 s after
+  the abandoned take) — and KEEPS THE LAST TAKE: each removed range runs
+  [abandoned take start, kept take start), so dead air and filler between takes go too. Chained
+  takes collapse to the final one; matching is longest-first (up to 4-grams) so a single-word rule
+  never fires inside a phrase repeat, and single-word repeats fire only on immediate adjacency.
+  Detection is deliberately conservative (precision over recall — repetition is also normal
+  speech) and purely transcript-based: whisper-1 silently repairs many small flubs, so the tool
+  cuts only what survives transcription. Wired on both sides of the contract — the executor
+  funnels through `applyRemovedRange`, the loop registers it, and the relay gains the schema +
+  one system-prompt line (still a stateless relay). No new UI and no new dependencies.
 - **Later phases (do NOT build):** captions. Out of scope this project; do not scaffold for it.
 
 ## Stack
@@ -146,13 +158,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     a stored flag. Deleting a span calls back into `App`'s `commitEdl` path.
 - `src/agent/` — the Phase-4 agent, a third view onto the one EDL. Detection and executors are
   framework-free and unit-tested; the loop is offline-testable via an injectable transport.
-  - `detect.ts` — pure range detection: `findSilences` (inter-word gaps over a threshold) and
+  - `detect.ts` — pure range detection: `findSilences` (inter-word gaps over a threshold),
     `findFillerSpans` (case-insensitive, punctuation-stripped, greedy longest-first matching of
-    filler words/phrases). Returns `Range[]`; touches no EDL.
+    filler words/phrases), and (Phase 4.5) `findStumbleSpans` (repeats/restarts/re-said phrases,
+    keeping the last take; thresholds are named constants — `MAX_NGRAM`, `MAX_BETWEEN_WORDS`,
+    `MAX_RETAKE_GAP_S`, `MIN_PREFIX_LEN`). Returns `Range[]`; touches no EDL.
   - `tools.ts` — pure executors `(edl, transcript, args) => { edl, removed_count, removed_seconds }`
-    for `cut_segment`, `remove_silences`, `remove_filler_words`, and `trim_to_duration`. Every
-    removal funnels through `applyRemovedRange`; `trim_to_duration` reuses `edlTimeToSource` to crop
-    the tail. A model-supplied silence threshold is clamped to a floor (`MIN_SILENCE_MS`).
+    for `cut_segment`, `remove_silences`, `remove_filler_words`, `remove_stumbles` (no args), and
+    `trim_to_duration`. Every removal funnels through `applyRemovedRange`; `trim_to_duration` reuses
+    `edlTimeToSource` to crop the tail. A model-supplied silence threshold is clamped to a floor
+    (`MIN_SILENCE_MS`).
   - `run.ts` — the client agent loop: owns the Anthropic `messages` array and a working EDL,
     POSTs to `/api/agent`, runs each `tool_use` through the matching executor (working EDL threads
     across turns), feeds back a `tool_result`, and re-POSTs until `end_turn` or a 6-iteration cap.
@@ -195,7 +210,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in
   `netlify/transcribe.test.ts`, which sits ABOVE `functions/` so Netlify doesn't bundle the test
   as a stray function. Run `netlify dev` for local transcription.
-- `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 4
+- `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 5
   tool schemas and forwards `{ messages }` to the Claude Messages API (`claude-sonnet-4-6`),
   returning `{ content, stop_reason }` unchanged. Executes no tools, holds no EDL; reads
   `ANTHROPIC_API_KEY` from env only. Reachable at `/api/agent` via the `/api/*` redirect.

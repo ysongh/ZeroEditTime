@@ -20,6 +20,7 @@ import {
   DEFAULT_FILLER_WORDS,
   findFillerSpans,
   findSilences,
+  findStumbleSpans,
   type Range,
 } from './detect'
 
@@ -91,6 +92,16 @@ export function removeFillerWords(
       ? args.words
       : DEFAULT_FILLER_WORDS
   return applyRanges(edl, findFillerSpans(transcript, fillers))
+}
+
+/**
+ * remove_stumbles {} — cut verbal stumbles (immediate word repeats, partial-word
+ * restarts, re-said phrases), keeping the LAST take. Takes no parameters; every
+ * detected range already ends at the kept take's first word, so the dead air
+ * between takes goes with the abandoned take.
+ */
+export function removeStumbles(edl: EDL, transcript: Transcript): ToolResult {
+  return applyRanges(edl, findStumbleSpans(transcript))
 }
 
 /**

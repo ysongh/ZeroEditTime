@@ -34,7 +34,8 @@ const SYSTEM_PROMPT = `You are a video-editing assistant for a transcript-based 
 You receive the user's natural-language command, the transcript with per-word source timestamps, and the current kept duration of the edit. Use the provided tools to achieve the user's intent.
 
 Guidelines:
-- PREFER non-destructive cuts (remove_silences, remove_filler_words) BEFORE any trim_to_duration, which crops the tail of the video and permanently loses content. Only trim to a target duration after removing silences and filler words if the result is still over the target.
+- PREFER non-destructive cuts (remove_silences, remove_filler_words, remove_stumbles) BEFORE any trim_to_duration, which crops the tail of the video and permanently loses content. Only trim to a target duration after the non-destructive cuts if the result is still over the target.
+- remove_stumbles removes verbal stumbles — repeated words, false starts, and re-said phrases — keeping the speaker's final take; it takes no arguments.
 - For a vague "remove the silences", a threshold of about 600 ms is a sensible default; honor a specific pause length if the user names one.
 - After each tool call you will receive the new kept duration. Stop and give a one-sentence summary once the goal is met.
 - NEVER invent or compute timestamps — the tools detect ranges from the transcript themselves. Your job is to choose which tools to run and with what arguments.`
@@ -84,6 +85,16 @@ const TOOLS = [
           description: 'Optional custom list of filler words/phrases to remove.',
         },
       },
+      required: [],
+    },
+  },
+  {
+    name: 'remove_stumbles',
+    description:
+      "Remove verbal stumbles — immediately repeated words, partial-word false starts, and re-said phrases — keeping the speaker's final take. Non-destructive; detection runs on the transcript and takes no arguments.",
+    input_schema: {
+      type: 'object',
+      properties: {},
       required: [],
     },
   },

@@ -18,6 +18,7 @@ import {
   cutSegment,
   removeFillerWords,
   removeSilences,
+  removeStumbles,
   trimToDuration,
   type ToolResult,
 } from './tools'
@@ -144,6 +145,9 @@ function runTool(
         ? args.words.filter((w): w is string => typeof w === 'string')
         : undefined
       return removeFillerWords(edl, transcript, { words })
+    }
+    case 'remove_stumbles': {
+      return removeStumbles(edl, transcript)
     }
     case 'trim_to_duration': {
       if (typeof args.target_seconds !== 'number') {

@@ -6,6 +6,7 @@ import {
   cutSegment,
   removeFillerWords,
   removeSilences,
+  removeStumbles,
   trimToDuration,
 } from './tools'
 
@@ -111,6 +112,38 @@ describe('removeFillerWords', () => {
       [2, 10],
     ])
     expect(result.removed_count).toBe(1)
+  })
+})
+
+describe('removeStumbles', () => {
+  it('funnels detected takes through applyRemovedRange and reports counts', () => {
+    // "we we we should": ranges [0,1] and [1,2] merge into one removed [0,2].
+    const transcript = { words: texts('we', 'we', 'we', 'should') }
+    const result = removeStumbles(createEdl(SOURCE), transcript)
+    expect(ranges(result.edl)).toEqual([[2, 10]])
+    expect(result.removed_count).toBe(2)
+    expect(result.removed_seconds).toBeCloseTo(2)
+  })
+
+  it('removes a phrase restart up to the kept take start', () => {
+    const transcript = {
+      words: texts('the', 'architecture', 'um', 'the', 'architecture'),
+    }
+    const result = removeStumbles(createEdl(SOURCE), transcript)
+    // The abandoned take AND the "um" go; the kept take starts at word 3.
+    expect(ranges(result.edl)).toEqual([
+      [3, 10],
+    ])
+    expect(result.removed_count).toBe(1)
+    expect(result.removed_seconds).toBeCloseTo(3)
+  })
+
+  it('is a no-op on clean speech', () => {
+    const transcript = { words: texts('the', 'cat', 'and', 'the', 'dog') }
+    const result = removeStumbles(createEdl(SOURCE), transcript)
+    expect(ranges(result.edl)).toEqual([[0, 10]])
+    expect(result.removed_count).toBe(0)
+    expect(result.removed_seconds).toBeCloseTo(0)
   })
 })
 
