@@ -58,7 +58,10 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
       }
       ffmpeg.on('progress', onProgress)
       try {
-        const blob = await runExport(ffmpeg, file, edl.segments)
+        // A loudnorm-fallback note (non-fatal) surfaces via the same error line.
+        const blob = await runExport(ffmpeg, file, edl.segments, (note) =>
+          setError(note),
+        )
         downloadBlob(blob, 'zero-edit-time.mp4')
       } finally {
         ffmpeg.off('progress', onProgress)

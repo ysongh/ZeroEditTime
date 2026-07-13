@@ -55,6 +55,20 @@ empty folders for future phases.
   cuts only what survives transcription. Wired on both sides of the contract — the executor
   funnels through `applyRemovedRange`, the loop registers it, and the relay gains the schema +
   one system-prompt line (still a stateless relay). No new UI and no new dependencies.
+- **Phase 5.5 (Part A done; Part B NOT built yet):** export audio polish + natural-pacing
+  silence removal. **Part A (done)** — all inside `buildExportArgs`; the VIDEO chain is
+  byte-identical to Phase 5 (no video fades — the hard cut is correct). Each segment's audio
+  chain appends ~15 ms declick micro fades after `asetpts` (`AUDIO_FADE_S = 0.015`, clamped to
+  half the segment duration so a tiny sliver never gets a negative fade-out start), and the
+  combined audio ends `loudnorm=I=-16:TP=-1.5:LRA=11` → `aresample=48000` on BOTH paths: concat
+  emits an intermediate `[ca]` that runs the mastering tail into `[outa]`; a single segment
+  chains the identical tail directly. The `aresample` is required (loudnorm internally upsamples
+  to 192 kHz). `runExport` retries without loudnorm ONLY on a "No such filter: loudnorm" exec
+  failure — fades + resample stay, never a silent dynaudnorm substitute — and surfaces a note
+  via `onNote` into the Export button's existing error line. **Part B (pending — do not assume
+  built):** `keep_gap_ms` on silence removal (shorten each qualifying gap to ~250 ms kept
+  breathing room, split half/half, instead of deleting it wholly). `findSilences`, the
+  `remove_silences` executor/schema, and the relay prompt are all still the Phase-4 versions.
 - **Later phases (do NOT build):** captions. Out of scope this project; do not scaffold for it.
 
 ## Stack
@@ -190,21 +204,30 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     ffmpeg-core.js".
 - `src/export/` — the Phase-5 export, a read-only consumer of the one EDL. Fully client-side; no
   network, no proxy, no React in the testable core.
-  - `ffmpeg.ts` — `buildExportArgs(segments, inputName?, outputName?)` is the **pure** core: it
-    maps the kept segments to the exact ffmpeg exec args — one `-filter_complex` string that
-    `trim`/`atrim`s each segment off decoded frames, resets PTS (`setpts`/`asetpts=PTS-STARTPTS`)
+  - `ffmpeg.ts` — `buildExportArgs(segments, inputName?, outputName?, options?)` is the **pure**
+    core: it maps the kept segments to the exact ffmpeg exec args — one `-filter_complex` string
+    that `trim`/`atrim`s each segment off decoded frames, resets PTS (`setpts`/`asetpts=PTS-STARTPTS`)
     so audio stays in sync across joins, and `concat`s them (a single segment skips concat and
-    labels `[outv]`/`[outa]` directly). Float seconds pass straight through for frame accuracy;
-    re-encodes (never `-c copy`, which only cuts on keyframes). Alongside it, `runExport` (using the
-    shared engine's `inputExtension`) writes the source into the VFS, runs the one exec, reads the
-    MP4 back as a Blob, and frees the VFS. The engine instance + CDN loader live in
-    `src/ffmpeg/engine.ts`.
+    labels `[outv]` directly). Since Phase 5.5A the AUDIO chain adds per-segment declick fades
+    after `asetpts` (`afade` in/out, `AUDIO_FADE_S = 0.015` clamped to half the segment duration)
+    and a mastering tail `LOUDNORM` → `aresample=OUTPUT_SAMPLE_RATE` (48 kHz) into `[outa]` on
+    both the concat (`[ca]` intermediate) and single-segment paths; `options.loudnorm: false`
+    drops only the normalizer (the runtime fallback). The video chain is unchanged from Phase 5.
+    Float seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which
+    only cuts on keyframes). Alongside it, `runExport` (using the shared engine's
+    `inputExtension`) writes the source into the VFS, runs the one exec (capturing the log; on a
+    "No such filter: loudnorm" failure it retries without loudnorm and reports via `onNote`),
+    reads the MP4 back as a Blob, and best-effort frees the VFS in a `finally`. The engine
+    instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
     "Loading engine…" state), encodes with a progress bar, and downloads `zero-edit-time.mp4`.
-    Disabled while busy and when nothing is kept.
+    Disabled while busy and when nothing is kept. Routes `runExport`'s non-fatal loudnorm-fallback
+    note into its existing error line (no new UI).
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
-    no-concat, exact float bounds), run offline with no ffmpeg.
+    no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
+    loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off
+    fallback option), run offline with no ffmpeg.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the audio to Whisper, returns
   `{ words: Word[] }`, and hides the API key. The OpenAI upload is named from the request's
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in
