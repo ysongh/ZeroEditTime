@@ -18,6 +18,7 @@ import {
 } from '../edl/edl'
 import {
   DEFAULT_FILLER_WORDS,
+  DEFAULT_KEEP_GAP_MS,
   findFillerSpans,
   findSilences,
   findStumbleSpans,
@@ -36,6 +37,9 @@ export type ToolResult = {
 // not range logic: it stops a bad value like 0 from cutting every word gap.
 export const DEFAULT_SILENCE_MS = 600
 export const MIN_SILENCE_MS = 150
+// Ceiling for a model-supplied keep_gap_ms (the same guardrail idea as the
+// silence floor): keeping over a second of every gap would defeat the tool.
+export const MAX_KEEP_GAP_MS = 1000
 
 // Apply a list of candidate ranges by reducing through `applyRemovedRange`, which
 // already merges overlaps/adjacency and treats re-removing an already-cut range
@@ -68,17 +72,26 @@ export function cutSegment(
   return applyRanges(edl, [{ start: args.start, end: args.end }])
 }
 
-/** remove_silences { threshold_ms } — cut every inter-word gap over the threshold. */
+/**
+ * remove_silences { threshold_ms, keep_gap_ms? } — shorten every inter-word gap
+ * over the threshold to `keep_gap_ms` of breathing room (default 250 ms, split
+ * half/half at the gap's edges for natural pacing; 0 removes gaps wholly).
+ */
 export function removeSilences(
   edl: EDL,
   transcript: Transcript,
-  args: { threshold_ms: number },
+  args: { threshold_ms: number; keep_gap_ms?: number },
 ): ToolResult {
   const requested = Number.isFinite(args.threshold_ms)
     ? args.threshold_ms
     : DEFAULT_SILENCE_MS
   const thresholdMs = Math.max(MIN_SILENCE_MS, requested)
-  return applyRanges(edl, findSilences(transcript, thresholdMs))
+  const requestedKeep =
+    args.keep_gap_ms !== undefined && Number.isFinite(args.keep_gap_ms)
+      ? args.keep_gap_ms
+      : DEFAULT_KEEP_GAP_MS
+  const keepGapMs = Math.min(MAX_KEEP_GAP_MS, Math.max(0, requestedKeep))
+  return applyRanges(edl, findSilences(transcript, thresholdMs, keepGapMs))
 }
 
 /** remove_filler_words { words? } — cut each occurrence of a filler word/phrase. */

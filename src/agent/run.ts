@@ -122,6 +122,7 @@ function runTool(
     start?: unknown
     end?: unknown
     threshold_ms?: unknown
+    keep_gap_ms?: unknown
     words?: unknown
     target_seconds?: unknown
   }
@@ -138,7 +139,9 @@ function runTool(
         typeof args.threshold_ms === 'number'
           ? args.threshold_ms
           : DEFAULT_SILENCE_MS
-      return removeSilences(edl, transcript, { threshold_ms })
+      const keep_gap_ms =
+        typeof args.keep_gap_ms === 'number' ? args.keep_gap_ms : undefined
+      return removeSilences(edl, transcript, { threshold_ms, keep_gap_ms })
     }
     case 'remove_filler_words': {
       const words = Array.isArray(args.words)

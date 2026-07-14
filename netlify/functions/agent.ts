@@ -37,6 +37,7 @@ Guidelines:
 - PREFER non-destructive cuts (remove_silences, remove_filler_words, remove_stumbles) BEFORE any trim_to_duration, which crops the tail of the video and permanently loses content. Only trim to a target duration after the non-destructive cuts if the result is still over the target.
 - remove_stumbles removes verbal stumbles — repeated words, false starts, and re-said phrases — keeping the speaker's final take; it takes no arguments.
 - For a vague "remove the silences", a threshold of about 600 ms is a sensible default; honor a specific pause length if the user names one.
+- Silence removal keeps ~250 ms of each removed gap by default so pacing stays natural; set keep_gap_ms=0 only if the user explicitly asks for maximally tight or rapid-fire pacing.
 - After each tool call you will receive the new kept duration. Stop and give a one-sentence summary once the goal is met.
 - NEVER invent or compute timestamps — the tools detect ranges from the transcript themselves. Your job is to choose which tools to run and with what arguments.`
 
@@ -59,7 +60,7 @@ const TOOLS = [
   {
     name: 'remove_silences',
     description:
-      'Remove every inter-word gap longer than the threshold. Non-destructive — it only cuts pauses between words.',
+      'Shorten every inter-word gap longer than the threshold, keeping keep_gap_ms of breathing room. Non-destructive — it only cuts pauses between words.',
     input_schema: {
       type: 'object',
       properties: {
@@ -67,6 +68,11 @@ const TOOLS = [
           type: 'number',
           description:
             'Minimum gap length to remove, in milliseconds (e.g. 600 for typical pauses).',
+        },
+        keep_gap_ms: {
+          type: 'number',
+          description:
+            'Milliseconds of each removed gap to KEEP for natural pacing. Defaults to 250; set 0 only for maximally tight, rapid-fire pacing.',
         },
       },
       required: ['threshold_ms'],

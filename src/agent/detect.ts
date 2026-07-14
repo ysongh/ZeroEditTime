@@ -29,23 +29,36 @@ function normalize(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
 
+// How much of each removed gap survives, by default, as breathing room (Phase
+// 5.5B). Deleting a gap wholly produces machine-gun pacing; ~250 ms keeps a
+// natural beat so the viewer can absorb what's on screen.
+export const DEFAULT_KEEP_GAP_MS = 250
+
 /**
  * Find the silent gaps between words. A gap is the gap between adjacent words;
- * one longer than `thresholdMs` yields the range spanning it, i.e. from the end
- * of the earlier word to the start of the next. The words themselves are never
- * part of the range.
+ * one longer than `thresholdMs` AND longer than `keepGapMs` (so the removal is
+ * always positive) yields a range trimming the MIDDLE of the gap:
+ * `keepGapMs` of it survives, split half/half at the edges — the earlier word
+ * keeps its natural decay, the next word its inhale/lead-in. `keepGapMs = 0`
+ * removes qualifying gaps wholly (the old behavior). The words themselves are
+ * never part of the range.
  */
 export function findSilences(
   transcript: Transcript,
   thresholdMs: number,
+  keepGapMs: number = DEFAULT_KEEP_GAP_MS,
 ): Range[] {
   const threshold = thresholdMs / 1000
+  const keep = keepGapMs / 1000
   const words = transcript.words
   const ranges: Range[] = []
   for (let i = 0; i < words.length - 1; i++) {
     const gap = words[i + 1].start - words[i].end
-    if (gap > threshold) {
-      ranges.push({ start: words[i].end, end: words[i + 1].start })
+    if (gap > threshold && gap > keep) {
+      ranges.push({
+        start: words[i].end + keep / 2,
+        end: words[i + 1].start - keep / 2,
+      })
     }
   }
   return ranges

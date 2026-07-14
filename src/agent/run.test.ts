@@ -76,7 +76,9 @@ function toolResultPayloads(messages: unknown[]): Array<Record<string, unknown>>
 describe('runAgent', () => {
   it('runs a tool, threads the result, and reports client-side numbers', async () => {
     const { transport, calls } = scripted([
-      toolUse('remove_silences', { threshold_ms: 600 }, 'tu_1'),
+      // keep_gap_ms: 0 keeps the round numbers below AND proves the loop passes
+      // it through — with the 250ms default the removed seconds would be 1.75.
+      toolUse('remove_silences', { threshold_ms: 600, keep_gap_ms: 0 }, 'tu_1'),
       endTurn('Removed the silence.'),
     ])
 
@@ -107,7 +109,9 @@ describe('runAgent', () => {
 
   it('threads the working EDL across turns so later tools see earlier cuts', async () => {
     const { transport } = scripted([
-      toolUse('remove_silences', { threshold_ms: 600 }, 'tu_1'),
+      // keep_gap_ms: 0 keeps the round numbers below AND proves the loop passes
+      // it through — with the 250ms default the removed seconds would be 1.75.
+      toolUse('remove_silences', { threshold_ms: 600, keep_gap_ms: 0 }, 'tu_1'),
       toolUse('remove_filler_words', {}, 'tu_2'),
       endTurn('Done.'),
     ])
@@ -153,7 +157,7 @@ describe('runAgent', () => {
 
   it('stops at the iteration cap when the model keeps calling tools', async () => {
     const { transport } = scripted([
-      toolUse('remove_silences', { threshold_ms: 600 }, 'tu'),
+      toolUse('remove_silences', { threshold_ms: 600, keep_gap_ms: 0 }, 'tu'),
     ])
 
     const result = await runAgent('loop', createEdl(SOURCE), TRANSCRIPT, transport)

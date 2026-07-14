@@ -18,9 +18,10 @@ describe('findSilences', () => {
     expect(findSilences({ words: timed(['a', 0, 1]) }, 100)).toEqual([])
   })
 
-  it('emits the gap range for an inter-word gap over the threshold', () => {
+  it('trims the middle of a gap over the threshold, keeping the default breathing room', () => {
     const t = { words: timed(['a', 0, 1], ['b', 1.5, 2.5]) }
-    expect(findSilences(t, 300)).toEqual([{ start: 1, end: 1.5 }])
+    // 0.5s gap; the default 250ms keep survives split half/half at the edges.
+    expect(findSilences(t, 300)).toEqual([{ start: 1.125, end: 1.375 }])
   })
 
   it('ignores gaps at or below the threshold (strict greater-than)', () => {
@@ -29,15 +30,34 @@ describe('findSilences', () => {
     expect(findSilences(t, 500)).toEqual([])
   })
 
-  it('finds multiple gaps and spans only the silence, never the words', () => {
+  it('finds multiple gaps and trims only inside the silence, never the words', () => {
     const t = {
       words: timed(['a', 0, 1], ['b', 2, 3], ['c', 3.1, 4], ['d', 6, 7]),
     }
-    // gaps: 1.0 (a→b), 0.1 (b→c), 2.0 (c→d); threshold 500ms keeps the middle.
+    // gaps: 1.0 (a→b), 0.1 (b→c), 2.0 (c→d); threshold 500ms keeps the middle
+    // word pair intact and shaves 125ms off each edge of the removed gaps.
     expect(findSilences(t, 500)).toEqual([
-      { start: 1, end: 2 },
-      { start: 4, end: 6 },
+      { start: 1.125, end: 1.875 },
+      { start: 4.125, end: 5.875 },
     ])
+  })
+
+  it('splits an explicit keep_gap_ms half/half (1.0s gap, threshold 500, keep 250)', () => {
+    const t = { words: timed(['a', 0, 1], ['b', 2, 3]) }
+    expect(findSilences(t, 500, 250)).toEqual([{ start: 1.125, end: 1.875 }])
+  })
+
+  it('leaves a gap not exceeding keep_gap_ms untouched regardless of threshold', () => {
+    // 240ms gap clears a 150ms threshold but is under the 250ms keep — removing
+    // anything would leave less breathing room than the keep guarantees.
+    const t = { words: timed(['a', 0, 1], ['b', 1.24, 2]) }
+    expect(findSilences(t, 150)).toEqual([])
+    expect(findSilences(t, 150, 250)).toEqual([])
+  })
+
+  it('keep_gap_ms = 0 restores full-gap removal', () => {
+    const t = { words: timed(['a', 0, 1], ['b', 1.5, 2.5]) }
+    expect(findSilences(t, 300, 0)).toEqual([{ start: 1, end: 1.5 }])
   })
 })
 

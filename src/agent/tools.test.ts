@@ -53,17 +53,47 @@ describe('cutSegment', () => {
 })
 
 describe('removeSilences', () => {
-  it('cuts every gap over the threshold', () => {
+  it('shortens every gap over the threshold, defaulting keep_gap_ms when absent', () => {
     const transcript = { words: timed(['a', 0, 2], ['b', 3, 5], ['c', 5, 8]) }
     const result = removeSilences(createEdl(SOURCE), transcript, {
       threshold_ms: 500,
     })
-    // Only the 1s gap [2,3] exceeds the threshold.
+    // Only the 1s gap [2,3] exceeds the threshold; the default 250ms keep
+    // survives split half/half, so the removal is the middle [2.125, 2.875].
+    expect(ranges(result.edl)).toEqual([
+      [0, 2.125],
+      [2.875, 10],
+    ])
+    expect(result.removed_count).toBe(1)
+    expect(result.removed_seconds).toBeCloseTo(0.75)
+  })
+
+  it('keep_gap_ms: 0 removes each qualifying gap wholly (old behavior)', () => {
+    const transcript = { words: timed(['a', 0, 2], ['b', 3, 5], ['c', 5, 8]) }
+    const result = removeSilences(createEdl(SOURCE), transcript, {
+      threshold_ms: 500,
+      keep_gap_ms: 0,
+    })
     expect(ranges(result.edl)).toEqual([
       [0, 2],
       [3, 10],
     ])
     expect(result.removed_count).toBe(1)
+    expect(result.removed_seconds).toBeCloseTo(1)
+  })
+
+  it('clamps keep_gap_ms to the ceiling', () => {
+    // A 5000ms keep clamps to 1000ms; the 2s gap [2,4] is trimmed to the middle
+    // [2.5, 3.5], keeping the clamped 1s split half/half.
+    const transcript = { words: timed(['a', 0, 2], ['b', 4, 5]) }
+    const result = removeSilences(createEdl(SOURCE), transcript, {
+      threshold_ms: 500,
+      keep_gap_ms: 5000,
+    })
+    expect(ranges(result.edl)).toEqual([
+      [0, 2.5],
+      [3.5, 10],
+    ])
     expect(result.removed_seconds).toBeCloseTo(1)
   })
 
