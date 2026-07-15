@@ -14,7 +14,12 @@ export type Sentence = { startIndex: number; endIndex: number }
 // Abbreviations like "Mr." will mis-split; that is acceptable for this phase.
 const TERMINAL = /[.?!]["')\]]*$/
 
-function endsSentence(text: string): boolean {
+/**
+ * Does this word close a sentence? Exported so Phase-6 caption chunking
+ * (`src/captions/`) shares the one terminal-punctuation definition instead of
+ * duplicating the regex.
+ */
+export function endsSentence(text: string): boolean {
   return TERMINAL.test(text.trim())
 }
 
