@@ -115,3 +115,72 @@ describe('buildExportArgs', () => {
     expect(() => buildExportArgs([])).toThrow()
   })
 })
+
+// The exact Phase-6 burn clause, spelled out verbatim (NOT imported from the
+// implementation) so a style regression fails the test.
+const SUBTITLES_CLAUSE =
+  "subtitles=captions.srt:fontsdir=/fonts:force_style='FontName=Roboto,Bold=1," +
+  'FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,' +
+  "Outline=2,Shadow=0,Alignment=2,MarginV=36'"
+
+describe('buildExportArgs with srtFile (caption burn)', () => {
+  const twoSegments = [
+    { start: 2.983, end: 5.5 },
+    { start: 8.1, end: 12.04 },
+  ]
+
+  it('routes concat video through [cv] into the subtitles stage', () => {
+    const args = buildExportArgs(twoSegments, 'input.mp4', 'output.mp4', {
+      srtFile: 'captions.srt',
+    })
+    const filter = filterOf(args)
+
+    // Concat emits the intermediate [cv]; the burn is the final video stage.
+    expect(filter).toContain('[v0][a0][v1][a1]concat=n=2:v=1:a=1[cv][ca]')
+    expect(filter.endsWith(`;[cv]${SUBTITLES_CLAUSE}[outv]`)).toBe(true)
+
+    // The audio side is untouched by the burn.
+    expect(filter).toContain(`[ca]${MASTER_TAIL}[outa]`)
+    expect(args).toEqual(
+      expect.arrayContaining(['-map', '[outv]', '-map', '[outa]']),
+    )
+    // Still ONE -filter_complex argument (the style quotes live inside it).
+    expect(args.filter((a) => a === '-filter_complex')).toHaveLength(1)
+  })
+
+  it('burns after trim/setpts on the single-segment path', () => {
+    const args = buildExportArgs([{ start: 0, end: 3.25 }], 'input.mp4', 'output.mp4', {
+      srtFile: 'captions.srt',
+    })
+
+    expect(filterOf(args)).toBe(
+      '[0:v]trim=start=0:end=3.25,setpts=PTS-STARTPTS[cv];' +
+        `[0:a]atrim=start=0:end=3.25,asetpts=PTS-STARTPTS,${fadesFor(0, 3.25)},${MASTER_TAIL}[outa];` +
+        `[cv]${SUBTITLES_CLAUSE}[outv]`,
+    )
+  })
+
+  it('composes with the loudnorm-off fallback', () => {
+    const args = buildExportArgs(twoSegments, 'input.mp4', 'output.mp4', {
+      loudnorm: false,
+      srtFile: 'captions.srt',
+    })
+    const filter = filterOf(args)
+
+    expect(filter).toContain('[ca]aresample=48000[outa]')
+    expect(filter).not.toContain('loudnorm')
+    expect(filter.endsWith(`;[cv]${SUBTITLES_CLAUSE}[outv]`)).toBe(true)
+  })
+
+  it('emits a graph byte-identical to Phase 5.5 when srtFile is absent', () => {
+    for (const segments of [twoSegments, [{ start: 0, end: 3.25 }]]) {
+      const filter = filterOf(buildExportArgs(segments))
+      expect(filter).not.toContain('subtitles')
+      expect(filter).not.toContain('[cv]')
+      // Explicit options without srtFile change nothing either.
+      expect(buildExportArgs(segments)).toEqual(
+        buildExportArgs(segments, 'input.mp4', 'output.mp4', {}),
+      )
+    }
+  })
+})

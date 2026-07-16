@@ -5,6 +5,7 @@
 
 import { useState } from 'react'
 import type { EDL } from '../edl/types'
+import { prepareCaptionsForExport } from '../captions/captions'
 import { getFfmpeg, loadFfmpeg } from '../ffmpeg/engine'
 import { runExport } from './ffmpeg'
 
@@ -58,8 +59,12 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
       }
       ffmpeg.on('progress', onProgress)
       try {
+        // Burn captions automatically whenever the EDL holds any: prepare maps
+        // them to output time against the CURRENT segments (dropping/clipping
+        // anything cut after generation); zero prepared captions skips the burn.
+        const prepared = prepareCaptionsForExport(edl.captions, edl)
         // A loudnorm-fallback note (non-fatal) surfaces via the same error line.
-        const blob = await runExport(ffmpeg, file, edl.segments, (note) =>
+        const blob = await runExport(ffmpeg, file, edl.segments, prepared, (note) =>
           setError(note),
         )
         downloadBlob(blob, 'zero-edit-time.mp4')

@@ -74,7 +74,34 @@ empty folders for future phases.
   executor defaults to `DEFAULT_KEEP_GAP_MS` (250) and clamps to [0, `MAX_KEEP_GAP_MS` = 1000],
   and the relay adds the schema property + one prompt line (~250 ms breathing room by default;
   keep_gap_ms=0 only on an explicit maximally-tight ask). Still a stateless relay; no new UI.
-- **Later phases (do NOT build):** captions. Out of scope this project; do not scaffold for it.
+- **Phase 6 (in progress — Parts A & B done, C & D remain):** captions — generated from the
+  transcript, previewed over the video, burned into the exported MP4. The timebase model:
+  captions are STORED in SOURCE seconds in `edl.captions` (consistent with segments; regenerable;
+  undoable), GENERATED from kept words only (the existing `isSourceTimeKept` midpoint predicate),
+  and BURNED in OUTPUT time (the exported file's clock = the concatenated kept timeline) via
+  `sourceTimeToEdlTime`; export preparation defensively re-clips against the CURRENT EDL, so
+  cutting more after generating never captions deleted speech. **Part A (done)** — the pure layer
+  in `src/captions/captions.ts`: `buildCaptions` greedily chunks kept words, breaking at
+  `MAX_CAPTION_WORDS` (5), after terminal punctuation (the transcript's shared `endsSentence`),
+  and on OUTPUT-time gaps > `CAPTION_GAP_S` (0.8 s) — output time is the perceptually correct
+  measure, so a big source gap wholly removed by a cut never breaks a line;
+  `prepareCaptionsForExport` drops fully-cut captions, clips partially-cut ones to their kept
+  instants, maps to output time, and enforces `MIN_CAPTION_S` (0.7 s) by extending without
+  overlapping the next caption or passing `totalKeptDuration`; `formatSrtTime`/`buildSrt`
+  serialize SRT (comma millis, 1-indexed blocks, single-line text). **Part B (done)** — the burn:
+  `buildExportArgs` gains `options.srtFile`; when set, the assembled video lands on an
+  intermediate `[cv]` and one appended `subtitles=…:fontsdir=/fonts:force_style='…'` clause
+  produces `[outv]` (audio untouched; with no `srtFile` the graph is byte-identical to
+  Phase 5.5). `runExport` accepts PREPARED captions; when non-empty it stages the committed
+  `public/fonts/Roboto-Bold.ttf` + the built `captions.srt` into the VFS (ffmpeg.wasm's VFS
+  ships NO fonts — the filter renders blank without one) and cleans both up in `finally`; a
+  "No such filter: subtitles" failure surfaces as a clear error (no drawtext fallback).
+  `ExportButton` prepares `edl.captions` at click time — export burns automatically whenever
+  captions are present, no toggle. **Part C (not built yet):** a preview overlay + a "Generate
+  captions" button committing via `commitEdl`. **Part D (not built yet):** a `generate_captions`
+  agent tool.
+- **Out of scope (do NOT build):** caption text editing, caption styling UI, SRT download,
+  and word-by-word karaoke timing; do not scaffold for them.
 
 ## Stack
 
@@ -128,10 +155,18 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   agent loop mutates a working EDL through its turns and commits ONCE via the existing `commitEdl`,
   so a single Undo reverts the whole command. Reported numbers (tools run, kept duration
   before→after) are computed CLIENT-side; Claude's text is narration only.
-- **Export reads, never mutates.** Phase-5 export READS `edl.segments` and re-encodes them
-  client-side; it changes no EDL state, adds no editing features, and makes no network calls. Keep
-  the testable core (`buildExportArgs`) pure and React-free, and keep it unit-tested. Do not add
-  captions, server-side export, or a bundled `@ffmpeg/core` (load it from the CDN).
+- **Export reads, never mutates.** Phase-5 export READS `edl.segments` (and, Phase 6,
+  `edl.captions`) and re-encodes them client-side; it changes no EDL state, adds no editing
+  features, and makes no network calls beyond the same-origin font asset. Keep the testable core
+  (`buildExportArgs`) pure and React-free, and keep it unit-tested. Do not add server-side
+  export or a bundled `@ffmpeg/core` (load it from the CDN).
+- **Captions are EDL state, mapped at the edges.** Stored in SOURCE seconds in `edl.captions`
+  (committed via `commitEdl`, undoable like every edit); generated from KEPT words only; burned
+  in OUTPUT time. `prepareCaptionsForExport` re-clips against the current EDL at export, so
+  stale captions can never caption deleted speech. All caption logic stays pure, React-free,
+  and unit-tested in `src/captions/` (the Part-C overlay/button are the only UI); the burn font
+  is a committed asset, not a dependency. No caption editing, styling UI, SRT download, or
+  karaoke timing.
 - **One shared `ffmpeg.wasm` engine.** There is exactly ONE `FFmpeg` instance for the whole app,
   in `src/ffmpeg/engine.ts` — never construct a second. It is built LAZILY in `getFfmpeg()` (not at
   module load) so node-side unit tests that import the module's pure helpers don't trip
@@ -172,6 +207,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     mov/mp4/webm/mkv all decode here, which moots the old ".mov rejected" problem.
   - `sentences.ts` — pure `groupSentences` (words → inclusive index spans at terminal
     punctuation), unit-tested in `sentences.test.ts`. Backs "delete a sentence in one action".
+    Exports `endsSentence` (the terminal-punctuation predicate) so Phase-6 caption chunking
+    shares the one definition instead of duplicating the regex.
   - `Transcript.tsx` — clickable words with index-based selection (click / shift-click span)
     and per-sentence delete; words render struck-through derived from `isSourceTimeKept`, never
     a stored flag. Deleting a span calls back into `App`'s `commitEdl` path.
@@ -201,6 +238,20 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `detect.test.ts` / `tools.test.ts` / `run.test.ts` — Vitest unit tests for the detection, the
     executors (including `trim_to_duration` via `edlTimeToSource`), and the loop (scripted
     transport), all run offline with no API.
+- `src/captions/` — the Phase-6 caption layer: pure, React-free, no ffmpeg (Part C will add
+  the overlay component, the only UI here).
+  - `captions.ts` — `buildCaptions(transcript, edl)` chunks KEPT words into source-time
+    `Caption`s with deterministic `cap_${start}_${end}` ids (breaks: `MAX_CAPTION_WORDS` = 5,
+    terminal punctuation via the shared `endsSentence`, OUTPUT-time gap > `CAPTION_GAP_S` =
+    0.8 s); `prepareCaptionsForExport(captions, edl)` → output-time `PreparedCaption[]`
+    (intersect with kept segments — drop empty, clip partial; enforce `MIN_CAPTION_S` = 0.7 s
+    by extending, clamped to the next caption's start and `totalKeptDuration`); `formatSrtTime`
+    ("HH:MM:SS,mmm", comma millis, negatives clamp to 0) and `buildSrt` (1-indexed blocks,
+    single-line text).
+  - `captions.test.ts` — the chunk-break rules, the no-break-across-a-cut case (~0 output gap
+    over a big source gap — proves output-time chunking), deleted words never captioned,
+    prepare's drop/clip/join-mapping/min-extension (no overlap, end clamp), and the SRT
+    format/block fixtures.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
@@ -221,22 +272,34 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     after `asetpts` (`afade` in/out, `AUDIO_FADE_S = 0.015` clamped to half the segment duration)
     and a mastering tail `LOUDNORM` → `aresample=OUTPUT_SAMPLE_RATE` (48 kHz) into `[outa]` on
     both the concat (`[ca]` intermediate) and single-segment paths; `options.loudnorm: false`
-    drops only the normalizer (the runtime fallback). The video chain is unchanged from Phase 5.
-    Float seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which
-    only cuts on keyframes). Alongside it, `runExport` (using the shared engine's
-    `inputExtension`) writes the source into the VFS, runs the one exec (capturing the log; on a
-    "No such filter: loudnorm" failure it retries without loudnorm and reports via `onNote`),
-    reads the MP4 back as a Blob, and best-effort frees the VFS in a `finally`. The engine
-    instance + CDN loader live in `src/ffmpeg/engine.ts`.
+    drops only the normalizer (the runtime fallback). Since Phase 6, `options.srtFile` appends
+    the caption burn: the assembled video lands on an intermediate `[cv]` (concat emits it; the
+    single-segment path labels its trim `[cv]`) and one
+    `subtitles=SRT:fontsdir=FONTS_DIR:force_style='SUBTITLE_STYLE'`
+    clause produces `[outv]` — audio untouched; with no `srtFile` the video chain is
+    byte-identical to Phase 5.5. Float seconds pass straight through for frame accuracy;
+    re-encodes (never `-c copy`, which only cuts on keyframes). Alongside it, `runExport` (using
+    the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
+    non-empty PREPARED captions, the committed font (fetched same-origin from
+    `/fonts/Roboto-Bold.ttf` into `/fonts` in the VFS; `createDir` guarded) and the `buildSrt`
+    output as `captions.srt` — runs the one exec (capturing the log; on a "No such filter:
+    loudnorm" failure it retries without loudnorm and reports via `onNote`; a "No such filter:
+    subtitles" failure throws a clear error instead — never a drawtext fallback), reads the MP4
+    back as a Blob, and best-effort frees the VFS (input, output, font, SRT) in a `finally`.
+    The engine instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
     "Loading engine…" state), encodes with a progress bar, and downloads `zero-edit-time.mp4`.
     Disabled while busy and when nothing is kept. Routes `runExport`'s non-fatal loudnorm-fallback
-    note into its existing error line (no new UI).
+    note into its existing error line (no new UI). At click time it runs
+    `prepareCaptionsForExport(edl.captions, edl)` and passes the result to `runExport`, so the
+    burn happens automatically whenever the EDL holds captions (zero prepared → burn skipped).
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off
-    fallback option), run offline with no ffmpeg.
+    fallback option; with `srtFile`: the exact subtitles clause — force_style hardcoded verbatim
+    so a style regression fails — on both paths, composition with `loudnorm: false`, and
+    no-`srtFile` graphs staying byte-identical to Phase 5.5), run offline with no ffmpeg.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the audio to Whisper, returns
   `{ words: Word[] }`, and hides the API key. The OpenAI upload is named from the request's
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in
@@ -248,6 +311,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   `ANTHROPIC_API_KEY` from env only. Reachable at `/api/agent` via the `/api/*` redirect.
 - `src/main.tsx` — React entry (`StrictMode`).
 - `src/index.css` — Vite template styles (`#root` is a centered 1126px column).
+- `public/fonts/` — `Roboto-Bold.ttf` (static, v3.005) + its Apache-2.0 `LICENSE.txt`, pulled
+  from google/fonts commit `ff11ed9` (HEAD now carries only the variable font, relicensed under
+  OFL — the static Apache-era file lives in history). A committed asset, NOT a dependency:
+  fetched same-origin at export and written into the ffmpeg VFS, which ships no fonts of its
+  own, so caption rendering has no CDN/network dependency.
 - `public/_headers` — sets COOP `same-origin` + COEP `require-corp`. **Do not remove.** These
   enable cross-origin isolation / `SharedArrayBuffer`. Phase-5 export deliberately uses the
   *single-threaded* `ffmpeg.wasm` core, so it does NOT require these headers (export runs under
