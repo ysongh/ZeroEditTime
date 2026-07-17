@@ -16,6 +16,7 @@ import {
   edlTimeToSource,
   totalKeptDuration,
 } from '../edl/edl'
+import { buildCaptions } from '../captions/captions'
 import {
   DEFAULT_FILLER_WORDS,
   DEFAULT_KEEP_GAP_MS,
@@ -29,6 +30,8 @@ export type ToolResult = {
   edl: EDL
   removed_count: number
   removed_seconds: number
+  /** Present only for generate_captions: how many captions were stored. */
+  captions_count?: number
 }
 
 // Suggested gap for a vague "remove the silences" when Claude omits a threshold,
@@ -115,6 +118,24 @@ export function removeFillerWords(
  */
 export function removeStumbles(edl: EDL, transcript: Transcript): ToolResult {
   return applyRanges(edl, findStumbleSpans(transcript))
+}
+
+/**
+ * generate_captions {} — build captions from the currently KEPT words (Phase 6)
+ * and store them on the EDL in source time; export maps/clips them to output
+ * time. Removes nothing — the working EDL's segments pass through untouched —
+ * and regenerating replaces any existing captions. The system prompt tells
+ * Claude to call this AFTER any cutting tools, but even an early call stays
+ * safe: export-time preparation re-clips against the final EDL.
+ */
+export function generateCaptions(edl: EDL, transcript: Transcript): ToolResult {
+  const captions = buildCaptions(transcript, edl)
+  return {
+    edl: { ...edl, captions },
+    removed_count: 0,
+    removed_seconds: 0,
+    captions_count: captions.length,
+  }
 }
 
 /**

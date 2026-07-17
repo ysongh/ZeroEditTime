@@ -74,7 +74,7 @@ empty folders for future phases.
   executor defaults to `DEFAULT_KEEP_GAP_MS` (250) and clamps to [0, `MAX_KEEP_GAP_MS` = 1000],
   and the relay adds the schema property + one prompt line (~250 ms breathing room by default;
   keep_gap_ms=0 only on an explicit maximally-tight ask). Still a stateless relay; no new UI.
-- **Phase 6 (in progress — Parts A–C done, D remains):** captions — generated from the
+- **Phase 6 (done):** captions — generated from the
   transcript, previewed over the video, burned into the exported MP4. The timebase model:
   captions are STORED in SOURCE seconds in `edl.captions` (consistent with segments; regenerable;
   undoable), GENERATED from kept words only (the existing `isSourceTimeKept` midpoint predicate),
@@ -103,8 +103,15 @@ empty folders for future phases.
   like the transcript highlight; none → hidden), approximating the burn (white bold, black
   text-shadow, bottom-center); a "Generate captions" button in the transcript section runs
   `buildCaptions(transcript, edl)` and commits `{ ...edl, captions }` via `commitEdl` — one
-  Undo removes them, regenerating replaces — and shows the caption count. **Part D (not built
-  yet):** a `generate_captions` agent tool.
+  Undo removes them, regenerating replaces — and shows the caption count. **Part D (done)** —
+  the `generate_captions` agent tool, completing the one-command rough cut ("tighten this up
+  and add captions"): a pure executor runs `buildCaptions(transcript, workingEdl)` and returns
+  `{ edl: { ...edl, captions }, removed_count: 0, removed_seconds: 0, captions_count }`;
+  `run.ts` registers it and the tool_result JSON gains `captions_count` ONLY when a tool
+  reports it (additive — every other tool's payload is byte-identical); the relay adds the
+  empty-input schema + one system-prompt line (call it AFTER cutting tools so captions reflect
+  the final edit — and even an early call stays safe, because export-time preparation re-clips
+  against the final EDL). Still a stateless relay; no new UI.
 - **Out of scope (do NOT build):** caption text editing, caption styling UI, SRT download,
   and word-by-word karaoke timing; do not scaffold for them.
 
@@ -231,14 +238,17 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `MAX_NGRAM`, `MAX_BETWEEN_WORDS`, `MAX_RETAKE_GAP_S`, `MIN_PREFIX_LEN`). Returns `Range[]`;
     touches no EDL.
   - `tools.ts` — pure executors `(edl, transcript, args) => { edl, removed_count, removed_seconds }`
-    for `cut_segment`, `remove_silences`, `remove_filler_words`, `remove_stumbles` (no args), and
-    `trim_to_duration`. Every removal funnels through `applyRemovedRange`; `trim_to_duration` reuses
+    for `cut_segment`, `remove_silences`, `remove_filler_words`, `remove_stumbles` (no args),
+    `trim_to_duration`, and (Phase 6) `generate_captions` (no args — stores `buildCaptions`
+    output on the working EDL, removes nothing, and adds `captions_count` to the result).
+    Every removal funnels through `applyRemovedRange`; `trim_to_duration` reuses
     `edlTimeToSource` to crop the tail. A model-supplied silence threshold is clamped to a floor
     (`MIN_SILENCE_MS`) and `keep_gap_ms` to [0, `MAX_KEEP_GAP_MS`], defaulting to
     `DEFAULT_KEEP_GAP_MS` when absent.
   - `run.ts` — the client agent loop: owns the Anthropic `messages` array and a working EDL,
     POSTs to `/api/agent`, runs each `tool_use` through the matching executor (working EDL threads
-    across turns), feeds back a `tool_result`, and re-POSTs until `end_turn` or a 6-iteration cap.
+    across turns), feeds back a `tool_result` (with the additive `captions_count` field when the
+    tool reports one), and re-POSTs until `end_turn` or a 6-iteration cap.
     Returns the uncommitted EDL plus the client-computed summary; the `transport` is injectable.
   - `AgentBar.tsx` — the command box (input + Run, thinking/disabled state, error + summary).
     Calls `runAgent` and commits the result ONCE via App's `commitEdl`; shows the client-side
@@ -317,7 +327,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in
   `netlify/transcribe.test.ts`, which sits ABOVE `functions/` so Netlify doesn't bundle the test
   as a stray function. Run `netlify dev` for local transcription.
-- `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 5
+- `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 6
   tool schemas and forwards `{ messages }` to the Claude Messages API (`claude-sonnet-4-6`),
   returning `{ content, stop_reason }` unchanged. Executes no tools, holds no EDL; reads
   `ANTHROPIC_API_KEY` from env only. Reachable at `/api/agent` via the `/api/*` redirect.

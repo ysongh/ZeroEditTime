@@ -38,6 +38,7 @@ Guidelines:
 - remove_stumbles removes verbal stumbles — repeated words, false starts, and re-said phrases — keeping the speaker's final take; it takes no arguments.
 - For a vague "remove the silences", a threshold of about 600 ms is a sensible default; honor a specific pause length if the user names one.
 - Silence removal keeps ~250 ms of each removed gap by default so pacing stays natural; set keep_gap_ms=0 only if the user explicitly asks for maximally tight or rapid-fire pacing.
+- generate_captions creates burned-in subtitles from the currently KEPT words; when the user asks for captions/subtitles, call it AFTER any cutting tools so the captions reflect the final edit.
 - After each tool call you will receive the new kept duration. Stop and give a one-sentence summary once the goal is met.
 - NEVER invent or compute timestamps — the tools detect ranges from the transcript themselves. Your job is to choose which tools to run and with what arguments.`
 
@@ -98,6 +99,16 @@ const TOOLS = [
     name: 'remove_stumbles',
     description:
       "Remove verbal stumbles — immediately repeated words, partial-word false starts, and re-said phrases — keeping the speaker's final take. Non-destructive; detection runs on the transcript and takes no arguments.",
+    input_schema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'generate_captions',
+    description:
+      'Generate captions (burned-in subtitles) from the currently KEPT words and store them on the edit. Takes no arguments. Call AFTER any cutting tools so the captions reflect the final edit.',
     input_schema: {
       type: 'object',
       properties: {},

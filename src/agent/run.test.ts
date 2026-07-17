@@ -155,6 +155,68 @@ describe('runAgent', () => {
     ])
   })
 
+  it('dispatches generate_captions and reports captions_count', async () => {
+    const { transport, calls } = scripted([
+      toolUse('generate_captions', {}, 'tu_1'),
+      endTurn('Captions added.'),
+    ])
+
+    const result = await runAgent(
+      'add captions',
+      createEdl(SOURCE),
+      TRANSCRIPT,
+      transport,
+    )
+
+    // The kept 2s pause (um ends 2, world starts 4) breaks the line in two.
+    expect(result.edl.captions.map((c) => c.text)).toEqual(['Hello um', 'world'])
+    expect(ranges(result.edl)).toEqual([[0, 10]]) // nothing removed
+    expect(result.toolsRun.map((t) => t.name)).toEqual(['generate_captions'])
+    expect(toolResultPayloads(calls[1])).toEqual([
+      {
+        ok: true,
+        removed_count: 0,
+        removed_seconds: 0,
+        new_kept_duration: 10,
+        captions_count: 2,
+      },
+    ])
+  })
+
+  it('captions generated after cuts reflect the final edit', async () => {
+    const { transport, calls } = scripted([
+      toolUse('remove_silences', { threshold_ms: 600, keep_gap_ms: 0 }, 'tu_1'),
+      toolUse('generate_captions', {}, 'tu_2'),
+      endTurn('Tightened and captioned.'),
+    ])
+
+    const result = await runAgent(
+      'tighten this up and add captions',
+      createEdl(SOURCE),
+      TRANSCRIPT,
+      transport,
+    )
+
+    // The silence [2,4] is gone, so the output gap between "um" and "world" is
+    // ~0 and the words share ONE caption spanning the cut (output-time chunking
+    // against the WORKING EDL, not the original).
+    expect(ranges(result.edl)).toEqual([
+      [0, 2],
+      [4, 10],
+    ])
+    expect(result.edl.captions.map((c) => c.text)).toEqual(['Hello um world'])
+    expect(toolResultPayloads(calls[2])).toEqual([
+      { ok: true, removed_count: 1, removed_seconds: 2, new_kept_duration: 8 },
+      {
+        ok: true,
+        removed_count: 0,
+        removed_seconds: 0,
+        new_kept_duration: 8,
+        captions_count: 1,
+      },
+    ])
+  })
+
   it('stops at the iteration cap when the model keeps calling tools', async () => {
     const { transport } = scripted([
       toolUse('remove_silences', { threshold_ms: 600, keep_gap_ms: 0 }, 'tu'),

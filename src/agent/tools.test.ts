@@ -4,6 +4,7 @@ import type { Word } from '../transcript/types'
 import { applyRemovedRange, createEdl } from '../edl/edl'
 import {
   cutSegment,
+  generateCaptions,
   removeFillerWords,
   removeSilences,
   removeStumbles,
@@ -174,6 +175,46 @@ describe('removeStumbles', () => {
     expect(ranges(result.edl)).toEqual([[0, 10]])
     expect(result.removed_count).toBe(0)
     expect(result.removed_seconds).toBeCloseTo(0)
+  })
+})
+
+describe('generateCaptions', () => {
+  it('stores captions built from the transcript and removes nothing', () => {
+    const transcript = { words: texts('one', 'two', 'three') }
+    const result = generateCaptions(createEdl(SOURCE), transcript)
+
+    expect(result.edl.captions.map((c) => c.text)).toEqual(['one two three'])
+    expect(ranges(result.edl)).toEqual([[0, 10]]) // segments untouched
+    expect(result.removed_count).toBe(0)
+    expect(result.removed_seconds).toBe(0)
+    expect(result.captions_count).toBe(1)
+  })
+
+  it('captions only the kept words of the working EDL', () => {
+    // "two" [1,2] is cut; its midpoint is not kept, so it never appears.
+    const edl = applyRemovedRange(createEdl(SOURCE), 1, 2)
+    const transcript = { words: texts('one', 'two', 'three') }
+    const result = generateCaptions(edl, transcript)
+
+    expect(result.edl.captions.map((c) => c.text)).toEqual(['one three'])
+    expect(result.captions_count).toBe(1)
+  })
+
+  it('replaces existing captions on regeneration', () => {
+    const transcript = { words: texts('one', 'two', 'three') }
+    const first = generateCaptions(createEdl(SOURCE), transcript)
+    // Cut a word, then regenerate against the new working EDL.
+    const cut = applyRemovedRange(first.edl, 0, 1)
+    const second = generateCaptions(cut, transcript)
+
+    expect(second.edl.captions.map((c) => c.text)).toEqual(['two three'])
+    expect(second.captions_count).toBe(1)
+  })
+
+  it('reports zero captions for an empty transcript', () => {
+    const result = generateCaptions(createEdl(SOURCE), NO_TRANSCRIPT)
+    expect(result.edl.captions).toEqual([])
+    expect(result.captions_count).toBe(0)
   })
 })
 

@@ -16,6 +16,7 @@ import { totalKeptDuration } from '../edl/edl'
 import {
   DEFAULT_SILENCE_MS,
   cutSegment,
+  generateCaptions,
   removeFillerWords,
   removeSilences,
   removeStumbles,
@@ -152,6 +153,9 @@ function runTool(
     case 'remove_stumbles': {
       return removeStumbles(edl, transcript)
     }
+    case 'generate_captions': {
+      return generateCaptions(edl, transcript)
+    }
     case 'trim_to_duration': {
       if (typeof args.target_seconds !== 'number') {
         return null
@@ -252,6 +256,9 @@ export async function runAgent(
         removed_count: result.removed_count,
         removed_seconds: result.removed_seconds,
       })
+      // captions_count is additive (present only for generate_captions);
+      // JSON.stringify drops it when undefined, so the payload shape for every
+      // other tool is untouched.
       toolResults.push({
         type: 'tool_result',
         tool_use_id: block.id,
@@ -260,6 +267,7 @@ export async function runAgent(
           removed_count: result.removed_count,
           removed_seconds: result.removed_seconds,
           new_kept_duration: totalKeptDuration(working),
+          captions_count: result.captions_count,
         }),
       })
     }
