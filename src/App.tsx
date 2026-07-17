@@ -4,6 +4,8 @@ import Timeline from './Timeline'
 import TranscriptView from './transcript/Transcript'
 import AgentBar from './agent/AgentBar'
 import ExportButton from './export/ExportButton'
+import CaptionOverlay from './captions/CaptionOverlay'
+import { buildCaptions } from './captions/captions'
 import { transcribe } from './transcript/api'
 import { extractAudio } from './transcript/extractAudio'
 import { loadFfmpeg } from './ffmpeg/engine'
@@ -248,6 +250,16 @@ function App() {
     clearSelection()
   }
 
+  // Build captions from the CURRENT transcript + EDL and commit them like any
+  // other edit: one history entry, so Undo removes them and regenerating after
+  // more cuts replaces the old set (buildCaptions only reads kept words).
+  function generateCaptions() {
+    if (edl === null || transcript === null) {
+      return
+    }
+    commitEdl({ ...edl, captions: buildCaptions(transcript, edl) })
+  }
+
   return (
     <>
       <h1>ZeroEditTime</h1>
@@ -256,15 +268,30 @@ function App() {
 
       {videoUrl !== null && (
         <div style={{ marginTop: 16 }}>
-          <video
-            ref={videoRef}
-            src={videoUrl}
-            controls
-            onLoadedMetadata={handleLoadedMetadata}
-            onTimeUpdate={handleTimeUpdate}
-            onPlay={handlePlay}
-            style={{ maxWidth: '100%', maxHeight: '60vh' }}
-          />
+          {/* inline-block keeps the wrapper shrink-wrapped to the video (so it
+              stays centered and the overlay aligns with the frame's edges);
+              display:block on the video drops the inline descender gap that
+              would otherwise offset the overlay's bottom. */}
+          <div
+            style={{
+              position: 'relative',
+              display: 'inline-block',
+              maxWidth: '100%',
+            }}
+          >
+            <video
+              ref={videoRef}
+              src={videoUrl}
+              controls
+              onLoadedMetadata={handleLoadedMetadata}
+              onTimeUpdate={handleTimeUpdate}
+              onPlay={handlePlay}
+              style={{ display: 'block', maxWidth: '100%', maxHeight: '60vh' }}
+            />
+            {edl !== null && (
+              <CaptionOverlay captions={edl.captions} currentTime={playhead} />
+            )}
+          </div>
 
           {edl !== null && (
             <div style={{ marginTop: 16, padding: '0 16px' }}>
@@ -376,6 +403,18 @@ function App() {
                   transcript={transcript}
                   onCommit={commitEdl}
                 />
+                <div style={{ marginTop: 12 }}>
+                  <button type="button" onClick={generateCaptions}>
+                    Generate captions
+                  </button>
+                  {edl.captions.length > 0 && (
+                    <span style={{ marginLeft: 8, fontSize: 14, color: '#666' }}>
+                      {edl.captions.length} caption
+                      {edl.captions.length === 1 ? '' : 's'} — previewed over the
+                      video, burned into the export
+                    </span>
+                  )}
+                </div>
                 <TranscriptView
                   transcript={transcript}
                   edl={edl}

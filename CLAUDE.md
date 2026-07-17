@@ -74,7 +74,7 @@ empty folders for future phases.
   executor defaults to `DEFAULT_KEEP_GAP_MS` (250) and clamps to [0, `MAX_KEEP_GAP_MS` = 1000],
   and the relay adds the schema property + one prompt line (~250 ms breathing room by default;
   keep_gap_ms=0 only on an explicit maximally-tight ask). Still a stateless relay; no new UI.
-- **Phase 6 (in progress — Parts A & B done, C & D remain):** captions — generated from the
+- **Phase 6 (in progress — Parts A–C done, D remains):** captions — generated from the
   transcript, previewed over the video, burned into the exported MP4. The timebase model:
   captions are STORED in SOURCE seconds in `edl.captions` (consistent with segments; regenerable;
   undoable), GENERATED from kept words only (the existing `isSourceTimeKept` midpoint predicate),
@@ -97,9 +97,14 @@ empty folders for future phases.
   ships NO fonts — the filter renders blank without one) and cleans both up in `finally`; a
   "No such filter: subtitles" failure surfaces as a clear error (no drawtext fallback).
   `ExportButton` prepares `edl.captions` at click time — export burns automatically whenever
-  captions are present, no toggle. **Part C (not built yet):** a preview overlay + a "Generate
-  captions" button committing via `commitEdl`. **Part D (not built yet):** a `generate_captions`
-  agent tool.
+  captions are present, no toggle. **Part C (done)** — the preview: `CaptionOverlay` (an
+  absolutely positioned, pointer-events-none div inside a new position:relative wrapper around
+  the `<video>`) shows the SOURCE-time caption containing the playhead (`start <= t < end`,
+  like the transcript highlight; none → hidden), approximating the burn (white bold, black
+  text-shadow, bottom-center); a "Generate captions" button in the transcript section runs
+  `buildCaptions(transcript, edl)` and commits `{ ...edl, captions }` via `commitEdl` — one
+  Undo removes them, regenerating replaces — and shows the caption count. **Part D (not built
+  yet):** a `generate_captions` agent tool.
 - **Out of scope (do NOT build):** caption text editing, caption styling UI, SRT download,
   and word-by-word karaoke timing; do not scaffold for them.
 
@@ -164,9 +169,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   (committed via `commitEdl`, undoable like every edit); generated from KEPT words only; burned
   in OUTPUT time. `prepareCaptionsForExport` re-clips against the current EDL at export, so
   stale captions can never caption deleted speech. All caption logic stays pure, React-free,
-  and unit-tested in `src/captions/` (the Part-C overlay/button are the only UI); the burn font
-  is a committed asset, not a dependency. No caption editing, styling UI, SRT download, or
-  karaoke timing.
+  and unit-tested in `src/captions/` (`CaptionOverlay` + App's generate-button wiring are the
+  only caption UI); the burn font is a committed asset, not a dependency. No caption editing,
+  styling UI, SRT download, or karaoke timing.
 - **One shared `ffmpeg.wasm` engine.** There is exactly ONE `FFmpeg` instance for the whole app,
   in `src/ffmpeg/engine.ts` — never construct a second. It is built LAZILY in `getFfmpeg()` (not at
   module load) so node-side unit tests that import the module's pure helpers don't trip
@@ -191,8 +196,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   fire-and-forget so it's warm for Transcribe/Export), edit controls (set in/out, trim, delete
   range, split, undo, reset), the two-phase Transcribe action (extract audio client-side, then
   upload — `'preparing' | 'transcribing'` states), and the EDL-driven playback controller that
-  skips removed ranges on the video's `timeupdate` and stops after the last kept segment. Object
-  URLs are revoked on replace/unmount to avoid leaks.
+  skips removed ranges on the video's `timeupdate` and stops after the last kept segment.
+  Phase 6 wraps the `<video>` in a position:relative container hosting `CaptionOverlay` (fed
+  `edl.captions` + the playhead) and adds the "Generate captions" button (`buildCaptions` →
+  `commitEdl`, caption count shown) in the transcript section. Object URLs are revoked on
+  replace/unmount to avoid leaks.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
@@ -238,8 +246,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `detect.test.ts` / `tools.test.ts` / `run.test.ts` — Vitest unit tests for the detection, the
     executors (including `trim_to_duration` via `edlTimeToSource`), and the loop (scripted
     transport), all run offline with no API.
-- `src/captions/` — the Phase-6 caption layer: pure, React-free, no ffmpeg (Part C will add
-  the overlay component, the only UI here).
+- `src/captions/` — the Phase-6 caption layer: pure and React-free except the one overlay
+  component; no ffmpeg.
   - `captions.ts` — `buildCaptions(transcript, edl)` chunks KEPT words into source-time
     `Caption`s with deterministic `cap_${start}_${end}` ids (breaks: `MAX_CAPTION_WORDS` = 5,
     terminal punctuation via the shared `endsSentence`, OUTPUT-time gap > `CAPTION_GAP_S` =
@@ -252,6 +260,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     over a big source gap — proves output-time chunking), deleted words never captioned,
     prepare's drop/clip/join-mapping/min-extension (no overlap, end clamp), and the SRT
     format/block fixtures.
+  - `CaptionOverlay.tsx` — the Part-C preview: renders the active SOURCE-time caption
+    (`start <= playhead < end`) bottom-centered over the video (white bold, black text-shadow,
+    `pointerEvents: none` so the native controls stay clickable); returns null when no caption
+    is active. Purely derived — no state, no canvas, no timers.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
