@@ -13,7 +13,9 @@ import { runAgent, type AgentRunResult } from './run'
 type AgentBarProps = {
   edl: EDL
   transcript: Transcript
-  onCommit: (edl: EDL) => void
+  // `regeneratedCaptions` lets App clear its hand-edited flag when a run
+  // included generate_captions (which replaces any hand-edited caption text).
+  onCommit: (edl: EDL, regeneratedCaptions: boolean) => void
 }
 
 function fmt(seconds: number): string {
@@ -69,7 +71,10 @@ export default function AgentBar({ edl, transcript, onCommit }: AgentBarProps) {
     setResult(null)
     try {
       const outcome = await runAgent(trimmed, edl, transcript)
-      onCommit(outcome.edl)
+      const regeneratedCaptions = outcome.toolsRun.some(
+        (t) => t.name === 'generate_captions',
+      )
+      onCommit(outcome.edl, regeneratedCaptions)
       setResult(outcome)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The agent run failed.')

@@ -5,7 +5,8 @@ import TranscriptView from './transcript/Transcript'
 import AgentBar from './agent/AgentBar'
 import ExportButton from './export/ExportButton'
 import CaptionOverlay from './captions/CaptionOverlay'
-import { buildCaptions } from './captions/captions'
+import CaptionList from './captions/CaptionList'
+import { buildCaptions, updateCaptionText } from './captions/captions'
 import { transcribe } from './transcript/api'
 import { extractAudio } from './transcript/extractAudio'
 import { loadFfmpeg } from './ffmpeg/engine'
@@ -37,6 +38,11 @@ function App() {
   const [transcribePhase, setTranscribePhase] =
     useState<'idle' | 'preparing' | 'transcribing'>('idle')
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
+  // Tracks whether captions carry hand edits since the last generation, so the
+  // manual "Generate captions" button can warn before overwriting them. It lives
+  // in React state (not the EDL — the Caption type is untouched): set when an
+  // inline edit commits, cleared whenever generate_captions output is committed.
+  const [captionsEdited, setCaptionsEdited] = useState(false)
   const objectUrlRef = useRef<string | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
 
@@ -95,6 +101,7 @@ function App() {
     setPlayhead(0)
     setTranscript(null)
     setTranscribeError(null)
+    setCaptionsEdited(false)
     clearSelection()
 
     // Warm the ~31 MB ffmpeg.wasm core in the background while the user reviews the
@@ -253,11 +260,48 @@ function App() {
   // Build captions from the CURRENT transcript + EDL and commit them like any
   // other edit: one history entry, so Undo removes them and regenerating after
   // more cuts replaces the old set (buildCaptions only reads kept words).
+  // Regeneration REPLACES any hand-edited text, so warn first when edits exist;
+  // committing fresh captions clears the edited flag.
   function generateCaptions() {
     if (edl === null || transcript === null) {
       return
     }
+    if (
+      captionsEdited &&
+      !window.confirm(
+        'Regenerating will replace your hand-edited captions. Continue?',
+      )
+    ) {
+      return
+    }
     commitEdl({ ...edl, captions: buildCaptions(transcript, edl) })
+    setCaptionsEdited(false)
+  }
+
+  // Inline caption-text edit (Phase 8). `updateCaptionText` returns the SAME EDL
+  // for a no-op (unknown id / empty / unchanged), which `commitEdl` also skips,
+  // so nothing commits and no undo entry appears; a real change commits once and
+  // marks the captions hand-edited (so a later regenerate warns first).
+  function editCaptionText(id: string, text: string) {
+    if (edl === null) {
+      return
+    }
+    const next = updateCaptionText(edl, id, text)
+    if (next === edl) {
+      return
+    }
+    commitEdl(next)
+    setCaptionsEdited(true)
+  }
+
+  // Agent commits run through here so a run that regenerated captions clears the
+  // hand-edited flag (matching the manual button); other runs leave it as-is
+  // (cuts preserve caption text, so hand edits survive).
+  function handleAgentCommit(next: EDL, regeneratedCaptions: boolean) {
+    commitEdl(next)
+    if (regeneratedCaptions) {
+      setCaptionsEdited(false)
+    }
   }
 
   return (
@@ -401,7 +445,7 @@ function App() {
                 <AgentBar
                   edl={edl}
                   transcript={transcript}
-                  onCommit={commitEdl}
+                  onCommit={handleAgentCommit}
                 />
                 <div style={{ marginTop: 12 }}>
                   <button type="button" onClick={generateCaptions}>
@@ -415,6 +459,14 @@ function App() {
                     </span>
                   )}
                 </div>
+                {edl.captions.length > 0 && (
+                  <CaptionList
+                    captions={edl.captions}
+                    currentTime={playhead}
+                    onSeek={handleSeek}
+                    onEditText={editCaptionText}
+                  />
+                )}
                 <TranscriptView
                   transcript={transcript}
                   edl={edl}

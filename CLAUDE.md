@@ -120,8 +120,23 @@ empty folders for future phases.
   segments preserved; no mutation). Returns the SAME `edl` reference — the caller's
   skip-`commitEdl` no-op signal, so no junk undo entries — on an unknown id, empty/whitespace
   text, or unchanged text. Unit-tested (replacement isolation, all three identity cases,
-  newline collapse + trim, purity). **Part B (pending)** — a scannable caption list with
-  inline editing. **Part C (pending)** — SRT download + burn toggle.
+  newline collapse + trim, purity). **Part B (done)** — a scannable, editable caption list:
+  `CaptionList.tsx` renders one row per caption (SOURCE mm:ss button — exact seconds in its
+  title — seeking via App's existing `onSeek`, plus the text) in a bordered, scrolling box
+  styled like the transcript's, with the row at the playhead highlighted exactly like the
+  transcript's active word (`start <= t < end`, `var(--accent)`). Clicking the text turns that
+  row into an inline input (local `editingId` + `draft`, exactly one row editable at a time);
+  BLUR is the single commit path — Enter just blurs the still-mounted input (focusout fires
+  synchronously, one commit), Escape sets a `cancelledRef` so the close-triggered blur skips,
+  reset on the next edit start. App's `editCaptionText` runs `updateCaptionText` and commits
+  only on a real change (identity return → no commit, no undo entry), setting a React-state
+  `captionsEdited` flag; the manual "Generate captions" button `window.confirm`s before
+  overwriting when that flag is set and clears it on regenerate; the agent path clears it when
+  a run included `generate_captions` (AgentBar's `onCommit` gains a `regeneratedCaptions`
+  boolean → App's `handleAgentCommit`). The overlay and export pick up edits automatically
+  (both read `edl.captions`). The relay gains ONE system-prompt line — if the user asks to
+  regenerate after hand-editing, note that regeneration replaces manual edits — schema
+  untouched, still a stateless relay. **Part C (pending)** — SRT download + burn toggle.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -217,8 +232,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   skips removed ranges on the video's `timeupdate` and stops after the last kept segment.
   Phase 6 wraps the `<video>` in a position:relative container hosting `CaptionOverlay` (fed
   `edl.captions` + the playhead) and adds the "Generate captions" button (`buildCaptions` →
-  `commitEdl`, caption count shown) in the transcript section. Object URLs are revoked on
-  replace/unmount to avoid leaks.
+  `commitEdl`, caption count shown) in the transcript section. Phase 8 adds a `captionsEdited`
+  React-state flag (set by `editCaptionText`, cleared on manual/agent regenerate, reset on file
+  change), the `window.confirm` regenerate guard, `editCaptionText` (`updateCaptionText` →
+  commit only on a real change), `handleAgentCommit` (clears the flag when a run regenerated
+  captions), and the `CaptionList` render. Object URLs are revoked on replace/unmount to avoid
+  leaks.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
@@ -262,8 +281,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     tool reports one), and re-POSTs until `end_turn` or a 6-iteration cap.
     Returns the uncommitted EDL plus the client-computed summary; the `transport` is injectable.
   - `AgentBar.tsx` — the command box (input + Run, thinking/disabled state, error + summary).
-    Calls `runAgent` and commits the result ONCE via App's `commitEdl`; shows the client-side
-    tools-run + kept-duration delta.
+    Calls `runAgent` and commits the result ONCE via App's commit path; shows the client-side
+    tools-run + kept-duration delta. Phase 8: `onCommit(edl, regeneratedCaptions)` passes
+    whether the run included `generate_captions` so App can clear its `captionsEdited` flag.
   - `detect.test.ts` / `tools.test.ts` / `run.test.ts` — Vitest unit tests for the detection, the
     executors (including `trim_to_duration` via `edlTimeToSource`), and the loop (scripted
     transport), all run offline with no API.
@@ -288,6 +308,14 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     (`start <= playhead < end`) bottom-centered over the video (white bold, black text-shadow,
     `pointerEvents: none` so the native controls stay clickable); returns null when no caption
     is active. Purely derived — no state, no canvas, no timers.
+  - `CaptionList.tsx` — the Phase-8 editing surface (rendered near the transcript when
+    `edl.captions` is non-empty): a scannable list in a transcript-style scrolling box, one
+    row per caption (SOURCE mm:ss seek button + text), the playhead's row highlighted like
+    the transcript's active word. Clicking the text opens an inline input (local `editingId`
+    + `draft`; one row at a time); BLUR is the single commit path via `onEditText` (App's
+    `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
+    `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
+    untouched — this is the READ-and-fix surface.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
@@ -345,6 +373,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   tool schemas and forwards `{ messages }` to the Claude Messages API (`claude-sonnet-4-6`),
   returning `{ content, stop_reason }` unchanged. Executes no tools, holds no EDL; reads
   `ANTHROPIC_API_KEY` from env only. Reachable at `/api/agent` via the `/api/*` redirect.
+  Phase 8 adds one prompt line (regeneration replaces hand-edited caption text) — schema and
+  relay behavior otherwise unchanged.
 - `src/main.tsx` — React entry (`StrictMode`).
 - `src/index.css` — Vite template styles (`#root` is a centered 1126px column).
 - `public/fonts/` — `Roboto-Bold.ttf` (static, v3.005) + its Apache-2.0 `LICENSE.txt`, pulled
