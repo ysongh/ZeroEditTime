@@ -98,6 +98,30 @@ export function buildCaptions(transcript: Transcript, edl: EDL): Caption[] {
 }
 
 /**
+ * Replace one stored caption's text (Phase 8 inline editing). Times, ids,
+ * order, and segments are untouched — this edits WHAT a caption says, never
+ * when it shows. Internal newlines collapse to spaces (the SRT/burn path is
+ * single-line) and the text is trimmed.
+ *
+ * Returns the SAME `edl` reference — the caller's no-op signal, so no history
+ * entry is recorded — when the id is unknown, the trimmed text is empty, or
+ * the trimmed text equals the current text.
+ */
+export function updateCaptionText(edl: EDL, id: string, text: string): EDL {
+  const cleaned = text.replace(/\s*\n+\s*/g, ' ').trim()
+  if (cleaned === '') {
+    return edl
+  }
+  const index = edl.captions.findIndex((c) => c.id === id)
+  if (index === -1 || edl.captions[index].text === cleaned) {
+    return edl
+  }
+  const captions = edl.captions.slice()
+  captions[index] = { ...captions[index], text: cleaned }
+  return { ...edl, captions }
+}
+
+/**
  * Map stored (source-time) captions to OUTPUT time against the CURRENT EDL,
  * ready for the SRT burn:
  *

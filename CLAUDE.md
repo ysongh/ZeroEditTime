@@ -112,8 +112,19 @@ empty folders for future phases.
   empty-input schema + one system-prompt line (call it AFTER cutting tools so captions reflect
   the final edit — and even an early call stays safe, because export-time preparation re-clips
   against the final EDL). Still a stateless relay; no new UI.
-- **Out of scope (do NOT build):** caption text editing, caption styling UI, SRT download,
-  and word-by-word karaoke timing; do not scaffold for them.
+- **Phase 8 (in progress):** caption TEXT editing + SRT download + a burn toggle — the
+  fix-the-mishears phase: Whisper flubs dev jargon, so captions must be readable as a list and
+  correctable before the burn. **Part A (done)** — pure `updateCaptionText(edl, id, text)` in
+  `src/captions/captions.ts`: collapses internal newlines to spaces (the SRT/burn path is
+  single-line) and trims, then replaces exactly that caption's text (times, ids, order,
+  segments preserved; no mutation). Returns the SAME `edl` reference — the caller's
+  skip-`commitEdl` no-op signal, so no junk undo entries — on an unknown id, empty/whitespace
+  text, or unchanged text. Unit-tested (replacement isolation, all three identity cases,
+  newline collapse + trim, purity). **Part B (pending)** — a scannable caption list with
+  inline editing. **Part C (pending)** — SRT download + burn toggle.
+- **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
+  caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
+  caption text, and word-by-word karaoke timing; do not scaffold for them.
 
 ## Stack
 
@@ -261,15 +272,18 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `captions.ts` — `buildCaptions(transcript, edl)` chunks KEPT words into source-time
     `Caption`s with deterministic `cap_${start}_${end}` ids (breaks: `MAX_CAPTION_WORDS` = 5,
     terminal punctuation via the shared `endsSentence`, OUTPUT-time gap > `CAPTION_GAP_S` =
-    0.8 s); `prepareCaptionsForExport(captions, edl)` → output-time `PreparedCaption[]`
+    0.8 s); `updateCaptionText(edl, id, text)` (Phase 8) → new EDL with that caption's text
+    replaced (newlines collapsed, trimmed) or the SAME reference as the no-op signal (unknown
+    id / empty / unchanged); `prepareCaptionsForExport(captions, edl)` → output-time `PreparedCaption[]`
     (intersect with kept segments — drop empty, clip partial; enforce `MIN_CAPTION_S` = 0.7 s
     by extending, clamped to the next caption's start and `totalKeptDuration`); `formatSrtTime`
     ("HH:MM:SS,mmm", comma millis, negatives clamp to 0) and `buildSrt` (1-indexed blocks,
     single-line text).
   - `captions.test.ts` — the chunk-break rules, the no-break-across-a-cut case (~0 output gap
     over a big source gap — proves output-time chunking), deleted words never captioned,
-    prepare's drop/clip/join-mapping/min-extension (no overlap, end clamp), and the SRT
-    format/block fixtures.
+    prepare's drop/clip/join-mapping/min-extension (no overlap, end clamp), the SRT
+    format/block fixtures, and (Phase 8) `updateCaptionText`'s replacement isolation,
+    identity no-ops, newline collapse, and purity.
   - `CaptionOverlay.tsx` — the Part-C preview: renders the active SOURCE-time caption
     (`start <= playhead < end`) bottom-centered over the video (white bold, black text-shadow,
     `pointerEvents: none` so the native controls stay clickable); returns null when no caption

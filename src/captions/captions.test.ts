@@ -4,6 +4,7 @@ import type { Word } from '../transcript/types'
 import { createEdl, applyRemovedRange } from '../edl/edl'
 import {
   buildCaptions,
+  updateCaptionText,
   prepareCaptionsForExport,
   formatSrtTime,
   buildSrt,
@@ -101,6 +102,65 @@ describe('buildCaptions', () => {
     const transcript = { words: tightWords('one', 'two') }
     const captions = buildCaptions(transcript, makeEdl(10))
     expect(captions[0].id).toBe('cap_0_2')
+  })
+})
+
+describe('updateCaptionText', () => {
+  /** An EDL (with a removal, so segments are non-trivial) holding two captions. */
+  function edlWithCaptions(): EDL {
+    return {
+      ...makeEdl(10, [[6, 7]]),
+      captions: [
+        { id: 'cap_0_2', text: 'first line', start: 0, end: 2 },
+        { id: 'cap_3_5', text: 'second line', start: 3, end: 5 },
+      ],
+    }
+  }
+
+  it("replaces the target caption's text and nothing else", () => {
+    const edl = edlWithCaptions()
+    const next = updateCaptionText(edl, 'cap_3_5', 'Kubernetes line')
+    expect(next).not.toBe(edl)
+    expect(next.captions).toEqual([
+      { id: 'cap_0_2', text: 'first line', start: 0, end: 2 },
+      { id: 'cap_3_5', text: 'Kubernetes line', start: 3, end: 5 },
+    ])
+    // Everything but the caption text is preserved, segments included.
+    expect(next.segments).toEqual(edl.segments)
+    expect(next.source).toEqual(edl.source)
+    // The untouched caption is the same object — only the edited row is new.
+    expect(next.captions[0]).toBe(edl.captions[0])
+  })
+
+  it('returns the same reference for an unknown id', () => {
+    const edl = edlWithCaptions()
+    expect(updateCaptionText(edl, 'cap_nope', 'text')).toBe(edl)
+  })
+
+  it('returns the same reference for empty or whitespace-only text', () => {
+    const edl = edlWithCaptions()
+    expect(updateCaptionText(edl, 'cap_0_2', '')).toBe(edl)
+    expect(updateCaptionText(edl, 'cap_0_2', '   \n\t ')).toBe(edl)
+  })
+
+  it('returns the same reference when the text is unchanged', () => {
+    const edl = edlWithCaptions()
+    expect(updateCaptionText(edl, 'cap_0_2', 'first line')).toBe(edl)
+    // ...including when it only differs by surrounding whitespace.
+    expect(updateCaptionText(edl, 'cap_0_2', '  first line \n')).toBe(edl)
+  })
+
+  it('collapses internal newlines to spaces and trims', () => {
+    const edl = edlWithCaptions()
+    const next = updateCaptionText(edl, 'cap_0_2', '  two \n\n lines ')
+    expect(next.captions[0].text).toBe('two lines')
+  })
+
+  it('does not mutate the input EDL', () => {
+    const edl = edlWithCaptions()
+    const before = structuredClone(edl)
+    updateCaptionText(edl, 'cap_0_2', 'changed text')
+    expect(edl).toEqual(before)
   })
 })
 
