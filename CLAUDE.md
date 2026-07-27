@@ -112,7 +112,7 @@ empty folders for future phases.
   empty-input schema + one system-prompt line (call it AFTER cutting tools so captions reflect
   the final edit — and even an early call stays safe, because export-time preparation re-clips
   against the final EDL). Still a stateless relay; no new UI.
-- **Phase 8 (in progress):** caption TEXT editing + SRT download + a burn toggle — the
+- **Phase 8 (done):** caption TEXT editing + SRT download + a burn toggle — the
   fix-the-mishears phase: Whisper flubs dev jargon, so captions must be readable as a list and
   correctable before the burn. **Part A (done)** — pure `updateCaptionText(edl, id, text)` in
   `src/captions/captions.ts`: collapses internal newlines to spaces (the SRT/burn path is
@@ -136,7 +136,17 @@ empty folders for future phases.
   boolean → App's `handleAgentCommit`). The overlay and export pick up edits automatically
   (both read `edl.captions`). The relay gains ONE system-prompt line — if the user asks to
   regenerate after hand-editing, note that regeneration replaces manual edits — schema
-  untouched, still a stateless relay. **Part C (pending)** — SRT download + burn toggle.
+  untouched, still a stateless relay. **Part C (done)** — SRT download + burn toggle, wiring
+  only in `ExportButton` (engine, `buildExportArgs`, `runExport`, and the burn pipeline
+  untouched): a render-time `prepared = prepareCaptionsForExport(edl.captions, edl)` (cheap,
+  pure) feeds BOTH paths, so the export and the .srt always match the current EDL.
+  "Download SRT" serializes `buildSrt(prepared)` to a text/plain `zero-edit-time.srt` via the
+  same download-anchor helper as the MP4 — output-time by construction, so it lines up with
+  the exported `zero-edit-time.mp4` as a sidecar pair for YouTube/LinkedIn closed captions —
+  and disables with a hint when every caption's speech was cut. The "Burn captions into
+  video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
+  `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
+  the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -202,9 +212,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   (committed via `commitEdl`, undoable like every edit); generated from KEPT words only; burned
   in OUTPUT time. `prepareCaptionsForExport` re-clips against the current EDL at export, so
   stale captions can never caption deleted speech. All caption logic stays pure, React-free,
-  and unit-tested in `src/captions/` (`CaptionOverlay` + App's generate-button wiring are the
-  only caption UI); the burn font is a committed asset, not a dependency. No caption editing,
-  styling UI, SRT download, or karaoke timing.
+  and unit-tested in `src/captions/` (`CaptionOverlay`, the Phase-8 `CaptionList`, and the
+  App/ExportButton wiring are the only caption UI); the burn font is a committed asset, not a
+  dependency. No caption timing edits, add/delete/split/merge, styling UI, SRT import, or
+  karaoke timing.
 - **One shared `ffmpeg.wasm` engine.** There is exactly ONE `FFmpeg` instance for the whole app,
   in `src/ffmpeg/engine.ts` — never construct a second. It is built LAZILY in `getFfmpeg()` (not at
   module load) so node-side unit tests that import the module's pure helpers don't trip
@@ -287,8 +298,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `detect.test.ts` / `tools.test.ts` / `run.test.ts` — Vitest unit tests for the detection, the
     executors (including `trim_to_duration` via `edlTimeToSource`), and the loop (scripted
     transport), all run offline with no API.
-- `src/captions/` — the Phase-6 caption layer: pure and React-free except the one overlay
-  component; no ffmpeg.
+- `src/captions/` — the caption layer (Phase 6 + Phase 8): pure and React-free except the two
+  components (`CaptionOverlay`, `CaptionList`); no ffmpeg.
   - `captions.ts` — `buildCaptions(transcript, edl)` chunks KEPT words into source-time
     `Caption`s with deterministic `cap_${start}_${end}` ids (breaks: `MAX_CAPTION_WORDS` = 5,
     terminal punctuation via the shared `endsSentence`, OUTPUT-time gap > `CAPTION_GAP_S` =
@@ -355,9 +366,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
     "Loading engine…" state), encodes with a progress bar, and downloads `zero-edit-time.mp4`.
     Disabled while busy and when nothing is kept. Routes `runExport`'s non-fatal loudnorm-fallback
-    note into its existing error line (no new UI). At click time it runs
-    `prepareCaptionsForExport(edl.captions, edl)` and passes the result to `runExport`, so the
-    burn happens automatically whenever the EDL holds captions (zero prepared → burn skipped).
+    note into its existing error line (no new UI). Phase 8: a render-time
+    `prepareCaptionsForExport(edl.captions, edl)` feeds both the burn and "Download SRT"
+    (`buildSrt` → text/plain `zero-edit-time.srt` via the same download helper as the MP4;
+    output-time, so it matches the exported file; disabled with a hint when every caption was
+    cut), and the "Burn captions into video" checkbox (default checked, shown only when
+    captions exist) passes the prepared captions to `runExport` when on and `[]` when off
+    (no font/SRT staged; the Phase 5.5-identical no-srtFile graph).
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off

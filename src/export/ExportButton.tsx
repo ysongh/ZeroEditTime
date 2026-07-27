@@ -2,10 +2,16 @@
 // needed, re-encodes the kept segments into one MP4 with a progress indicator,
 // then downloads the file. Export READS edl.segments and mutates nothing — the
 // EDL stays the single source of truth.
+//
+// Phase 8 adds the caption controls: a "Burn captions into video" toggle
+// (default on; off exports a clean video for the sidecar-SRT workflow) and a
+// "Download SRT" button that serializes the same prepared output-time captions
+// the burn would use — so the .srt always lines up with the exported .mp4.
 
 import { useState } from 'react'
+import type { ChangeEvent } from 'react'
 import type { EDL } from '../edl/types'
-import { prepareCaptionsForExport } from '../captions/captions'
+import { buildSrt, prepareCaptionsForExport } from '../captions/captions'
 import { getFfmpeg, loadFfmpeg } from '../ffmpeg/engine'
 import { runExport } from './ffmpeg'
 
@@ -35,9 +41,35 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
   const [phase, setPhase] = useState<Phase>('idle')
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // Phase 8: burning is opt-out. Checked (default) burns the captions into the
+  // video as before; unchecked exports a clean video (the no-srtFile graph,
+  // byte-identical to Phase 5.5) for the video-plus-sidecar-SRT workflow.
+  const [burnCaptions, setBurnCaptions] = useState(true)
 
   const hasSegments = edl.segments.length > 0
   const canExport = file !== null && hasSegments && phase === 'idle'
+
+  // Output-time captions against the CURRENT EDL — a cheap pure derivation,
+  // recomputed per render so both the export and the SRT download always match
+  // the latest edit, and so Download SRT can disable when every caption was cut.
+  const hasCaptions = edl.captions.length > 0
+  const prepared = prepareCaptionsForExport(edl.captions, edl)
+
+  function handleBurnChange(event: ChangeEvent<HTMLInputElement>): void {
+    setBurnCaptions(event.target.checked)
+  }
+
+  // The SRT is in OUTPUT time by construction, so it lines up with the exported
+  // MP4 — upload the pair to YouTube/LinkedIn as video + closed captions.
+  function handleDownloadSrt(): void {
+    if (prepared.length === 0) {
+      return
+    }
+    downloadBlob(
+      new Blob([buildSrt(prepared)], { type: 'text/plain' }),
+      'zero-edit-time.srt',
+    )
+  }
 
   async function handleExport(): Promise<void> {
     if (file === null || !hasSegments || phase !== 'idle') {
@@ -59,13 +91,17 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
       }
       ffmpeg.on('progress', onProgress)
       try {
-        // Burn captions automatically whenever the EDL holds any: prepare maps
-        // them to output time against the CURRENT segments (dropping/clipping
-        // anything cut after generation); zero prepared captions skips the burn.
-        const prepared = prepareCaptionsForExport(edl.captions, edl)
+        // Burn the prepared (output-time, current-EDL) captions unless the
+        // toggle opted out: no prepared captions → runExport stages no font/SRT
+        // and buildExportArgs takes the Phase 5.5-identical no-srtFile path.
+        const captionsToBurn = burnCaptions ? prepared : []
         // A loudnorm-fallback note (non-fatal) surfaces via the same error line.
-        const blob = await runExport(ffmpeg, file, edl.segments, prepared, (note) =>
-          setError(note),
+        const blob = await runExport(
+          ffmpeg,
+          file,
+          edl.segments,
+          captionsToBurn,
+          (note) => setError(note),
         )
         downloadBlob(blob, 'zero-edit-time.mp4')
       } finally {
@@ -92,6 +128,32 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
       <button type="button" onClick={() => void handleExport()} disabled={!canExport}>
         {label}
       </button>
+
+      {hasCaptions && (
+        <div style={{ marginTop: 8, fontSize: 14 }}>
+          <label style={{ marginRight: 12 }}>
+            <input
+              type="checkbox"
+              checked={burnCaptions}
+              onChange={handleBurnChange}
+            />{' '}
+            Burn captions into video
+          </label>
+          <button
+            type="button"
+            onClick={handleDownloadSrt}
+            disabled={prepared.length === 0}
+          >
+            Download SRT
+          </button>
+          {prepared.length === 0 && (
+            <p style={{ marginTop: 4, fontSize: 13, color: '#666' }}>
+              Every caption&apos;s speech has been cut — nothing to burn or
+              download.
+            </p>
+          )}
+        </div>
+      )}
 
       {!hasSegments && (
         <p style={{ color: 'crimson', marginTop: 8, fontSize: 14 }}>
