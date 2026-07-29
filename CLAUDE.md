@@ -147,6 +147,18 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
+- **Phase 9A, Part A (done; stop here):** pure still-image-overlay timing projection only.
+  `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
+  `ProjectedSourceSegment` contracts. `normalizeRemovedRanges` sorts and unions unsorted,
+  overlapping, adjacent, nested, and duplicate half-open removals without mutating inputs;
+  invalid/non-finite ranges are ignored and negative source bounds clamp to zero.
+  `projectSourceRangeToOutputSegments` intersects a source-authored range with the surviving
+  timeline and returns its chronologically ordered source pieces mapped onto concatenated
+  OUTPUT milliseconds, accounting for every removal before each piece and never emitting a
+  zero-length segment. A fully removed or invalid source range produces `[]`. The pure behavior
+  is unit-tested in `src/overlays/timing.test.ts`. **Parts B onward are not implemented yet:**
+  there are no overlay assets/models, render plan, editor state operations, upload/media UI,
+  preview layer, direct manipulation, or ffmpeg overlay rendering.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -327,6 +339,15 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
+- `src/overlays/` — Phase 9A image-overlay work. Only Part A exists.
+  - `timing.ts` — pure, framework-free millisecond timing primitives:
+    `normalizeRemovedRanges` canonicalizes arbitrary removed-range lists, and
+    `projectSourceRangeToOutputSegments` splits a half-open source range around those cuts and
+    maps each kept piece to the concatenated output clock. No React, DOM, assets, editor state,
+    or ffmpeg.
+  - `timing.test.ts` — Vitest coverage for the specification example, removals before/inside a
+    range, complete removal, no intersection, complex normalization, half-open boundaries,
+    invalid/zero-length inputs, and input immutability.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
