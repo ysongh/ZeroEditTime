@@ -147,7 +147,8 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Part A (done; stop here):** pure still-image-overlay timing projection only.
+- **Phase 9A, Parts A–B (done; stop here):** pure still-image-overlay timing projection and
+  export render planning only. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
   `ProjectedSourceSegment` contracts. `normalizeRemovedRanges` sorts and unions unsorted,
   overlapping, adjacent, nested, and duplicate half-open removals without mutating inputs;
@@ -156,9 +157,16 @@ empty folders for future phases.
   timeline and returns its chronologically ordered source pieces mapped onto concatenated
   OUTPUT milliseconds, accounting for every removal before each piece and never emitting a
   zero-length segment. A fully removed or invalid source range produces `[]`. The pure behavior
-  is unit-tested in `src/overlays/timing.test.ts`. **Parts B onward are not implemented yet:**
-  there are no overlay assets/models, render plan, editor state operations, upload/media UI,
-  preview layer, direct manipulation, or ffmpeg overlay rendering.
+  is unit-tested in `src/overlays/timing.test.ts`. Part B: `src/overlays/types.ts` adds the
+  serializable `OverlayAsset`, `ImageOverlay`, and `OverlayFit` domain contracts.
+  `normalizeImageOverlay` normalizes source timing, in-frame geometry, opacity, z-index,
+  and fades without mutation; invalid timing returns `null`. `buildImageOverlayRenderPlan`
+  ignores invalid/missing-asset overlays, projects each valid overlay through removals, preserves
+  z-order, applies fades only to the first/final surviving pieces (clamped to those pieces), and
+  deterministically sorts by z-index → output start → overlay id. It is unit-tested in
+  `src/overlays/renderPlan.test.ts`. **Parts C onward are not implemented yet:** there are no
+  overlay editor state operations, upload/media UI, preview layer, direct manipulation, or
+  ffmpeg overlay rendering.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -339,7 +347,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Only Part A exists.
+- `src/overlays/` — Phase 9A image-overlay work. Only Parts A–B exist; everything is pure and
+  framework-free.
+  - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
+    and dimensions are normalized to the video frame; timing and fades use milliseconds.
   - `timing.ts` — pure, framework-free millisecond timing primitives:
     `normalizeRemovedRanges` canonicalizes arbitrary removed-range lists, and
     `projectSourceRangeToOutputSegments` splits a half-open source range around those cuts and
@@ -348,6 +359,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `timing.test.ts` — Vitest coverage for the specification example, removals before/inside a
     range, complete removal, no intersection, complex normalization, half-open boundaries,
     invalid/zero-length inputs, and input immutability.
+  - `renderPlan.ts` — `normalizeImageOverlay` plus `buildImageOverlayRenderPlan`, the
+    deterministic export-ready projection of valid asset-backed overlays. Split overlays retain
+    fades only on their outer surviving pieces; no ffmpeg strings are generated here.
+  - `renderPlan.test.ts` — Vitest coverage for normalization, missing/invalid assets and
+    overlays, cut splitting, fade ownership/clamping, deterministic ordering, and immutability.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
