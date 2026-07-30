@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import type { ChangeEvent, SyntheticEvent } from 'react'
 import Timeline from './Timeline'
 import TranscriptView from './transcript/Transcript'
@@ -12,6 +12,14 @@ import { extractAudio } from './transcript/extractAudio'
 import { loadFfmpeg } from './ffmpeg/engine'
 import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
+import type { ImageOverlay, OverlayAsset } from './overlays/types'
+import {
+  collectOverlayObjectUrls,
+  createOverlayEditorState,
+  overlayEditorReducer,
+  type OverlayEditorAction,
+  type OverlayEditorState,
+} from './overlays/editorState'
 import {
   applyRemovedRange,
   createEdl,
@@ -24,10 +32,113 @@ function fmt(seconds: number): string {
   return seconds.toFixed(2)
 }
 
+type EditorSnapshot = {
+  edl: EDL | null
+  overlayAssets: OverlayAsset[]
+  imageOverlays: ImageOverlay[]
+}
+
+type EditorState = {
+  edl: EDL | null
+  overlays: OverlayEditorState
+  history: EditorSnapshot[]
+}
+
+type EditorAction =
+  | { type: 'replace-edl'; edl: EDL }
+  | { type: 'commit-edl'; edl: EDL }
+  | { type: 'commit-overlays'; action: OverlayEditorAction }
+  | { type: 'undo' }
+  | { type: 'reset-document' }
+
+function createEditorState(): EditorState {
+  return {
+    edl: null,
+    overlays: createOverlayEditorState(),
+    history: [],
+  }
+}
+
+function snapshotEditor(state: EditorState): EditorSnapshot {
+  return {
+    edl: state.edl,
+    overlayAssets: state.overlays.overlayAssets,
+    imageOverlays: state.overlays.imageOverlays,
+  }
+}
+
+/**
+ * One atomic state machine for EDL + persistent overlay content. React dispatch
+ * always reduces against the latest state, so an async EDL-only agent commit
+ * cannot restore overlay arrays captured before the request started.
+ */
+function editorReducer(state: EditorState, action: EditorAction): EditorState {
+  switch (action.type) {
+    case 'replace-edl':
+      return { ...state, edl: action.edl }
+    case 'commit-edl':
+      if (action.edl === state.edl) {
+        return state
+      }
+      return {
+        ...state,
+        edl: action.edl,
+        history: [...state.history, snapshotEditor(state)],
+      }
+    case 'commit-overlays': {
+      const overlays = overlayEditorReducer(state.overlays, action.action)
+      const contentChanged =
+        overlays.overlayAssets !== state.overlays.overlayAssets ||
+        overlays.imageOverlays !== state.overlays.imageOverlays
+      const selectionChanged =
+        overlays.selectedOverlayId !== state.overlays.selectedOverlayId
+      if (!contentChanged) {
+        return selectionChanged ? { ...state, overlays } : state
+      }
+      return {
+        ...state,
+        overlays,
+        history: [...state.history, snapshotEditor(state)],
+      }
+    }
+    case 'undo': {
+      const previous = state.history.at(-1)
+      if (previous === undefined) {
+        return state
+      }
+      const selectedOverlayId =
+        state.overlays.selectedOverlayId !== null &&
+        previous.imageOverlays.some(
+          (overlay) => overlay.id === state.overlays.selectedOverlayId,
+        )
+          ? state.overlays.selectedOverlayId
+          : null
+      return {
+        edl: previous.edl,
+        overlays: {
+          overlayAssets: previous.overlayAssets,
+          imageOverlays: previous.imageOverlays,
+          selectedOverlayId,
+        },
+        history: state.history.slice(0, -1),
+      }
+    }
+    case 'reset-document':
+      return createEditorState()
+  }
+}
+
 function App() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null)
-  const [edl, setEdl] = useState<EDL | null>(null)
-  const [history, setHistory] = useState<EDL[]>([])
+  const [editor, dispatchEditor] = useReducer(
+    editorReducer,
+    undefined,
+    createEditorState,
+  )
+  const { edl, overlays: overlayEditor, history } = editor
+  // One history for all persistent editor content. Selection stays ephemeral,
+  // but every snapshot captures EDL + overlay assets/layers so Undo follows the
+  // user's actual cross-feature edit order instead of creating a second stack.
   const [playhead, setPlayhead] = useState(0)
   const [inPoint, setInPoint] = useState<number | null>(null)
   const [outPoint, setOutPoint] = useState<number | null>(null)
@@ -44,42 +155,56 @@ function App() {
   // inline edit commits, cleared whenever generate_captions output is committed.
   const [captionsEdited, setCaptionsEdited] = useState(false)
   const objectUrlRef = useRef<string | null>(null)
+  const overlayObjectUrlsRef = useRef<Set<string>>(new Set())
   const videoRef = useRef<HTMLVideoElement | null>(null)
 
-  // Revoke the last object URL when it changes or on unmount, to avoid leaks.
+  // Revoke the video URL and every still-image object URL on disposal.
   useEffect(() => {
     return () => {
       if (objectUrlRef.current !== null) {
         URL.revokeObjectURL(objectUrlRef.current)
       }
+      for (const url of overlayObjectUrlsRef.current) {
+        URL.revokeObjectURL(url)
+      }
     }
   }, [])
+
+  // An image URL remains live while reachable from current editor content OR
+  // an Undo snapshot. This lets asset removal stay undoable and prevents early
+  // revocation when two assets share one URL. A URL is revoked as soon as it
+  // becomes unreachable (undoing its addition, clearing history, or replacing
+  // the source document).
+  useEffect(() => {
+    const reachable = collectOverlayObjectUrls([
+      overlayEditor.overlayAssets,
+      ...history.map((snapshot) => snapshot.overlayAssets),
+    ])
+    for (const url of overlayObjectUrlsRef.current) {
+      if (!reachable.has(url)) {
+        URL.revokeObjectURL(url)
+      }
+    }
+    overlayObjectUrlsRef.current = reachable
+  }, [overlayEditor.overlayAssets, history])
 
   function clearSelection() {
     setInPoint(null)
     setOutPoint(null)
   }
 
-  // The one entry point for every EDL mutation — timeline ops AND (Phase 3)
-  // transcript deletes all funnel through here. It pushes the current EDL onto
-  // the history before applying the next, so a single `undo` restores the
-  // preview, the timeline, and the struck-through words together (all derived
-  // from the one EDL). A no-op (`applyRemovedRange`/`splitSegmentAt` returning
-  // the same EDL) is not recorded.
+  // The one entry point for every EDL mutation — timeline ops, transcript
+  // deletes, caption edits, and agent runs all still funnel through here. The
+  // reducer snapshots the latest overlay content atomically.
   function commitEdl(next: EDL) {
-    if (edl === null || next === edl) {
+    if (edl === null) {
       return
     }
-    setHistory((past) => [...past, edl])
-    setEdl(next)
+    dispatchEditor({ type: 'commit-edl', edl: next })
   }
 
   function undo() {
-    if (history.length === 0) {
-      return
-    }
-    setEdl(history[history.length - 1])
-    setHistory((past) => past.slice(0, -1))
+    dispatchEditor({ type: 'undo' })
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -96,8 +221,7 @@ function App() {
     objectUrlRef.current = url
     setFile(selected)
     setVideoUrl(url)
-    setEdl(null)
-    setHistory([])
+    dispatchEditor({ type: 'reset-document' })
     setPlayhead(0)
     setTranscript(null)
     setTranscribeError(null)
@@ -114,15 +238,16 @@ function App() {
   // Initialize the EDL from the loaded source as a single full-length segment.
   function handleLoadedMetadata(event: SyntheticEvent<HTMLVideoElement>) {
     const video = event.currentTarget
-    setEdl(
-      createEdl({
+    dispatchEditor({
+      type: 'replace-edl',
+      edl: createEdl({
         id: crypto.randomUUID(),
         url: videoUrl ?? video.currentSrc,
         duration: video.duration,
         width: video.videoWidth || undefined,
         height: video.videoHeight || undefined,
       }),
-    )
+    })
   }
 
   // EDL-driven playback: the <video> plays in source time; on each timeupdate we

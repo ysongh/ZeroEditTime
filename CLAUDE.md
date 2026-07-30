@@ -147,8 +147,8 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–B (done; stop here):** pure still-image-overlay timing projection and
-  export render planning only. Part A:
+- **Phase 9A, Parts A–C (done; stop here):** still-image-overlay timing, render planning, and
+  editor state only. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
   `ProjectedSourceSegment` contracts. `normalizeRemovedRanges` sorts and unions unsorted,
   overlapping, adjacent, nested, and duplicate half-open removals without mutating inputs;
@@ -159,14 +159,27 @@ empty folders for future phases.
   zero-length segment. A fully removed or invalid source range produces `[]`. The pure behavior
   is unit-tested in `src/overlays/timing.test.ts`. Part B: `src/overlays/types.ts` adds the
   serializable `OverlayAsset`, `ImageOverlay`, and `OverlayFit` domain contracts.
-  `normalizeImageOverlay` normalizes source timing, in-frame geometry, opacity, z-index,
-  and fades without mutation; invalid timing returns `null`. `buildImageOverlayRenderPlan`
+  Shared `normalizeImageOverlay` in `src/overlays/normalize.ts` normalizes source timing,
+  in-frame geometry, opacity, z-index, and fades without mutation; invalid timing returns
+  `null`. `buildImageOverlayRenderPlan`
   ignores invalid/missing-asset overlays, projects each valid overlay through removals, preserves
   z-order, applies fades only to the first/final surviving pieces (clamped to those pieces), and
   deterministically sorts by z-index → output start → overlay id. It is unit-tested in
-  `src/overlays/renderPlan.test.ts`. **Parts C onward are not implemented yet:** there are no
-  overlay editor state operations, upload/media UI, preview layer, direct manipulation, or
-  ffmpeg overlay rendering.
+  `src/overlays/renderPlan.test.ts`. Part C: pure immutable operations in
+  `src/overlays/editorState.ts` add/remove assets, add/update/remove/duplicate/select overlays,
+  cascade dependent overlays on asset removal, and move layers one rank forward/backward.
+  Invalid references/timing and duplicate IDs are no-ops; duplicates take a caller-supplied ID
+  and receive a visible position (or full-frame timing) offset. Forward/backward assigns a
+  unique z-index immediately across the adjacent layer level, so equal-z ordering cannot depend
+  on cut-sensitive output timing. A typed overlay reducer applies all operations against its
+  latest supplied state. App owns the backward-compatible `[] / [] / null` overlay state in an
+  atomic editor reducer and extends its ONE Undo history to snapshot EDL + overlay assets/layers,
+  while selection remains ephemeral. The reducer always applies async EDL commits against the
+  latest overlay state. Blob URLs stay live while referenced by current state or Undo history,
+  are deduplicated across shared asset URLs, and are revoked only when unreachable or on
+  disposal. **Parts D onward are not implemented yet:** there is no
+  upload/media UI, overlay-adding presets, preview layer, direct manipulation/inspector,
+  overlay timeline track, or ffmpeg overlay rendering.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -255,8 +268,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     React, no DOM, no mutation.
   - `edl.test.ts` — Vitest unit tests for the math.
 - `src/App.tsx` — the app. Holds EDL state (initialized from the loaded source as one
-  full-length segment) plus an EDL history stack; the single `commitEdl` snapshots before each
-  mutation and `undo` pops it back. Owns the file picker (which preloads the shared ffmpeg engine
+  full-length segment) plus Phase-9A overlay editor state. Its single history snapshots both EDL
+  and persistent overlay content in one reducer; `commitEdl` dispatches an atomic EDL commit,
+  and `undo` pops the latest cross-feature edit while overlay selection remains ephemeral. Owns
+  the file picker (which preloads the shared ffmpeg engine
   fire-and-forget so it's warm for Transcribe/Export), edit controls (set in/out, trim, delete
   range, split, undo, reset), the two-phase Transcribe action (extract audio client-side, then
   upload — `'preparing' | 'transcribing'` states), and the EDL-driven playback controller that
@@ -267,8 +282,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   React-state flag (set by `editCaptionText`, cleared on manual/agent regenerate, reset on file
   change), the `window.confirm` regenerate guard, `editCaptionText` (`updateCaptionText` →
   commit only on a real change), `handleAgentCommit` (clears the flag when a run regenerated
-  captions), and the `CaptionList` render. Object URLs are revoked on replace/unmount to avoid
-  leaks.
+  captions), and the `CaptionList` render. Video object URLs are revoked on replace/unmount;
+  overlay blob URLs are retained across current state + Undo history and revoked only once
+  unreachable or on unmount.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
@@ -347,10 +363,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Only Parts A–B exist; everything is pure and
+- `src/overlays/` — Phase 9A image-overlay work. Only Parts A–C exist; everything is pure and
   framework-free.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
     and dimensions are normalized to the video frame; timing and fades use milliseconds.
+  - `normalize.ts` — the shared `normalizeImageOverlay` invariant boundary used by editor
+    operations and render planning, avoiding a state-layer dependency on export planning.
   - `timing.ts` — pure, framework-free millisecond timing primitives:
     `normalizeRemovedRanges` canonicalizes arbitrary removed-range lists, and
     `projectSourceRangeToOutputSegments` splits a half-open source range around those cuts and
@@ -359,11 +377,20 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `timing.test.ts` — Vitest coverage for the specification example, removals before/inside a
     range, complete removal, no intersection, complex normalization, half-open boundaries,
     invalid/zero-length inputs, and input immutability.
-  - `renderPlan.ts` — `normalizeImageOverlay` plus `buildImageOverlayRenderPlan`, the
-    deterministic export-ready projection of valid asset-backed overlays. Split overlays retain
-    fades only on their outer surviving pieces; no ffmpeg strings are generated here.
+  - `renderPlan.ts` — `buildImageOverlayRenderPlan`, the deterministic export-ready projection
+    of valid asset-backed overlays. It re-exports `normalizeImageOverlay` for compatibility.
+    Split overlays retain fades only on their outer surviving pieces; no ffmpeg strings are
+    generated here.
   - `renderPlan.test.ts` — Vitest coverage for normalization, missing/invalid assets and
     overlays, cut splitting, fade ownership/clamping, deterministic ordering, and immutability.
+  - `editorState.ts` — backward-compatible overlay editor state defaults and immutable operations
+    for assets, overlays, selection, duplication, and unambiguous layer ordering, plus a typed
+    `overlayEditorReducer` for applying those operations against current state. Also provides
+    `collectOverlayObjectUrls`, the pure reachability helper App uses across current state + Undo
+    snapshots before revoking blob URLs.
+  - `editorState.test.ts` — Vitest coverage for all Part-C operations, identity no-ops,
+    cascading removal, normalization, selection, duplicate offsets, tied layer ordering, and
+    shared object-URL reachability.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
