@@ -147,8 +147,8 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–C (done; stop here):** still-image-overlay timing, render planning, and
-  editor state only. Part A:
+- **Phase 9A, Parts A–D (done; stop here):** still-image-overlay timing, render planning,
+  editor state, and the local image media panel. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
   `ProjectedSourceSegment` contracts. `normalizeRemovedRanges` sorts and unions unsorted,
   overlapping, adjacent, nested, and duplicate half-open removals without mutating inputs;
@@ -177,9 +177,16 @@ empty folders for future phases.
   while selection remains ephemeral. The reducer always applies async EDL commits against the
   latest overlay state. Blob URLs stay live while referenced by current state or Undo history,
   are deduplicated across shared asset URLs, and are revoked only when unreachable or on
-  disposal. **Parts D onward are not implemented yet:** there is no
-  upload/media UI, overlay-adding presets, preview layer, direct manipulation/inspector,
-  overlay timeline track, or ffmpeg overlay rendering.
+  disposal. Part D: `MediaPanel` accepts local PNG/JPEG/WebP files only, validates MIME before
+  allocating a URL, decodes natural dimensions through an always-revoked temporary object URL,
+  then stores a persistent blob URL (never base64) as an undoable asset. It shows thumbnails,
+  filenames, dimensions, usage counts, and visible upload/decode errors. Unused assets remove
+  directly; used assets confirm before the existing cascade removal, with the persistent URL
+  retained while Undo can restore it. The D-required "Add at playhead" bridge creates only the
+  basic centered, aspect-preserving, contain-fit, opaque, no-fade, three-second source-time
+  overlay above existing layers; EOF produces a visible seek-first error. **Parts E onward are
+  not implemented yet:** there are no cutaway/PIP/logo presets, preview layer, direct
+  manipulation/inspector, overlay timeline track, or ffmpeg overlay rendering.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -284,7 +291,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   commit only on a real change), `handleAgentCommit` (clears the flag when a run regenerated
   captions), and the `CaptionList` render. Video object URLs are revoked on replace/unmount;
   overlay blob URLs are retained across current state + Undo history and revoked only once
-  unreachable or on unmount.
+  unreachable or on unmount. Phase 9A Part D renders `MediaPanel` for local image
+  upload/thumbnail/removal and dispatches its asset/layer changes through the same editor
+  reducer.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
@@ -363,8 +372,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Only Parts A–C exist; everything is pure and
-  framework-free.
+- `src/overlays/` — Phase 9A image-overlay work. Parts A–D exist. Domain/timing/state helpers
+  remain pure and framework-free; `MediaPanel` is the only React UI here so far.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
     and dimensions are normalized to the video frame; timing and fades use milliseconds.
   - `normalize.ts` — the shared `normalizeImageOverlay` invariant boundary used by editor
@@ -391,6 +400,18 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `editorState.test.ts` — Vitest coverage for all Part-C operations, identity no-ops,
     cascading removal, normalization, selection, duplicate offsets, tied layer ordering, and
     shared object-URL reachability.
+  - `imageFiles.ts` — exact PNG/JPEG/WebP MIME validation plus browser dimension decoding via a
+    temporary object URL that is revoked in `finally`; the persistent asset URL is created only
+    after decode succeeds. `imageFiles.test.ts` covers accepted/rejected MIME types, dimensions,
+    decode failures, invalid dimensions, and URL cleanup with injected test dependencies.
+  - `defaultOverlay.ts` — the narrow Part-D "Add at playhead" default and next-layer helper:
+    source milliseconds, three seconds clamped to source end, centered 40%-width
+    aspect-preserving placement (scaled down for tall images), contain, opacity 1, no fades.
+    Part-E presets do not exist. `defaultOverlay.test.ts` covers timing, geometry/aspect,
+    invalid/EOF inputs, and layer choice.
+  - `MediaPanel.tsx` — compact upload/thumbnail list with filename, dimensions, usage count,
+    default Add, removal confirmation for used assets, busy state, and visible errors. A
+    source-id key/unmount guard prevents a slow decode from entering a replacement document.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,

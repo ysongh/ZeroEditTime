@@ -6,6 +6,7 @@ import AgentBar from './agent/AgentBar'
 import ExportButton from './export/ExportButton'
 import CaptionOverlay from './captions/CaptionOverlay'
 import CaptionList from './captions/CaptionList'
+import MediaPanel from './overlays/MediaPanel'
 import { buildCaptions, updateCaptionText } from './captions/captions'
 import { transcribe } from './transcript/api'
 import { extractAudio } from './transcript/extractAudio'
@@ -205,6 +206,38 @@ function App() {
 
   function undo() {
     dispatchEditor({ type: 'undo' })
+  }
+
+  function addOverlayAsset(asset: OverlayAsset) {
+    // Register synchronously so an immediate unmount still sees and revokes the
+    // newly-created URL before the state-driven reachability effect runs.
+    if (asset.src.startsWith('blob:')) {
+      overlayObjectUrlsRef.current.add(asset.src)
+    }
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'add-overlay-asset', asset },
+    })
+  }
+
+  function addImageOverlay(overlay: ImageOverlay) {
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'add-image-overlay', overlay },
+    })
+    // Selection is ephemeral, so this queued action does not add a second Undo
+    // entry; the reducer applies it after the content action above.
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'select-image-overlay', id: overlay.id },
+    })
+  }
+
+  function removeOverlayAsset(assetId: string) {
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'remove-overlay-asset', assetId },
+    })
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -541,6 +574,19 @@ function App() {
                   ))}
                 </ol>
               </div>
+
+              <MediaPanel
+                key={edl.source.id}
+                assets={overlayEditor.overlayAssets}
+                overlays={overlayEditor.imageOverlays}
+                currentSourceMs={playhead * 1000}
+                sourceDurationMs={edl.source.duration * 1000}
+                videoWidth={edl.source.width}
+                videoHeight={edl.source.height}
+                onAddAsset={addOverlayAsset}
+                onAddOverlay={addImageOverlay}
+                onRemoveAsset={removeOverlayAsset}
+              />
 
               <div style={{ marginTop: 16 }}>
                 <ExportButton edl={edl} file={file} />
