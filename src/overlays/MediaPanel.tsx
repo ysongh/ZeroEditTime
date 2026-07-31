@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, CSSProperties } from 'react'
 import {
-  createDefaultImageOverlay,
+  createImageOverlayFromPreset,
   nextImageOverlayZIndex,
+  type ImageOverlayPreset,
 } from './defaultOverlay'
 import {
   IMAGE_FILE_ACCEPT,
@@ -105,17 +106,23 @@ export default function MediaPanel({
     }
   }
 
-  function addAtPlayhead(asset: OverlayAsset) {
+  function addWithPreset(
+    asset: OverlayAsset,
+    preset: ImageOverlayPreset,
+  ) {
     setError(null)
-    const overlay = createDefaultImageOverlay({
-      id: crypto.randomUUID(),
-      asset,
-      currentSourceMs,
-      sourceDurationMs,
-      videoWidth,
-      videoHeight,
-      zIndex: nextImageOverlayZIndex(overlays),
-    })
+    const overlay = createImageOverlayFromPreset(
+      {
+        id: crypto.randomUUID(),
+        asset,
+        currentSourceMs,
+        sourceDurationMs,
+        videoWidth,
+        videoHeight,
+        zIndex: nextImageOverlayZIndex(overlays),
+      },
+      preset,
+    )
     if (overlay === null) {
       setError('Seek before the end of the video, then add the image again.')
       return
@@ -261,8 +268,31 @@ export default function MediaPanel({
                     marginTop: 8,
                   }}
                 >
-                  <button type="button" onClick={() => addAtPlayhead(asset)}>
+                  <button
+                    type="button"
+                    onClick={() => addWithPreset(asset, 'default')}
+                  >
                     Add at playhead
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addWithPreset(asset, 'cutaway')}
+                  >
+                    Add as cutaway
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      addWithPreset(asset, 'picture-in-picture')
+                    }
+                  >
+                    Add as picture-in-picture
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addWithPreset(asset, 'logo')}
+                  >
+                    Add as logo
                   </button>
                   <button type="button" onClick={() => removeAsset(asset)}>
                     Remove

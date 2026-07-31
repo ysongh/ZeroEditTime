@@ -147,8 +147,8 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–D (done; stop here):** still-image-overlay timing, render planning,
-  editor state, and the local image media panel. Part A:
+- **Phase 9A, Parts A–E (done; stop here):** still-image-overlay timing, render planning,
+  editor state, the local image media panel, and quick-add placement presets. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
   `ProjectedSourceSegment` contracts. `normalizeRemovedRanges` sorts and unions unsorted,
   overlapping, adjacent, nested, and duplicate half-open removals without mutating inputs;
@@ -182,10 +182,17 @@ empty folders for future phases.
   then stores a persistent blob URL (never base64) as an undoable asset. It shows thumbnails,
   filenames, dimensions, usage counts, and visible upload/decode errors. Unused assets remove
   directly; used assets confirm before the existing cascade removal, with the persistent URL
-  retained while Undo can restore it. The D-required "Add at playhead" bridge creates only the
-  basic centered, aspect-preserving, contain-fit, opaque, no-fade, three-second source-time
-  overlay above existing layers; EOF produces a visible seek-first error. **Parts E onward are
-  not implemented yet:** there are no cutaway/PIP/logo presets, preview layer, direct
+  retained while Undo can restore it. The D-required "Add at playhead" bridge creates the basic
+  centered, aspect-preserving, contain-fit, opaque, no-fade, three-second source-time overlay
+  above existing layers; EOF produces a visible seek-first error. Part E adds three pure
+  quick-add presets through the SAME one-history-entry + ephemeral-selection path: Cutaway is
+  full-frame `contain` for three seconds; Picture-in-picture is aspect-preserving at up to 30%
+  frame width, bottom-right with a 4% safe margin, for three seconds; Logo is
+  aspect-preserving at up to 12% width, top-right with the same margin, from playhead to source
+  end. Tall PIP/logo assets shrink to the available 92% height without leaving the frame.
+  "Add image over selected transcript range" is deliberately skipped: transcript selection is
+  private local state in `Transcript.tsx`, and lifting/redesigning it is explicitly not required.
+  **Parts F onward are not implemented yet:** there is no preview layer, direct
   manipulation/inspector, overlay timeline track, or ffmpeg overlay rendering.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
@@ -404,14 +411,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     temporary object URL that is revoked in `finally`; the persistent asset URL is created only
     after decode succeeds. `imageFiles.test.ts` covers accepted/rejected MIME types, dimensions,
     decode failures, invalid dimensions, and URL cleanup with injected test dependencies.
-  - `defaultOverlay.ts` — the narrow Part-D "Add at playhead" default and next-layer helper:
-    source milliseconds, three seconds clamped to source end, centered 40%-width
-    aspect-preserving placement (scaled down for tall images), contain, opacity 1, no fades.
-    Part-E presets do not exist. `defaultOverlay.test.ts` covers timing, geometry/aspect,
-    invalid/EOF inputs, and layer choice.
+  - `defaultOverlay.ts` — the shared pure quick-add factory + next-layer helper: the centered
+    40%-width default plus Part-E Cutaway, Picture-in-picture, and Logo presets. Timing stays in
+    source milliseconds; all geometry is normalized; PIP/logo share a 4% safe area and shrink
+    tall images without distorting them. `defaultOverlay.test.ts` covers exact preset
+    timing/geometry, aspect preservation, safe-area clamping, invalid/EOF inputs, immutability,
+    and layer choice.
   - `MediaPanel.tsx` — compact upload/thumbnail list with filename, dimensions, usage count,
-    default Add, removal confirmation for used assets, busy state, and visible errors. A
-    source-id key/unmount guard prevents a slow decode from entering a replacement document.
+    default/preset Add actions, removal confirmation for used assets, busy state, and visible
+    errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
+    document.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
