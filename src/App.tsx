@@ -15,6 +15,7 @@ import { loadFfmpeg } from './ffmpeg/engine'
 import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
 import type { ImageOverlay, OverlayAsset } from './overlays/types'
+import type { OverlayGeometry } from './overlays/transform'
 import {
   collectOverlayObjectUrls,
   createOverlayEditorState,
@@ -226,6 +227,29 @@ function App() {
     dispatchEditor({
       type: 'commit-overlays',
       action: { type: 'select-image-overlay', id },
+    })
+  }
+
+  function updateImageOverlayGeometry(
+    id: string,
+    geometry: OverlayGeometry,
+  ) {
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'update-image-overlay', id, patch: geometry },
+    })
+  }
+
+  function removeImageOverlay(id: string) {
+    if (
+      overlayEditor.imageOverlays.length === 1 &&
+      overlayEditor.imageOverlays[0].id === id
+    ) {
+      setIsOverlayEditing(false)
+    }
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'remove-image-overlay', id },
     })
   }
 
@@ -531,6 +555,10 @@ function App() {
                 selectedOverlayId={overlayEditor.selectedOverlayId}
                 isEditing={isOverlayEditing}
                 onSelectOverlay={selectImageOverlay}
+                onClearSelection={() => selectImageOverlay(null)}
+                onCommitGeometry={updateImageOverlayGeometry}
+                onRemoveOverlay={removeImageOverlay}
+                onBeginTransform={() => videoRef.current?.pause()}
               />
             )}
             {edl !== null && (
@@ -551,8 +579,8 @@ function App() {
               </button>
               {isOverlayEditing && (
                 <span style={{ marginLeft: 8, fontSize: 14, color: '#666' }}>
-                  Click an image to select it; click the video outside an image
-                  to clear selection.
+                  Drag an image to move it. Drag a corner to resize; hold Shift
+                  for free resize. Delete removes it; Escape cancels or clears.
                 </span>
               )}
             </div>

@@ -147,7 +147,7 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–F (done; stop here):** still-image-overlay timing, render planning,
+- **Phase 9A, Parts A–G (done; stop here):** still-image-overlay timing, render planning,
   editor state, the local image media panel, quick-add placement presets, and source-time
   preview. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
@@ -201,9 +201,17 @@ empty folders for future phases.
   editor-only selection outline stays above captions. Overlay hitboxes opt into pointer events
   only in the explicit image-edit mode, which is entered automatically after adding an image and
   can be toggled beside the preview. Clicking an image selects ephemerally; clicking elsewhere on
-  the video clears selection without preventing native controls. **Parts G onward are not
-  implemented yet:** there is no drag/resize, inspector, overlay timeline track, or ffmpeg
-  overlay rendering.
+  the video clears selection without preventing native controls. Part G adds pure normalized
+  move/resize geometry in `transform.ts`: movement and all four corner directions clamp fully
+  inside the frame, keep the opposite resize corner fixed, preserve the starting aspect ratio by
+  default, and allow Shift to unlock width/height. `OverlayStage` owns the pointer-captured
+  transform session and transient draft geometry, pauses playback at gesture start, updates only
+  local React state during pointer movement, and dispatches exactly one existing
+  `update-image-overlay` action on pointer-up. Pointer cancel or Escape discards the draft.
+  Four labeled corner handles sit in the editor layer above captions; Delete/Backspace removes
+  the selection unless focus is in a text editor, and Escape without a gesture clears selection.
+  Removing the final overlay leaves edit mode. **Parts H onward are not implemented yet:** there
+  is no inspector, overlay timeline track, or ffmpeg overlay rendering.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -312,7 +320,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   upload/thumbnail/removal and dispatches its asset/layer changes through the same editor
   reducer. Part F renders `OverlayStage` from the same source-time playhead and adds the local
   image-edit-mode toggle; overlay selection still dispatches through the existing reducer and
-  never adds an Undo entry.
+  never adds an Undo entry. Part G pauses the video at transform start and receives one final
+  geometry callback per completed drag/resize, dispatching it through `update-image-overlay` so
+  each gesture is one persistent Undo step rather than one step per pointer event.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
@@ -391,7 +401,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Parts A–F exist. Domain/timing/state/preview
+- `src/overlays/` — Phase 9A image-overlay work. Parts A–G exist. Domain/timing/state/preview
   derivation helpers remain pure and framework-free; React UI is isolated in `MediaPanel` and
   `OverlayStage`.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
@@ -437,9 +447,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     normalization/immutability, fit mapping, base opacity, both fade ramps and their overlap,
     and invalid inputs.
   - `OverlayStage.tsx` — memoized DOM preview for visible items. Percent geometry and CSS
-    object-fit render image layers in a bounded z-index context below captions; an explicit edit
-    mode enables per-image selection hitboxes and a separate above-caption selection outline.
-    It deliberately has no drag, resize, or transform handles yet.
+    object-fit render image layers in a bounded z-index context below captions. Part G keeps
+    pointer gesture state and draft geometry local, uses pointer capture for move/resize, and
+    commits once on release. The selected editor layer above captions supplies four labeled
+    corner handles with arrow-key resizing, Shift-unlocked free resizing, minimum on-screen
+    size, Escape cancel/clear, and input-safe Delete/Backspace removal.
+  - `transform.ts` — pure normalized move and four-corner resize math. It clamps full geometry
+    inside the frame, preserves the fixed opposite corner and aspect ratio by default, supports
+    independent dimensions when unlocked, enforces configurable minimums, and normalizes
+    defensive numeric inputs without mutation. `transform.test.ts` covers all handle directions,
+    aspect-locked and free resizing, minimum and frame bounds, invalid values, and immutability.
   - `MediaPanel.tsx` — compact upload/thumbnail list with filename, dimensions, usage count,
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
