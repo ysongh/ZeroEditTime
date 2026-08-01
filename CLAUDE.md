@@ -147,8 +147,9 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–E (done; stop here):** still-image-overlay timing, render planning,
-  editor state, the local image media panel, and quick-add placement presets. Part A:
+- **Phase 9A, Parts A–F (done; stop here):** still-image-overlay timing, render planning,
+  editor state, the local image media panel, quick-add placement presets, and source-time
+  preview. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
   `ProjectedSourceSegment` contracts. `normalizeRemovedRanges` sorts and unions unsorted,
   overlapping, adjacent, nested, and duplicate half-open removals without mutating inputs;
@@ -192,8 +193,17 @@ empty folders for future phases.
   end. Tall PIP/logo assets shrink to the available 92% height without leaving the frame.
   "Add image over selected transcript range" is deliberately skipped: transcript selection is
   private local state in `Transcript.tsx`, and lifting/redesigning it is explicitly not required.
-  **Parts F onward are not implemented yet:** there is no preview layer, direct
-  manipulation/inspector, overlay timeline track, or ffmpeg overlay rendering.
+  Part F adds a pure `buildImageOverlayPreviewItems` derivation: it resolves valid assets,
+  normalizes definitions, applies exact half-open SOURCE-millisecond visibility and a
+  deterministic `min(fade-in, fade-out)` opacity envelope, then sorts simultaneous layers by
+  z-index and id. `OverlayStage` renders that list as normalized absolute DOM images with
+  contain/cover/stretch fit. Its fixed stacking context stays below the caption layer; a separate
+  editor-only selection outline stays above captions. Overlay hitboxes opt into pointer events
+  only in the explicit image-edit mode, which is entered automatically after adding an image and
+  can be toggled beside the preview. Clicking an image selects ephemerally; clicking elsewhere on
+  the video clears selection without preventing native controls. **Parts G onward are not
+  implemented yet:** there is no drag/resize, inspector, overlay timeline track, or ffmpeg
+  overlay rendering.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -300,7 +310,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   overlay blob URLs are retained across current state + Undo history and revoked only once
   unreachable or on unmount. Phase 9A Part D renders `MediaPanel` for local image
   upload/thumbnail/removal and dispatches its asset/layer changes through the same editor
-  reducer.
+  reducer. Part F renders `OverlayStage` from the same source-time playhead and adds the local
+  image-edit-mode toggle; overlay selection still dispatches through the existing reducer and
+  never adds an Undo entry.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
@@ -369,8 +381,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     identity no-ops, newline collapse, and purity.
   - `CaptionOverlay.tsx` — the Part-C preview: renders the active SOURCE-time caption
     (`start <= playhead < end`) bottom-centered over the video (white bold, black text-shadow,
-    `pointerEvents: none` so the native controls stay clickable); returns null when no caption
-    is active. Purely derived — no state, no canvas, no timers.
+    fixed above Phase-9A images, and `pointerEvents: none` so the native controls stay clickable);
+    returns null when no caption is active. Purely derived — no state, no canvas, no timers.
   - `CaptionList.tsx` — the Phase-8 editing surface (rendered near the transcript when
     `edl.captions` is non-empty): a scannable list in a transcript-style scrolling box, one
     row per caption (SOURCE mm:ss seek button + text), the playhead's row highlighted like
@@ -379,8 +391,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Parts A–D exist. Domain/timing/state helpers
-  remain pure and framework-free; `MediaPanel` is the only React UI here so far.
+- `src/overlays/` — Phase 9A image-overlay work. Parts A–F exist. Domain/timing/state/preview
+  derivation helpers remain pure and framework-free; React UI is isolated in `MediaPanel` and
+  `OverlayStage`.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
     and dimensions are normalized to the video frame; timing and fades use milliseconds.
   - `normalize.ts` — the shared `normalizeImageOverlay` invariant boundary used by editor
@@ -417,6 +430,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     tall images without distorting them. `defaultOverlay.test.ts` covers exact preset
     timing/geometry, aspect preservation, safe-area clamping, invalid/EOF inputs, immutability,
     and layer choice.
+  - `preview.ts` — pure source-time preview derivation. It filters invalid/missing-asset layers,
+    reuses shared normalization, applies base opacity plus fade envelopes, maps stretch to CSS
+    fill, and returns simultaneous layers in deterministic back-to-front order.
+    `preview.test.ts` covers half-open visibility, ordering, missing assets, defensive
+    normalization/immutability, fit mapping, base opacity, both fade ramps and their overlap,
+    and invalid inputs.
+  - `OverlayStage.tsx` — memoized DOM preview for visible items. Percent geometry and CSS
+    object-fit render image layers in a bounded z-index context below captions; an explicit edit
+    mode enables per-image selection hitboxes and a separate above-caption selection outline.
+    It deliberately has no drag, resize, or transform handles yet.
   - `MediaPanel.tsx` — compact upload/thumbnail list with filename, dimensions, usage count,
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement

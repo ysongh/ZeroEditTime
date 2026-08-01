@@ -7,6 +7,7 @@ import ExportButton from './export/ExportButton'
 import CaptionOverlay from './captions/CaptionOverlay'
 import CaptionList from './captions/CaptionList'
 import MediaPanel from './overlays/MediaPanel'
+import OverlayStage from './overlays/OverlayStage'
 import { buildCaptions, updateCaptionText } from './captions/captions'
 import { transcribe } from './transcript/api'
 import { extractAudio } from './transcript/extractAudio'
@@ -155,6 +156,7 @@ function App() {
   // in React state (not the EDL — the Caption type is untouched): set when an
   // inline edit commits, cleared whenever generate_captions output is committed.
   const [captionsEdited, setCaptionsEdited] = useState(false)
+  const [isOverlayEditing, setIsOverlayEditing] = useState(false)
   const objectUrlRef = useRef<string | null>(null)
   const overlayObjectUrlsRef = useRef<Set<string>>(new Set())
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -220,6 +222,13 @@ function App() {
     })
   }
 
+  function selectImageOverlay(id: string | null) {
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'select-image-overlay', id },
+    })
+  }
+
   function addImageOverlay(overlay: ImageOverlay) {
     dispatchEditor({
       type: 'commit-overlays',
@@ -231,13 +240,29 @@ function App() {
       type: 'commit-overlays',
       action: { type: 'select-image-overlay', id: overlay.id },
     })
+    setIsOverlayEditing(true)
   }
 
   function removeOverlayAsset(assetId: string) {
+    if (
+      overlayEditor.imageOverlays.length > 0 &&
+      overlayEditor.imageOverlays.every(
+        (overlay) => overlay.assetId === assetId,
+      )
+    ) {
+      setIsOverlayEditing(false)
+    }
     dispatchEditor({
       type: 'commit-overlays',
       action: { type: 'remove-overlay-asset', assetId },
     })
+  }
+
+  function toggleOverlayEditing() {
+    if (isOverlayEditing) {
+      selectImageOverlay(null)
+    }
+    setIsOverlayEditing(!isOverlayEditing)
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
@@ -259,6 +284,7 @@ function App() {
     setTranscript(null)
     setTranscribeError(null)
     setCaptionsEdited(false)
+    setIsOverlayEditing(false)
     clearSelection()
 
     // Warm the ~31 MB ffmpeg.wasm core in the background while the user reviews the
@@ -475,10 +501,17 @@ function App() {
               display:block on the video drops the inline descender gap that
               would otherwise offset the overlay's bottom. */}
           <div
+            onPointerDown={() => {
+              if (isOverlayEditing) {
+                selectImageOverlay(null)
+              }
+            }}
             style={{
               position: 'relative',
               display: 'inline-block',
               maxWidth: '100%',
+              overflow: 'hidden',
+              background: '#000',
             }}
           >
             <video
@@ -491,9 +524,39 @@ function App() {
               style={{ display: 'block', maxWidth: '100%', maxHeight: '60vh' }}
             />
             {edl !== null && (
+              <OverlayStage
+                assets={overlayEditor.overlayAssets}
+                overlays={overlayEditor.imageOverlays}
+                currentSourceMs={playhead * 1000}
+                selectedOverlayId={overlayEditor.selectedOverlayId}
+                isEditing={isOverlayEditing}
+                onSelectOverlay={selectImageOverlay}
+              />
+            )}
+            {edl !== null && (
               <CaptionOverlay captions={edl.captions} currentTime={playhead} />
             )}
           </div>
+
+          {edl !== null && overlayEditor.imageOverlays.length > 0 && (
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                aria-pressed={isOverlayEditing}
+                onClick={toggleOverlayEditing}
+              >
+                {isOverlayEditing
+                  ? 'Done editing image overlays'
+                  : 'Edit image overlays'}
+              </button>
+              {isOverlayEditing && (
+                <span style={{ marginLeft: 8, fontSize: 14, color: '#666' }}>
+                  Click an image to select it; click the video outside an image
+                  to clear selection.
+                </span>
+              )}
+            </div>
+          )}
 
           {edl !== null && (
             <div style={{ marginTop: 16, padding: '0 16px' }}>

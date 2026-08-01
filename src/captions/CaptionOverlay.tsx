@@ -33,6 +33,7 @@ export default function CaptionOverlay({
         left: 0,
         right: 0,
         bottom: '9%',
+        zIndex: 2,
         display: 'flex',
         justifyContent: 'center',
         pointerEvents: 'none',
