@@ -11,6 +11,7 @@ import {
   removeOverlayAsset,
   selectImageOverlay,
   sendOverlayBackward,
+  setOverlayLayerPosition,
   updateImageOverlay,
   type OverlayEditorState,
 } from './editorState'
@@ -263,6 +264,29 @@ describe('image overlay operations', () => {
     })
   })
 
+  it('keeps a full-frame duplicate inside a supplied source duration', () => {
+    const fullFrameAtEnd = {
+      ...OVERLAY,
+      endSourceMs: 4_000,
+      x: 0,
+      y: 0,
+      width: 1,
+      height: 1,
+    }
+    const next = duplicateImageOverlay(
+      withOverlay(fullFrameAtEnd),
+      fullFrameAtEnd.id,
+      'bounded-copy',
+      4_000,
+    )
+
+    expect(next.imageOverlays[1]).toMatchObject({
+      id: 'bounded-copy',
+      startSourceMs: 900,
+      endSourceMs: 3_900,
+    })
+  })
+
   it('rejects unknown sources and empty or colliding duplicate IDs', () => {
     const state = withOverlay()
     expect(duplicateImageOverlay(state, 'missing', 'copy')).toBe(state)
@@ -332,6 +356,105 @@ describe('overlay layer operations', () => {
     expect(bringOverlayForward(state, top.id)).toBe(state)
     expect(bringOverlayForward(state, 'missing')).toBe(state)
   })
+
+  describe('setting an exact layer position', () => {
+    function orderedIds(editorState: OverlayEditorState): string[] {
+      return [...editorState.imageOverlays]
+        .sort((a, b) => a.zIndex - b.zIndex || a.id.localeCompare(b.id))
+        .map((overlay) => overlay.id)
+    }
+
+    it('moves to a 1-based back-to-front position with sequential ranks', () => {
+      const before = structuredClone(state)
+      const next = setOverlayLayerPosition(state, top.id, 2)
+
+      expect(next).not.toBe(state)
+      expect(next.imageOverlays.map((overlay) => overlay.id)).toEqual([
+        'top',
+        'bottom',
+        'middle',
+      ])
+      expect(orderedIds(next)).toEqual(['bottom', 'top', 'middle'])
+      expect(
+        [...next.imageOverlays]
+          .sort((a, b) => a.zIndex - b.zIndex)
+          .map((overlay) => overlay.zIndex),
+      ).toEqual([0, 1, 2])
+      expect(next.overlayAssets).toBe(state.overlayAssets)
+      expect(next.selectedOverlayId).toBe(middle.id)
+      expect(state).toEqual(before)
+    })
+
+    it('uses overlay ID to deterministically order tied layers', () => {
+      const tied: OverlayEditorState = {
+        ...state,
+        imageOverlays: [
+          { ...top, id: 'charlie', zIndex: 5 },
+          { ...bottom, id: 'alpha', zIndex: 5 },
+          { ...middle, id: 'bravo', zIndex: 5 },
+        ],
+        selectedOverlayId: 'bravo',
+      }
+
+      const next = setOverlayLayerPosition(tied, 'charlie', 1)
+
+      expect(orderedIds(next)).toEqual(['charlie', 'alpha', 'bravo'])
+      expect(next.imageOverlays.map((overlay) => overlay.id)).toEqual([
+        'charlie',
+        'alpha',
+        'bravo',
+      ])
+      expect(next.selectedOverlayId).toBe('bravo')
+    })
+
+    it('clamps finite integer positions to the available stack', () => {
+      const movedToBack = setOverlayLayerPosition(state, top.id, -100)
+      expect(orderedIds(movedToBack)).toEqual(['top', 'bottom', 'middle'])
+
+      const movedToFront = setOverlayLayerPosition(state, bottom.id, 100)
+      expect(orderedIds(movedToFront)).toEqual(['middle', 'top', 'bottom'])
+    })
+
+    it('preserves all non-z fields while keeping the source immutable', () => {
+      const before = structuredClone(state)
+      const next = setOverlayLayerPosition(state, middle.id, 3)
+
+      for (const sourceOverlay of state.imageOverlays) {
+        const nextOverlay = next.imageOverlays.find(
+          (overlay) => overlay.id === sourceOverlay.id,
+        )
+        expect(nextOverlay).toBeDefined()
+        if (nextOverlay === undefined) {
+          continue
+        }
+        expect({ ...nextOverlay, zIndex: sourceOverlay.zIndex }).toEqual(
+          sourceOverlay,
+        )
+      }
+      expect(state).toEqual(before)
+    })
+
+    it('returns the same reference for invalid, unknown, and unchanged moves', () => {
+      expect(setOverlayLayerPosition(state, 'missing', 1)).toBe(state)
+      expect(setOverlayLayerPosition(state, middle.id, Number.NaN)).toBe(state)
+      expect(setOverlayLayerPosition(state, middle.id, Infinity)).toBe(state)
+      expect(setOverlayLayerPosition(state, middle.id, -Infinity)).toBe(state)
+      expect(setOverlayLayerPosition(state, middle.id, 1.5)).toBe(state)
+      expect(setOverlayLayerPosition(state, middle.id, 2)).toBe(state)
+      expect(setOverlayLayerPosition(state, bottom.id, -100)).toBe(state)
+      expect(setOverlayLayerPosition(state, top.id, 100)).toBe(state)
+
+      const tied: OverlayEditorState = {
+        ...state,
+        imageOverlays: [
+          { ...top, id: 'charlie', zIndex: 5 },
+          { ...bottom, id: 'alpha', zIndex: 5 },
+          { ...middle, id: 'bravo', zIndex: 5 },
+        ],
+      }
+      expect(setOverlayLayerPosition(tied, 'bravo', 2)).toBe(tied)
+    })
+  })
 })
 
 describe('collectOverlayObjectUrls', () => {
@@ -364,5 +487,28 @@ describe('overlayEditorReducer', () => {
     expect(selected.overlayAssets).toEqual([ASSET])
     expect(selected.imageOverlays).toEqual([OVERLAY])
     expect(selected.selectedOverlayId).toBe(OVERLAY.id)
+  })
+
+  it('sets an exact layer position through a typed action', () => {
+    const bottom = { ...OVERLAY, id: 'bottom', zIndex: 0 }
+    const top = { ...OVERLAY, id: 'top', zIndex: 1 }
+    const state: OverlayEditorState = {
+      overlayAssets: [ASSET],
+      imageOverlays: [top, bottom],
+      selectedOverlayId: top.id,
+    }
+
+    const next = overlayEditorReducer(state, {
+      type: 'set-overlay-layer-position',
+      id: top.id,
+      position: 1,
+    })
+
+    expect(
+      [...next.imageOverlays]
+        .sort((a, b) => a.zIndex - b.zIndex)
+        .map((overlay) => overlay.id),
+    ).toEqual(['top', 'bottom'])
+    expect(next.selectedOverlayId).toBe(top.id)
   })
 })

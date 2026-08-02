@@ -7,6 +7,7 @@ import ExportButton from './export/ExportButton'
 import CaptionOverlay from './captions/CaptionOverlay'
 import CaptionList from './captions/CaptionList'
 import MediaPanel from './overlays/MediaPanel'
+import OverlayInspector from './overlays/OverlayInspector'
 import OverlayStage from './overlays/OverlayStage'
 import { buildCaptions, updateCaptionText } from './captions/captions'
 import { transcribe } from './transcript/api'
@@ -15,11 +16,11 @@ import { loadFfmpeg } from './ffmpeg/engine'
 import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
 import type { ImageOverlay, OverlayAsset } from './overlays/types'
-import type { OverlayGeometry } from './overlays/transform'
 import {
   collectOverlayObjectUrls,
   createOverlayEditorState,
   overlayEditorReducer,
+  type ImageOverlayPatch,
   type OverlayEditorAction,
   type OverlayEditorState,
 } from './overlays/editorState'
@@ -230,13 +231,44 @@ function App() {
     })
   }
 
-  function updateImageOverlayGeometry(
-    id: string,
-    geometry: OverlayGeometry,
-  ) {
+  function updateImageOverlay(id: string, patch: ImageOverlayPatch) {
     dispatchEditor({
       type: 'commit-overlays',
-      action: { type: 'update-image-overlay', id, patch: geometry },
+      action: { type: 'update-image-overlay', id, patch },
+    })
+  }
+
+  function duplicateImageOverlay(id: string) {
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: {
+        type: 'duplicate-image-overlay',
+        id,
+        newId: crypto.randomUUID(),
+        sourceDurationMs:
+          edl === null ? undefined : edl.source.duration * 1000,
+      },
+    })
+  }
+
+  function bringImageOverlayForward(id: string) {
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'bring-overlay-forward', id },
+    })
+  }
+
+  function sendImageOverlayBackward(id: string) {
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'send-overlay-backward', id },
+    })
+  }
+
+  function setImageOverlayLayerPosition(id: string, position: number) {
+    dispatchEditor({
+      type: 'commit-overlays',
+      action: { type: 'set-overlay-layer-position', id, position },
     })
   }
 
@@ -512,6 +544,19 @@ function App() {
     }
   }
 
+  const selectedImageOverlay =
+    overlayEditor.selectedOverlayId === null
+      ? undefined
+      : overlayEditor.imageOverlays.find(
+          (overlay) => overlay.id === overlayEditor.selectedOverlayId,
+        )
+  const selectedOverlayAsset =
+    selectedImageOverlay === undefined
+      ? undefined
+      : overlayEditor.overlayAssets.find(
+          (asset) => asset.id === selectedImageOverlay.assetId,
+        )
+
   return (
     <>
       <h1>ZeroEditTime</h1>
@@ -556,7 +601,7 @@ function App() {
                 isEditing={isOverlayEditing}
                 onSelectOverlay={selectImageOverlay}
                 onClearSelection={() => selectImageOverlay(null)}
-                onCommitGeometry={updateImageOverlayGeometry}
+                onCommitGeometry={updateImageOverlay}
                 onRemoveOverlay={removeImageOverlay}
                 onBeginTransform={() => videoRef.current?.pause()}
               />
@@ -585,6 +630,24 @@ function App() {
               )}
             </div>
           )}
+
+          {edl !== null &&
+            isOverlayEditing &&
+            selectedImageOverlay !== undefined && (
+              <OverlayInspector
+                key={selectedImageOverlay.id}
+                overlay={selectedImageOverlay}
+                asset={selectedOverlayAsset}
+                overlays={overlayEditor.imageOverlays}
+                sourceDurationMs={edl.source.duration * 1000}
+                onUpdateOverlay={updateImageOverlay}
+                onSetLayerPosition={setImageOverlayLayerPosition}
+                onDuplicateOverlay={duplicateImageOverlay}
+                onBringForward={bringImageOverlayForward}
+                onSendBackward={sendImageOverlayBackward}
+                onRemoveOverlay={removeImageOverlay}
+              />
+            )}
 
           {edl !== null && (
             <div style={{ marginTop: 16, padding: '0 16px' }}>

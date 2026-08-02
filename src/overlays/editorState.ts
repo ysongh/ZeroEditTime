@@ -20,10 +20,16 @@ export type OverlayEditorAction =
   | { type: 'add-image-overlay'; overlay: ImageOverlay }
   | { type: 'update-image-overlay'; id: string; patch: ImageOverlayPatch }
   | { type: 'remove-image-overlay'; id: string }
-  | { type: 'duplicate-image-overlay'; id: string; newId: string }
+  | {
+      type: 'duplicate-image-overlay'
+      id: string
+      newId: string
+      sourceDurationMs?: number
+    }
   | { type: 'select-image-overlay'; id: string | null }
   | { type: 'bring-overlay-forward'; id: string }
   | { type: 'send-overlay-backward'; id: string }
+  | { type: 'set-overlay-layer-position'; id: string; position: number }
 
 const DUPLICATE_POSITION_OFFSET = 0.02
 const DUPLICATE_TIME_OFFSET_MS = 100
@@ -165,6 +171,7 @@ export function duplicateImageOverlay(
   state: OverlayEditorState,
   id: string,
   newId: string,
+  sourceDurationMs?: number,
 ): OverlayEditorState {
   const source = state.imageOverlays.find((overlay) => overlay.id === id)
   if (
@@ -178,7 +185,9 @@ export function duplicateImageOverlay(
   const x = offsetCoordinate(source.x, source.width)
   const y = offsetCoordinate(source.y, source.height)
   const needsTimeOffset = x === source.x && y === source.y
-  const timeOffset = needsTimeOffset ? DUPLICATE_TIME_OFFSET_MS : 0
+  const timeOffset = needsTimeOffset
+    ? duplicateTimeOffset(source, sourceDurationMs)
+    : 0
   const duplicate = normalizeImageOverlay({
     ...source,
     id: newId,
@@ -225,6 +234,50 @@ export function sendOverlayBackward(
   return moveOverlayOneLayer(state, id, -1)
 }
 
+/**
+ * Move an overlay to a 1-based back-to-front stack position. A real move
+ * rewrites every layer to a sequential rank so tied or fractional z-indexes
+ * cannot make the resulting order ambiguous.
+ */
+export function setOverlayLayerPosition(
+  state: OverlayEditorState,
+  id: string,
+  position: number,
+): OverlayEditorState {
+  if (!Number.isFinite(position) || !Number.isInteger(position)) {
+    return state
+  }
+
+  const ordered = [...state.imageOverlays].sort(compareOverlayLayerOrder)
+  const currentIndex = ordered.findIndex((overlay) => overlay.id === id)
+  if (currentIndex === -1) {
+    return state
+  }
+
+  const destinationIndex = Math.min(
+    ordered.length - 1,
+    Math.max(0, position - 1),
+  )
+  if (destinationIndex === currentIndex) {
+    return state
+  }
+
+  const [target] = ordered.splice(currentIndex, 1)
+  ordered.splice(destinationIndex, 0, target)
+  const ranks = new Map(
+    ordered.map((overlay, index) => [overlay.id, index] as const),
+  )
+  const imageOverlays = state.imageOverlays.map((overlay) => {
+    const zIndex = ranks.get(overlay.id)
+    if (zIndex === undefined) {
+      return overlay
+    }
+    return zIndex === overlay.zIndex ? overlay : { ...overlay, zIndex }
+  })
+
+  return { ...state, imageOverlays }
+}
+
 /** Apply a typed overlay action against the state supplied at reduce time. */
 export function overlayEditorReducer(
   state: OverlayEditorState,
@@ -242,13 +295,20 @@ export function overlayEditorReducer(
     case 'remove-image-overlay':
       return removeImageOverlay(state, action.id)
     case 'duplicate-image-overlay':
-      return duplicateImageOverlay(state, action.id, action.newId)
+      return duplicateImageOverlay(
+        state,
+        action.id,
+        action.newId,
+        action.sourceDurationMs,
+      )
     case 'select-image-overlay':
       return selectImageOverlay(state, action.id)
     case 'bring-overlay-forward':
       return bringOverlayForward(state, action.id)
     case 'send-overlay-backward':
       return sendOverlayBackward(state, action.id)
+    case 'set-overlay-layer-position':
+      return setOverlayLayerPosition(state, action.id, action.position)
   }
 }
 
@@ -296,6 +356,23 @@ function offsetCoordinate(position: number, size: number): number {
     return forward
   }
   return Math.max(0, position - DUPLICATE_POSITION_OFFSET)
+}
+
+function duplicateTimeOffset(
+  overlay: Readonly<ImageOverlay>,
+  sourceDurationMs: number | undefined,
+): number {
+  if (
+    sourceDurationMs === undefined ||
+    !Number.isFinite(sourceDurationMs) ||
+    sourceDurationMs < 0
+  ) {
+    return DUPLICATE_TIME_OFFSET_MS
+  }
+  if (overlay.endSourceMs + DUPLICATE_TIME_OFFSET_MS <= sourceDurationMs) {
+    return DUPLICATE_TIME_OFFSET_MS
+  }
+  return -Math.min(DUPLICATE_TIME_OFFSET_MS, overlay.startSourceMs)
 }
 
 function moveOverlayOneLayer(
@@ -361,4 +438,13 @@ function moveOverlayOneLayer(
 
 function midpoint(a: number, b: number): number {
   return a + (b - a) / 2
+}
+
+function compareOverlayLayerOrder(a: ImageOverlay, b: ImageOverlay): number {
+  const aZIndex = Number.isFinite(a.zIndex) ? a.zIndex : 0
+  const bZIndex = Number.isFinite(b.zIndex) ? b.zIndex : 0
+  if (aZIndex !== bZIndex) {
+    return aZIndex - bZIndex
+  }
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
 }

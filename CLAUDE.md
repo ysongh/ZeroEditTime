@@ -147,7 +147,7 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–G (done; stop here):** still-image-overlay timing, render planning,
+- **Phase 9A, Parts A–H (done; stop here):** still-image-overlay timing, render planning,
   editor state, the local image media panel, quick-add placement presets, and source-time
   preview. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
@@ -210,8 +210,19 @@ empty folders for future phases.
   `update-image-overlay` action on pointer-up. Pointer cancel or Escape discards the draft.
   Four labeled corner handles sit in the editor layer above captions; Delete/Backspace removes
   the selection unless focus is in a text editor, and Escape without a gesture clears selection.
-  Removing the final overlay leaves edit mode. **Parts H onward are not implemented yet:** there
-  is no inspector, overlay timeline track, or ffmpeg overlay rendering.
+  Removing the final overlay leaves edit mode. Part H adds `OverlayInspector`, shown from the full
+  editor array whenever an image is selected (even if its time range is not visible at the
+  playhead). Start/end and fade fields use source-millisecond `m:ss.mmm` formatting with strict
+  seconds/clock parsing, visible errors, source/duration clamping, and blur/Enter as the single
+  commit path; Escape restores the authoritative value. Fit and percentage opacity update the
+  same overlay patch path. Layer order is a one-based back-to-front control backed by a pure
+  deterministic reducer action that renumbers z-indices atomically; the existing one-step
+  forward/backward actions remain available. Fill frame, centered reset position, duplicate, and
+  delete also use the one overlay reducer/history; a full-frame duplicate chooses a backward
+  timing offset near EOF so its range remains inside the source. Inspector text is only an
+  ephemeral draft, keyed to authoritative field values so Undo never leaves stale local state.
+  **Parts I onward are not implemented yet:** there is no overlay timeline track or ffmpeg
+  overlay rendering.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -322,7 +333,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   image-edit-mode toggle; overlay selection still dispatches through the existing reducer and
   never adds an Undo entry. Part G pauses the video at transform start and receives one final
   geometry callback per completed drag/resize, dispatching it through `update-image-overlay` so
-  each gesture is one persistent Undo step rather than one step per pointer event.
+  each gesture is one persistent Undo step rather than one step per pointer event. Part H renders
+  the selected `OverlayInspector`; its field commits reuse that exact generic update callback,
+  while duplicate/layer/delete actions dispatch through the same atomic overlay reducer.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
@@ -401,9 +414,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Parts A–G exist. Domain/timing/state/preview
+- `src/overlays/` — Phase 9A image-overlay work. Parts A–H exist. Domain/timing/state/preview
   derivation helpers remain pure and framework-free; React UI is isolated in `MediaPanel` and
-  `OverlayStage`.
+  the preview/editor components.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
     and dimensions are normalized to the video frame; timing and fades use milliseconds.
   - `normalize.ts` — the shared `normalizeImageOverlay` invariant boundary used by editor
@@ -426,7 +439,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     for assets, overlays, selection, duplication, and unambiguous layer ordering, plus a typed
     `overlayEditorReducer` for applying those operations against current state. Also provides
     `collectOverlayObjectUrls`, the pure reachability helper App uses across current state + Undo
-    snapshots before revoking blob URLs.
+    snapshots before revoking blob URLs. Part H adds atomic direct positioning by a one-based
+    back-to-front rank; real moves deterministically assign sequential z-indices in one edit.
   - `editorState.test.ts` — Vitest coverage for all Part-C operations, identity no-ops,
     cascading removal, normalization, selection, duplicate offsets, tied layer ordering, and
     shared object-URL reachability.
@@ -457,6 +471,14 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     independent dimensions when unlocked, enforces configurable minimums, and normalizes
     defensive numeric inputs without mutation. `transform.test.ts` covers all handle directions,
     aspect-locked and free resizing, minimum and frame bounds, invalid values, and immutability.
+  - `inspector.ts` — pure Part-H value/derived helpers: millisecond-precise compact source
+    timestamp formatting and parsing, source-bound clamping, percentage opacity parsing,
+    fill/center geometry, and deterministic layer rank/availability. `inspector.test.ts` covers
+    exact round trips, malformed values, clamping, geometry purity, and tied layer ordering.
+  - `OverlayInspector.tsx` — selected-image controls for source timing, fades, fit, opacity,
+    direct/relative layer order, fill/reset, duplication, and deletion. Text fields own only
+    temporary strings/errors and commit once on blur/Enter through App's shared overlay update;
+    invalid drafts never enter editor state and Escape cancels them.
   - `MediaPanel.tsx` — compact upload/thumbnail list with filename, dimensions, usage count,
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
