@@ -9,6 +9,7 @@ import CaptionList from './captions/CaptionList'
 import MediaPanel from './overlays/MediaPanel'
 import OverlayInspector from './overlays/OverlayInspector'
 import OverlayStage from './overlays/OverlayStage'
+import OverlayTimelineTrack from './overlays/OverlayTimelineTrack'
 import { buildCaptions, updateCaptionText } from './captions/captions'
 import { transcribe } from './transcript/api'
 import { extractAudio } from './transcript/extractAudio'
@@ -657,6 +658,18 @@ function App() {
                 inPoint={inPoint}
                 outPoint={outPoint}
                 onSeek={handleSeek}
+              />
+
+              <OverlayTimelineTrack
+                assets={overlayEditor.overlayAssets}
+                overlays={overlayEditor.imageOverlays}
+                selectedOverlayId={overlayEditor.selectedOverlayId}
+                sourceDurationMs={edl.source.duration * 1000}
+                playheadSourceMs={playhead * 1000}
+                onSelectOverlay={selectImageOverlay}
+                onSeekSourceMs={(sourceMs) => handleSeek(sourceMs / 1000)}
+                onCommitTiming={updateImageOverlay}
+                onBeginTimingEdit={() => videoRef.current?.pause()}
               />
 
               <div

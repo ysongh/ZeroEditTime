@@ -147,7 +147,7 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–H (done; stop here):** still-image-overlay timing, render planning,
+- **Phase 9A, Parts A–I (done; stop here):** still-image-overlay timing, render planning,
   editor state, the local image media panel, quick-add placement presets, and source-time
   preview. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
@@ -221,8 +221,15 @@ empty folders for future phases.
   delete also use the one overlay reducer/history; a full-frame duplicate chooses a backward
   timing offset near EOF so its range remains inside the source. Inspector text is only an
   ephemeral draft, keyed to authoritative field values so Undo never leaves stale local state.
-  **Parts I onward are not implemented yet:** there is no overlay timeline track or ffmpeg
-  overlay rendering.
+  Part I adds a compact `OverlayTimelineTrack` below the existing EDL timeline. Every image gets
+  a labeled filename row positioned against the full original SOURCE duration, so removed EDL
+  ranges never shift overlay blocks. Clicking a block selects it and seeks to its start. Move and
+  left/right trim gestures use pointer capture and an origin-based local draft, then commit both
+  timing boundaries once on pointer-up through the same `update-image-overlay` path; cancel,
+  lost capture, and Escape discard the draft. Pure timeline math clamps moves/trims to the source,
+  preserves move duration, and enforces a 100 ms trim floor without expanding a valid pre-existing
+  shorter near-EOF overlay. Arrow keys provide 100 ms keyboard move/trim steps (Shift: one second).
+  **Part J is not implemented yet:** image overlays are not composited by ffmpeg during export.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -335,7 +342,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   geometry callback per completed drag/resize, dispatching it through `update-image-overlay` so
   each gesture is one persistent Undo step rather than one step per pointer event. Part H renders
   the selected `OverlayInspector`; its field commits reuse that exact generic update callback,
-  while duplicate/layer/delete actions dispatch through the same atomic overlay reducer.
+  while duplicate/layer/delete actions dispatch through the same atomic overlay reducer. Part I
+  renders `OverlayTimelineTrack` on the full source scale; it selects/seeks ephemerally and sends
+  one final timing patch through that callback per completed drag or trim.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
@@ -414,7 +423,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Parts A–H exist. Domain/timing/state/preview
+- `src/overlays/` — Phase 9A image-overlay work. Parts A–I exist. Domain/timing/state/preview
   derivation helpers remain pure and framework-free; React UI is isolated in `MediaPanel` and
   the preview/editor components.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
@@ -479,6 +488,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     direct/relative layer order, fill/reset, duplication, and deletion. Text fields own only
     temporary strings/errors and commit once on blur/Enter through App's shared overlay update;
     invalid drafts never enter editor state and Escape cancels them.
+  - `timeline.ts` — pure Part-I source-time track math: block fractions, pixel-to-source deltas,
+    and immutable move/start-trim/end-trim drafts with source bounds and a 100 ms minimum.
+    `timeline.test.ts` covers scale conversion, both movement clamps, both trim boundaries,
+    minimum and sub-minimum ranges, invalid inputs, no-op identity, and immutability.
+  - `OverlayTimelineTrack.tsx` — one compact labeled row per image on the original source scale.
+    It owns only the pointer-captured timing draft, commits one final range through App on release,
+    cancels without mutation, and exposes separate keyboard-accessible move and trim controls.
   - `MediaPanel.tsx` — compact upload/thumbnail list with filename, dimensions, usage count,
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
