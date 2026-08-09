@@ -5,16 +5,37 @@
 //
 // The testable core is `buildExportArgs`: a PURE function (no ffmpeg, no React,
 // no DOM) that maps the kept segments to the exact ffmpeg exec arguments. The
-// running mechanics (`runExport`) live alongside it but are exercised only
-// manually; the shared engine instance and its loader live in `../ffmpeg/engine`.
+// running mechanics (`runExport`) live alongside it and use the shared engine
+// instance/loader from `../ffmpeg/engine`; VFS lifecycle and retries are covered
+// with a mocked engine while browser encoding remains an end-to-end check.
 
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile } from '@ffmpeg/util'
 import { inputExtension } from '../ffmpeg/engine'
 import { buildSrt, type PreparedCaption } from '../captions/captions'
+import type { OverlayRenderSegment } from '../overlays/renderPlan'
+import type { OverlayAsset } from '../overlays/types'
+import {
+  buildImageOverlayFilterGraph,
+  type ImageOverlayFilterGraph,
+} from './imageOverlays'
 
 /** A kept source range, in seconds. Structurally a subset of `Segment`. */
 export type ExportSegment = { start: number; end: number }
+
+/** Browser-side image data needed to add an already-projected overlay plan. */
+export interface ImageOverlayExportRequest {
+  renderPlan: readonly OverlayRenderSegment[]
+  assets: readonly OverlayAsset[]
+  frameWidth: number
+  frameHeight: number
+}
+
+export interface BuildExportOptions {
+  loudnorm?: boolean
+  srtFile?: string
+  imageOverlayGraph?: ImageOverlayFilterGraph | null
+}
 
 // Phase-5.5 audio polish. A cut lands mid-waveform, so each segment gets a
 // ~15 ms fade at both edges — long enough to kill the click, far too short to
@@ -65,15 +86,22 @@ export const FONTS_DIR = '/fonts'
  * and `[cv]subtitles=…[outv]` is appended as one more clause. The audio side is
  * untouched, and with no `srtFile` the graph is byte-identical to Phase 5.5.
  *
+ * When `options.imageOverlayGraph` is set (Phase 9A Part J), kept video is
+ * assembled into the graph's requested input label, image inputs and clauses
+ * are appended, and captions consume the composited result. Audio clauses are
+ * unchanged. With no graph, the full argument array remains byte-identical to
+ * the pre-overlay path.
+ *
  * `-filter_complex` is ONE single argument string. Float seconds are passed
  * straight through (e.g. 2.983) to preserve frame accuracy. For a single segment
- * we label the trim outputs `[outv]`/`[outa]` directly and skip the concat.
+ * we skip concat and label video for its next stage (`[outv]`, captions, or
+ * overlays) while audio lands directly at `[outa]`.
  */
 export function buildExportArgs(
   segments: ExportSegment[],
   inputName = 'input.mp4',
   outputName = 'output.mp4',
-  options: { loudnorm?: boolean; srtFile?: string } = {},
+  options: BuildExportOptions = {},
 ): string[] {
   if (segments.length === 0) {
     throw new Error('Cannot export: the EDL has no kept segments.')
@@ -88,16 +116,22 @@ export function buildExportArgs(
     options.srtFile !== undefined
       ? `subtitles=${options.srtFile}:fontsdir=${FONTS_DIR}:force_style='${SUBTITLE_STYLE}'`
       : null
-  // Where the assembled (trimmed/concatenated) video lands: [outv] directly,
-  // or the intermediate [cv] that the subtitles stage consumes.
-  const vFinal = burn === null ? 'outv' : 'cv'
+  const overlayGraph = options.imageOverlayGraph ?? null
+  // Where assembled kept video lands. Overlays consume [ovbase] (or another
+  // generated label); otherwise captions consume [cv], or video finishes at
+  // [outv] exactly as it did before Part J.
+  const assembledVideoLabel =
+    overlayGraph?.inputVideoLabel ?? (burn === null ? 'outv' : 'cv')
+  const captionInputLabel =
+    overlayGraph?.outputVideoLabel ?? assembledVideoLabel
+  const mappedVideoLabel = burn === null ? captionInputLabel : 'outv'
 
   const n = segments.length
   const clauses: string[] = []
   for (let i = 0; i < n; i++) {
     const { start, end } = segments[i]
     // n === 1: label directly as the assembled output so no concat is needed.
-    const vLabel = n === 1 ? vFinal : `v${i}`
+    const vLabel = n === 1 ? assembledVideoLabel : `v${i}`
     const segDur = end - start
     const fade = Math.min(AUDIO_FADE_S, segDur / 2)
     const audioChain =
@@ -112,16 +146,22 @@ export function buildExportArgs(
   let filter = clauses.join(';')
   if (n > 1) {
     const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('')
-    filter += `;${concatInputs}concat=n=${n}:v=1:a=1[${vFinal}][ca];[ca]${master}[outa]`
+    filter +=
+      `;${concatInputs}concat=n=${n}:v=1:a=1` +
+      `[${assembledVideoLabel}][ca];[ca]${master}[outa]`
+  }
+  if (overlayGraph !== null) {
+    filter += `;${overlayGraph.filterComplex}`
   }
   if (burn !== null) {
-    filter += `;[${vFinal}]${burn}[outv]`
+    filter += `;[${captionInputLabel}]${burn}[outv]`
   }
 
   return [
     '-i', inputName,
+    ...(overlayGraph?.inputArgs ?? []),
     '-filter_complex', filter,
-    '-map', '[outv]', '-map', '[outa]',
+    '-map', `[${mappedVideoLabel}]`, '-map', '[outa]',
     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '128k',
     outputName,
@@ -143,6 +183,10 @@ const SRT_NAME = 'captions.srt'
  * current EDL — see `prepareCaptionsForExport`). When non-empty, the font and
  * the built SRT are staged into the VFS and the exec burns them; when empty the
  * burn is skipped entirely and the graph is byte-identical to Phase 5.5.
+ * `imageOverlays`, when supplied with a non-empty render plan, are staged once
+ * under generated VFS names and reused if loudnorm needs a fallback encode.
+ * They are composited before the optional caption burn and are deleted in the
+ * same best-effort cleanup as every other temporary export file.
  *
  * If the exec fails specifically because the core lacks the loudnorm filter
  * (unlikely — it's native libavfilter), the encode retries WITHOUT loudnorm
@@ -158,10 +202,22 @@ export async function runExport(
   segments: ExportSegment[],
   captions: PreparedCaption[] = [],
   onNote?: (note: string) => void,
+  imageOverlays?: ImageOverlayExportRequest,
 ): Promise<Blob> {
   const inputName = `input.${inputExtension(file.name)}`
   const outputName = 'output.mp4'
   const burn = captions.length > 0
+  const imageOverlayGraph =
+    imageOverlays === undefined
+      ? null
+      : buildImageOverlayFilterGraph(
+          imageOverlays.renderPlan,
+          imageOverlays.assets,
+          {
+            frameWidth: imageOverlays.frameWidth,
+            frameHeight: imageOverlays.frameHeight,
+          },
+        )
 
   // Accumulate ffmpeg's stderr so a failed exec can be classified: only a
   // missing-loudnorm failure triggers the fallback re-encode.
@@ -172,21 +228,39 @@ export async function runExport(
   ffmpeg.on('log', onLog)
 
   const encode = async (withLoudnorm: boolean) => {
-    await ffmpeg.exec(
+    const exitCode = await ffmpeg.exec(
       buildExportArgs(
         segments,
         inputName,
         outputName,
         burn
-          ? { loudnorm: withLoudnorm, srtFile: SRT_NAME }
-          : { loudnorm: withLoudnorm },
+          ? {
+              loudnorm: withLoudnorm,
+              srtFile: SRT_NAME,
+              imageOverlayGraph,
+            }
+          : { loudnorm: withLoudnorm, imageOverlayGraph },
       ),
     )
+    if (exitCode !== 0) {
+      throw new Error(`ffmpeg export exited with code ${exitCode}.`)
+    }
     return ffmpeg.readFile(outputName)
   }
 
   try {
     await ffmpeg.writeFile(inputName, await fetchFile(file))
+
+    for (const staged of imageOverlayGraph?.stagedAssets ?? []) {
+      try {
+        await ffmpeg.writeFile(staged.inputName, await fetchFile(staged.src))
+      } catch (error) {
+        throw new Error(
+          `Could not stage image "${staged.name}" for export.`,
+          { cause: error },
+        )
+      }
+    }
 
     if (burn) {
       // Stage the burn inputs: the font libass renders with (the VFS has no
@@ -234,6 +308,9 @@ export async function runExport(
     if (burn) {
       await safeDelete(ffmpeg, SRT_NAME)
       await safeDelete(ffmpeg, FONT_VFS_PATH)
+    }
+    for (const staged of imageOverlayGraph?.stagedAssets ?? []) {
+      await safeDelete(ffmpeg, staged.inputName)
     }
   }
 }

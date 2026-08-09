@@ -147,7 +147,7 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–I (done; stop here):** still-image-overlay timing, render planning,
+- **Phase 9A, Parts A–K (done; stop here):** still-image-overlay timing, render planning,
   editor state, the local image media panel, quick-add placement presets, and source-time
   preview. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
@@ -229,7 +229,30 @@ empty folders for future phases.
   lost capture, and Escape discard the draft. Pure timeline math clamps moves/trims to the source,
   preserves move duration, and enforces a 100 ms trim floor without expanding a valid pre-existing
   shorter near-EOF overlay. Arrow keys provide 100 ms keyboard move/trim steps (Shift: one second).
-  **Part J is not implemented yet:** image overlays are not composited by ffmpeg during export.
+  Part J composites the current image overlays into exported MP4s. Pure
+  `src/export/imageOverlays.ts` derives removed ranges as the complement of kept EDL segments,
+  builds the existing output-time render plan, and turns it into deterministic ffmpeg image
+  inputs/filter clauses. Each referenced asset is staged once under a generated MIME-derived VFS
+  name; reused assets fan out through `split`. The graph fixes the base to even output dimensions,
+  converts normalized rectangles to pixels, implements contain/cover/stretch, preserves PNG alpha,
+  multiplies existing alpha by opacity, reproduces preview fade envelopes (including overlapping
+  in/out fades), uses half-open output-time enables, and composites back-to-front with equal-z ID
+  ordering matching preview. `buildExportArgs` assembles kept video into the overlay graph first,
+  then burns captions from the composited output so captions stay above images; every existing
+  audio clause and mapping is unchanged. `runExport` stages overlay bytes only when exporting,
+  reuses them across the loudnorm fallback, checks ffmpeg's exit code, and best-effort deletes all
+  generated image files on success, partial staging, or encode failure. `ExportButton` passes the
+  current overlay state/render plan without constructing filters. Empty/non-surviving overlays keep
+  the previous argument array byte-identical. Part K preserves the source-accurate split render plan
+  (for example source 10–14 and 16–20 remains two provenance segments at adjacent output 10–14 and
+  14–18), then `coalesceContinuousOverlaySegments` derives separate output-only compositor
+  intervals. It merges adjacent pieces only for the same overlay/asset with identical geometry,
+  fit, opacity, and layer, no fade on either side of the join, forward time progress, and endpoints
+  equal within a one-nanosecond floating-point tolerance. The already-clamped first fade-in and
+  final fade-out survive; source inputs are never mutated or falsely represented as contiguous.
+  The ffmpeg graph counts asset uses after coalescing, so a cut-spanning logical overlay becomes one
+  half-open enable window and one image branch with no boundary switch to flash or disappear.
+  **Part L is not implemented yet:** the final comprehensive test/manual-E2E pass is deferred.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -423,7 +446,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Parts A–I exist. Domain/timing/state/preview
+- `src/overlays/` — Phase 9A image-overlay work. Parts A–K exist. Domain/timing/state/preview
   derivation helpers remain pure and framework-free; React UI is isolated in `MediaPanel` and
   the preview/editor components.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
@@ -509,8 +532,21 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     *module* worker, and only the ESM build has the `export default createFFmpegCore` it imports;
     the umd build leaves `createFFmpegCore` undefined there and load fails with "failed to import
     ffmpeg-core.js".
-- `src/export/` — the Phase-5 export, a read-only consumer of the one EDL. Fully client-side; no
-  network, no proxy, no React in the testable core.
+- `src/export/` — the Phase-5 export plus Phase-9A Parts J–K image compositing/timing, a read-only
+  consumer of the one EDL and overlay state. Fully client-side; no proxy and no React in the
+  testable core.
+  - `imageOverlays.ts` — pure export adaptation: derives removed source ranges from kept EDL
+    segments, calls `buildImageOverlayRenderPlan`, and builds deterministic image-input/filter
+    metadata. Generated numeric VFS names and `ov*` labels keep user filenames/IDs out of ffmpeg
+    syntax; each unique asset is one looped input and repeated uses consume `split` branches. The
+    graph scales the kept-video base to even dimensions, maps normalized geometry to bounded pixel
+    rectangles, implements contain (transparent pad), cover (center crop), and stretch, preserves
+    straight PNG alpha while multiplying opacity, applies alpha fades in output time, gates each
+    segment with a half-open enable, and chains layers in preview-equivalent back-to-front order.
+    Part K adds `OverlayCompositeInterval` + `coalesceContinuousOverlaySegments`: the source-aware
+    plan stays split around cuts, while visually identical same-overlay pieces that touch on the
+    output clock (with no boundary fade) collapse before asset split/use counting and graph
+    generation. Outer fades remain exactly as assigned by the Part-B render plan.
   - `ffmpeg.ts` — `buildExportArgs(segments, inputName?, outputName?, options?)` is the **pure**
     core: it maps the kept segments to the exact ffmpeg exec args — one `-filter_complex` string
     that `trim`/`atrim`s each segment off decoded frames, resets PTS (`setpts`/`asetpts=PTS-STARTPTS`)
@@ -524,15 +560,22 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     single-segment path labels its trim `[cv]`) and one
     `subtitles=SRT:fontsdir=FONTS_DIR:force_style='SUBTITLE_STYLE'`
     clause produces `[outv]` — audio untouched; with no `srtFile` the video chain is
-    byte-identical to Phase 5.5. Float seconds pass straight through for frame accuracy;
-    re-encodes (never `-c copy`, which only cuts on keyframes). Alongside it, `runExport` (using
+    byte-identical to Phase 5.5. Part J's optional `imageOverlayGraph` instead assembles kept video
+    into `[ovbase]`, appends the image-only graph, maps `[ovout]` directly when captions are off,
+    or feeds `[ovout]` into subtitles when they are on. The graph's extra `-i` args stay between
+    the source input and `-filter_complex`; existing audio generation and `[outa]` mapping do not
+    change. With no overlay graph, every prior args-array variant remains byte-identical. Float
+    seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
+    on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
     non-empty PREPARED captions, the committed font (fetched same-origin from
     `/fonts/Roboto-Bold.ttf` into `/fonts` in the VFS; `createDir` guarded) and the `buildSrt`
     output as `captions.srt` — runs the one exec (capturing the log; on a "No such filter:
     loudnorm" failure it retries without loudnorm and reports via `onNote`; a "No such filter:
-    subtitles" failure throws a clear error instead — never a drawtext fallback), reads the MP4
-    back as a Blob, and best-effort frees the VFS (input, output, font, SRT) in a `finally`.
+    subtitles" failure throws a clear error instead — never a drawtext fallback), optionally
+    stages each generated overlay image once for both normal/fallback attempts, checks a nonzero
+    ffmpeg exit code before reading output, reads the MP4 back as a Blob, and best-effort frees the
+    VFS (input, output, font, SRT, and every planned image path) in a `finally`.
     The engine instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
@@ -544,13 +587,27 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     output-time, so it matches the exported file; disabled with a hint when every caption was
     cut), and the "Burn captions into video" checkbox (default checked, shown only when
     captions exist) passes the prepared captions to `runExport` when on and `[]` when off
-    (no font/SRT staged; the Phase 5.5-identical no-srtFile graph).
+    (no font/SRT staged; the Phase 5.5-identical no-srtFile graph). Part J also derives the current
+    overlay render plan from the EDL/assets/layers and passes it plus source dimensions to
+    `runExport`; FFmpeg filter construction remains outside React.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off
     fallback option; with `srtFile`: the exact subtitles clause — force_style hardcoded verbatim
     so a style regression fails — on both paths, composition with `loudnorm: false`, and
-    no-`srtFile` graphs staying byte-identical to Phase 5.5), run offline with no ffmpeg.
+    no-`srtFile` graphs staying byte-identical to Phase 5.5; Part J image inputs, single/multiple
+    kept-video routing, unchanged audio, captions after overlays, and the byte-identical empty
+    overlay path), run offline with no ffmpeg.
+  - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
+    asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
+    opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,
+    validation, label collision protection, and input immutability. Part K adds the exact 10–20 /
+    14–16-cut provenance example, single-window no-flash graph generation, multiple-join
+    coalescing, outer-fade preservation, strict non-merge boundaries, floating-point adjacency,
+    and coalescing immutability.
+  - `ffmpeg.runtime.test.ts` — mocked-engine coverage for unique VFS staging, generated exec args,
+    loudnorm retry without restaging, MP4 output, and best-effort cleanup after success or partial
+    staging failure.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the audio to Whisper, returns
   `{ words: Word[] }`, and hides the API key. The OpenAI upload is named from the request's
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in

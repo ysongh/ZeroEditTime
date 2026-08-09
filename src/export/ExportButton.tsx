@@ -7,17 +7,23 @@
 // (default on; off exports a clean video for the sidecar-SRT workflow) and a
 // "Download SRT" button that serializes the same prepared output-time captions
 // the burn would use — so the .srt always lines up with the exported .mp4.
+// Phase 9A Part J also projects current image overlays through the EDL and hands
+// that data to the non-React export layer for compositing.
 
 import { useState } from 'react'
 import type { ChangeEvent } from 'react'
 import type { EDL } from '../edl/types'
+import type { ImageOverlay, OverlayAsset } from '../overlays/types'
 import { buildSrt, prepareCaptionsForExport } from '../captions/captions'
 import { getFfmpeg, loadFfmpeg } from '../ffmpeg/engine'
+import { buildImageOverlayRenderPlanForEdl } from './imageOverlays'
 import { runExport } from './ffmpeg'
 
 type ExportButtonProps = {
   edl: EDL
   file: File | null
+  overlayAssets: readonly OverlayAsset[]
+  imageOverlays: readonly ImageOverlay[]
 }
 
 // idle → loading (first-time ~31 MB engine fetch) → encoding (progress 0–1).
@@ -34,7 +40,12 @@ function downloadBlob(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url)
 }
 
-export default function ExportButton({ edl, file }: ExportButtonProps) {
+export default function ExportButton({
+  edl,
+  file,
+  overlayAssets,
+  imageOverlays,
+}: ExportButtonProps) {
   // The ffmpeg engine is the single shared instance from `../ffmpeg/engine`
   // (loaded at most once per session, shared with audio extraction); we only
   // hold UI state here. `loadFfmpeg` is itself idempotent.
@@ -54,6 +65,13 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
   // the latest edit, and so Download SRT can disable when every caption was cut.
   const hasCaptions = edl.captions.length > 0
   const prepared = prepareCaptionsForExport(edl.captions, edl)
+  // Source-authored overlays are projected through the CURRENT EDL here, but
+  // FFmpeg-specific graph construction remains entirely in the export module.
+  const imageOverlayPlan = buildImageOverlayRenderPlanForEdl(
+    edl,
+    imageOverlays,
+    overlayAssets,
+  )
 
   function handleBurnChange(event: ChangeEvent<HTMLInputElement>): void {
     setBurnCaptions(event.target.checked)
@@ -95,6 +113,15 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
         // toggle opted out: no prepared captions → runExport stages no font/SRT
         // and buildExportArgs takes the Phase 5.5-identical no-srtFile path.
         const captionsToBurn = burnCaptions ? prepared : []
+        const overlayExport =
+          imageOverlayPlan.length === 0
+            ? undefined
+            : {
+                renderPlan: imageOverlayPlan,
+                assets: overlayAssets,
+                frameWidth: edl.source.width ?? Number.NaN,
+                frameHeight: edl.source.height ?? Number.NaN,
+              }
         // A loudnorm-fallback note (non-fatal) surfaces via the same error line.
         const blob = await runExport(
           ffmpeg,
@@ -102,6 +129,7 @@ export default function ExportButton({ edl, file }: ExportButtonProps) {
           edl.segments,
           captionsToBurn,
           (note) => setError(note),
+          overlayExport,
         )
         downloadBlob(blob, 'zero-edit-time.mp4')
       } finally {

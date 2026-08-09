@@ -756,7 +756,12 @@ function App() {
               />
 
               <div style={{ marginTop: 16 }}>
-                <ExportButton edl={edl} file={file} />
+                <ExportButton
+                  edl={edl}
+                  file={file}
+                  overlayAssets={overlayEditor.overlayAssets}
+                  imageOverlays={overlayEditor.imageOverlays}
+                />
               </div>
             </div>
           )}

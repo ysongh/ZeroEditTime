@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { AUDIO_FADE_S, buildExportArgs } from './ffmpeg'
+import {
+  AUDIO_FADE_S,
+  buildExportArgs,
+  type BuildExportOptions,
+} from './ffmpeg'
+import type { ImageOverlayFilterGraph } from './imageOverlays'
 
 /** Pull the single `-filter_complex` string out of the arg array. */
 function filterOf(args: string[]): string {
@@ -20,6 +25,16 @@ function fadesFor(start: number, end: number): string {
 }
 
 const MASTER_TAIL = 'loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000'
+
+const IMAGE_OVERLAY_GRAPH: ImageOverlayFilterGraph = {
+  inputArgs: ['-loop', '1', '-i', 'overlay_0.png'],
+  filterComplex: '[ovbase]null[ovout]',
+  inputVideoLabel: 'ovbase',
+  outputVideoLabel: 'ovout',
+  stagedAssets: [],
+  frameWidth: 1280,
+  frameHeight: 720,
+}
 
 describe('buildExportArgs', () => {
   it('builds trim + concat for two segments with exact float bounds', () => {
@@ -113,6 +128,128 @@ describe('buildExportArgs', () => {
 
   it('throws when there are no segments to keep', () => {
     expect(() => buildExportArgs([])).toThrow()
+  })
+
+  it('keeps the entire pre-overlay argument array byte-identical with no graph', () => {
+    const segments = [{ start: 0, end: 3.25 }]
+    const before = buildExportArgs(segments)
+
+    expect(
+      buildExportArgs(segments, 'input.mp4', 'output.mp4', {
+        imageOverlayGraph: null,
+      }),
+    ).toEqual(before)
+    expect(before).toEqual([
+      '-i',
+      'input.mp4',
+      '-filter_complex',
+      '[0:v]trim=start=0:end=3.25,setpts=PTS-STARTPTS[outv];' +
+        `[0:a]atrim=start=0:end=3.25,asetpts=PTS-STARTPTS,${fadesFor(0, 3.25)},${MASTER_TAIL}[outa]`,
+      '-map',
+      '[outv]',
+      '-map',
+      '[outa]',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-crf',
+      '23',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      'output.mp4',
+    ])
+
+    const existingOptions: BuildExportOptions[] = [
+      { loudnorm: false },
+      { srtFile: 'captions.srt' },
+      { loudnorm: false, srtFile: 'captions.srt' },
+    ]
+    for (const existing of existingOptions) {
+      expect(
+        buildExportArgs(segments, 'input.mp4', 'output.mp4', {
+          ...existing,
+          imageOverlayGraph: null,
+        }),
+      ).toEqual(buildExportArgs(segments, 'input.mp4', 'output.mp4', existing))
+    }
+  })
+})
+
+describe('buildExportArgs with image overlays', () => {
+  const options: BuildExportOptions = {
+    imageOverlayGraph: IMAGE_OVERLAY_GRAPH,
+  }
+
+  it('assembles one kept segment into the overlay base and maps its result', () => {
+    const args = buildExportArgs(
+      [{ start: 0, end: 3.25 }],
+      'input.mp4',
+      'output.mp4',
+      options,
+    )
+    const filter = filterOf(args)
+
+    expect(args.slice(0, 6)).toEqual([
+      '-i',
+      'input.mp4',
+      '-loop',
+      '1',
+      '-i',
+      'overlay_0.png',
+    ])
+    expect(filter).toBe(
+      '[0:v]trim=start=0:end=3.25,setpts=PTS-STARTPTS[ovbase];' +
+        `[0:a]atrim=start=0:end=3.25,asetpts=PTS-STARTPTS,${fadesFor(0, 3.25)},${MASTER_TAIL}[outa];` +
+        '[ovbase]null[ovout]',
+    )
+    expect(args).toEqual(
+      expect.arrayContaining(['-map', '[ovout]', '-map', '[outa]']),
+    )
+  })
+
+  it('composites after multi-segment EDL assembly without changing audio', () => {
+    const segments = [
+      { start: 2.983, end: 5.5 },
+      { start: 8.1, end: 12.04 },
+    ]
+    const filter = filterOf(
+      buildExportArgs(segments, 'input.mp4', 'output.mp4', options),
+    )
+
+    expect(filter).toContain(
+      '[v0][a0][v1][a1]concat=n=2:v=1:a=1[ovbase][ca]',
+    )
+    expect(filter).toContain(`[ca]${MASTER_TAIL}[outa]`)
+    expect(filter.endsWith(';[ovbase]null[ovout]')).toBe(true)
+  })
+
+  it('burns captions after image compositing and keeps loudnorm fallback intact', () => {
+    const args = buildExportArgs(
+      [{ start: 0, end: 3.25 }],
+      'input.mp4',
+      'output.mp4',
+      {
+        imageOverlayGraph: IMAGE_OVERLAY_GRAPH,
+        srtFile: 'captions.srt',
+        loudnorm: false,
+      },
+    )
+    const filter = filterOf(args)
+
+    expect(filter).toContain('aresample=48000[outa]')
+    expect(filter).not.toContain('loudnorm')
+    expect(filter.indexOf('[ovbase]null[ovout]')).toBeLessThan(
+      filter.indexOf(`[ovout]${SUBTITLES_CLAUSE}[outv]`),
+    )
+    expect(filter.endsWith(`[ovout]${SUBTITLES_CLAUSE}[outv]`)).toBe(true)
+    expect(args).toEqual(
+      expect.arrayContaining(['-map', '[outv]', '-map', '[outa]']),
+    )
   })
 })
 
