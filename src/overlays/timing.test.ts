@@ -32,6 +32,76 @@ describe('normalizeRemovedRanges', () => {
 })
 
 describe('projectSourceRangeToOutputSegments', () => {
+  it.each([
+    {
+      name: 'no removed ranges',
+      removed: [],
+      expected: [
+        {
+          sourceStartMs: 10_000,
+          sourceEndMs: 20_000,
+          outputStartMs: 10_000,
+          outputEndMs: 20_000,
+        },
+      ],
+    },
+    {
+      name: 'a cut entirely before the overlay',
+      removed: [{ startMs: 2_000, endMs: 5_000 }],
+      expected: [
+        {
+          sourceStartMs: 10_000,
+          sourceEndMs: 20_000,
+          outputStartMs: 7_000,
+          outputEndMs: 17_000,
+        },
+      ],
+    },
+    {
+      name: 'a cut entirely after the overlay',
+      removed: [{ startMs: 30_000, endMs: 40_000 }],
+      expected: [
+        {
+          sourceStartMs: 10_000,
+          sourceEndMs: 20_000,
+          outputStartMs: 10_000,
+          outputEndMs: 20_000,
+        },
+      ],
+    },
+    {
+      name: 'a cut overlapping the overlay start',
+      removed: [{ startMs: 8_000, endMs: 12_000 }],
+      expected: [
+        {
+          sourceStartMs: 12_000,
+          sourceEndMs: 20_000,
+          outputStartMs: 8_000,
+          outputEndMs: 16_000,
+        },
+      ],
+    },
+    {
+      name: 'a cut overlapping the overlay end',
+      removed: [{ startMs: 18_000, endMs: 22_000 }],
+      expected: [
+        {
+          sourceStartMs: 10_000,
+          sourceEndMs: 18_000,
+          outputStartMs: 10_000,
+          outputEndMs: 18_000,
+        },
+      ],
+    },
+  ])('handles $name', ({ removed, expected }) => {
+    expect(
+      projectSourceRangeToOutputSegments(
+        { startMs: 10_000, endMs: 20_000 },
+        removed,
+      ),
+    ).toEqual(expected)
+  })
+
   it('returns the specified split-range example', () => {
     expect(
       projectSourceRangeToOutputSegments(

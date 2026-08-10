@@ -377,6 +377,46 @@ describe('buildImageOverlayFilterGraph', () => {
     expect(graph?.filterComplex).toContain('overlay=x=192:y=216')
   })
 
+  it('keeps normalized geometry proportional from 1280x720 to 1920x1080', () => {
+    const hd = buildImageOverlayFilterGraph([SEGMENT], [PNG], {
+      frameWidth: 1280,
+      frameHeight: 720,
+    })?.filterComplex
+    const fullHd = buildImageOverlayFilterGraph([SEGMENT], [PNG], {
+      frameWidth: 1920,
+      frameHeight: 1080,
+    })?.filterComplex
+
+    expect(hd).toContain('scale=512:216:force_original_aspect_ratio=decrease')
+    expect(hd).toContain('overlay=x=128:y=144')
+    expect(fullHd).toContain(
+      'scale=768:324:force_original_aspect_ratio=decrease',
+    )
+    expect(fullHd).toContain('overlay=x=192:y=216')
+  })
+
+  it('clamps defensive geometry so the pixel rectangle stays inside the frame', () => {
+    const graph = buildImageOverlayFilterGraph(
+      [
+        {
+          ...SEGMENT,
+          x: 0.9,
+          y: 0.95,
+          width: 0.4,
+          height: 0.3,
+          fadeInMs: 0,
+          fadeOutMs: 0,
+        },
+      ],
+      [PNG],
+      { frameWidth: 1280, frameHeight: 720 },
+    )
+
+    // x + width = 768 + 512 = 1280; y + height = 504 + 216 = 720.
+    expect(graph?.filterComplex).toContain('scale=512:216')
+    expect(graph?.filterComplex).toContain('overlay=x=768:y=504')
+  })
+
   it('stages each asset once, splits reused inputs, and never emits user names', () => {
     const secondUse = {
       ...SEGMENT,
@@ -400,6 +440,51 @@ describe('buildImageOverlayFilterGraph', () => {
     )
     expect(graph?.filterComplex).not.toContain(PNG.name)
     expect(graph?.filterComplex).not.toContain(PNG.id)
+  })
+
+  it('gives non-coalesced segments unique branches and exact time enables', () => {
+    const first = {
+      ...SEGMENT,
+      outputStartMs: 1_000,
+      outputEndMs: 2_000,
+      fadeInMs: 0,
+      fadeOutMs: 100,
+    }
+    const second = {
+      ...SEGMENT,
+      sourceStartMs: 4_000,
+      sourceEndMs: 5_000,
+      outputStartMs: 2_000,
+      outputEndMs: 3_000,
+      fadeInMs: 0,
+      fadeOutMs: 0,
+    }
+    const filter =
+      buildImageOverlayFilterGraph([second, first], [PNG], {
+        frameWidth: 1280,
+        frameHeight: 720,
+      })?.filterComplex ?? ''
+
+    expect(filter).toContain('[1:v]split=2[ovsrc0_0][ovsrc0_1]')
+    expect(filter).toContain("enable='gte(t,1)*lt(t,2)'")
+    expect(filter).toContain("enable='gte(t,2)*lt(t,3)'")
+    expect(filter.match(/\[ovimg\d+\]/g)?.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('includes fade filters only when a segment configures them', () => {
+    const withoutFades = buildImageOverlayFilterGraph(
+      [{ ...SEGMENT, fadeInMs: 0, fadeOutMs: 0 }],
+      [PNG],
+      { frameWidth: 1280, frameHeight: 720 },
+    )?.filterComplex
+    const withFades = buildImageOverlayFilterGraph([SEGMENT], [PNG], {
+      frameWidth: 1280,
+      frameHeight: 720,
+    })?.filterComplex
+
+    expect(withoutFades).not.toContain('fade=t=')
+    expect(withFades).toContain('fade=t=in')
+    expect(withFades).toContain('fade=t=out')
   })
 
   it('matches the preview min-envelope when fade ranges overlap', () => {

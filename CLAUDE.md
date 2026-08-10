@@ -147,7 +147,7 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–K (done; stop here):** still-image-overlay timing, render planning,
+- **Phase 9A, Parts A–L (done; stop here):** still-image-overlay timing, render planning,
   editor state, the local image media panel, quick-add placement presets, and source-time
   preview. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
@@ -252,7 +252,14 @@ empty folders for future phases.
   final fade-out survive; source inputs are never mutated or falsely represented as contiguous.
   The ffmpeg graph counts asset uses after coalescing, so a cut-spanning logical overlay becomes one
   half-open enable window and one image branch with no boundary switch to flash or disappear.
-  **Part L is not implemented yet:** the final comprehensive test/manual-E2E pass is deferred.
+  Part L completes the required 50-case unit/integration matrix using the existing offline Vitest
+  suites: source projection edge cases, render-plan fades/layers/normalization, immutable editor
+  operations, geometry at 1280×720 and 1920×1080, proportional/in-frame placement, every fit mode,
+  safe/unique export filters and filenames, split/coalesced timing enables, captions-after-images,
+  unchanged audio mapping, PNG alpha/opacity/fades, and the byte-identical empty-overlay path.
+  Mocked-engine runtime tests cover staging, retry reuse, output, and cleanup without downloading
+  ffmpeg or requiring large binary fixtures. **Part M is not implemented yet:** the manual
+  verification checklist is deferred to that part.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -446,7 +453,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Parts A–K exist. Domain/timing/state/preview
+- `src/overlays/` — Phase 9A image-overlay work. Parts A–L exist. Domain/timing/state/preview
   derivation helpers remain pure and framework-free; React UI is isolated in `MediaPanel` and
   the preview/editor components.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
@@ -460,7 +467,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     or ffmpeg.
   - `timing.test.ts` — Vitest coverage for the specification example, removals before/inside a
     range, complete removal, no intersection, complex normalization, half-open boundaries,
-    invalid/zero-length inputs, and input immutability.
+    invalid/zero-length inputs, and input immutability. Part L makes no-removal, before/after,
+    overlap-start, and overlap-end projection cases explicit.
   - `renderPlan.ts` — `buildImageOverlayRenderPlan`, the deterministic export-ready projection
     of valid asset-backed overlays. It re-exports `normalizeImageOverlay` for compatibility.
     Split overlays retain fades only on their outer surviving pieces; no ffmpeg strings are
@@ -532,7 +540,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     *module* worker, and only the ESM build has the `export default createFFmpegCore` it imports;
     the umd build leaves `createFFmpegCore` undefined there and load fails with "failed to import
     ffmpeg-core.js".
-- `src/export/` — the Phase-5 export plus Phase-9A Parts J–K image compositing/timing, a read-only
+- `src/export/` — the Phase-5 export plus Phase-9A Parts J–L image compositing/timing/tests, a read-only
   consumer of the one EDL and overlay state. Fully client-side; no proxy and no React in the
   testable core.
   - `imageOverlays.ts` — pure export adaptation: derives removed source ranges from kept EDL
@@ -604,7 +612,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     validation, label collision protection, and input immutability. Part K adds the exact 10–20 /
     14–16-cut provenance example, single-window no-flash graph generation, multiple-join
     coalescing, outer-fade preservation, strict non-merge boundaries, floating-point adjacency,
-    and coalescing immutability.
+    and coalescing immutability. Part L adds cross-resolution proportional geometry, defensive
+    in-frame pixel bounds, non-coalesced unique branches/exact enables, and fade-present/absent
+    assertions; together with the timing, render-plan, editor-state, and ffmpeg suites this covers
+    the complete required 50-case matrix.
   - `ffmpeg.runtime.test.ts` — mocked-engine coverage for unique VFS staging, generated exec args,
     loudnorm retry without restaging, MP4 output, and best-effort cleanup after success or partial
     staging failure.
