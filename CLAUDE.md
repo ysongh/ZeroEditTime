@@ -147,7 +147,7 @@ empty folders for future phases.
   video" checkbox (default CHECKED, rendered only when captions exist) passes `prepared` to
   `runExport` when on and `[]` when off — zero prepared captions stages no font/SRT and takes
   the no-srtFile graph, byte-identical to Phase 5.5 and already covered by its tests.
-- **Phase 9A, Parts A–L (done; stop here):** still-image-overlay timing, render planning,
+- **Phase 9A, Parts A–M (done; stop here):** still-image-overlay timing, render planning,
   editor state, the local image media panel, quick-add placement presets, and source-time
   preview. Part A:
   `src/overlays/timing.ts` defines millisecond-based `SourceRange`, `RemovedRange`, and
@@ -258,8 +258,11 @@ empty folders for future phases.
   safe/unique export filters and filenames, split/coalesced timing enables, captions-after-images,
   unchanged audio mapping, PNG alpha/opacity/fades, and the byte-identical empty-overlay path.
   Mocked-engine runtime tests cover staging, retry reuse, output, and cleanup without downloading
-  ffmpeg or requiring large binary fixtures. **Part M is not implemented yet:** the manual
-  verification checklist is deferred to that part.
+  ffmpeg or requiring large binary fixtures. Part M adds the concise browser end-to-end checklist
+  at `docs/phase-9a-manual-verification.md`: setup/fixtures plus upload, preview, timeline, export,
+  cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
+  The document provides instructions and blank result fields; its existence does not claim a
+  human browser run has passed. Phase 9A implementation is complete.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -453,7 +456,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
-- `src/overlays/` — Phase 9A image-overlay work. Parts A–L exist. Domain/timing/state/preview
+- `src/overlays/` — Phase 9A image-overlay work. Parts A–M exist. Domain/timing/state/preview
   derivation helpers remain pure and framework-free; React UI is isolated in `MediaPanel` and
   the preview/editor components.
   - `types.ts` — serializable still-image asset and source-time overlay definitions. Coordinates
@@ -619,6 +622,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `ffmpeg.runtime.test.ts` — mocked-engine coverage for unique VFS staging, generated exec args,
     loudnorm retry without restaging, MP4 output, and best-effort cleanup after success or partial
     staging failure.
+- `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
+  fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
+  timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,
+  controlled failure recovery, and issue recording; it is not an automated pass claim.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the audio to Whisper, returns
   `{ words: Word[] }`, and hides the API key. The OpenAI upload is named from the request's
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in

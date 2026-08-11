@@ -53,13 +53,20 @@ pnpm build     # tsc -b && vite build — typecheck + production build
 pnpm lint      # eslint
 pnpm preview   # serve the production build locally
 pnpm test      # vitest run — the unit tests
+pnpm exec netlify dev  # start Vite with the local Netlify Functions
 ```
 
 ### Local end-to-end
 
 - **Editing and export** run under plain `pnpm dev` — they are 100% client-side.
-- **Transcription and the AI agent** need the Netlify Functions, so run the app with `netlify dev`
-  and provide the keys in a `.env`:
+- **Transcription and the AI agent** need the Netlify Functions. Start the project-local Netlify
+  CLI with:
+
+  ```bash
+  pnpm exec netlify dev
+  ```
+
+  Provide the API keys in a `.env`:
 
   ```bash
   # .env (never committed)
@@ -101,3 +108,5 @@ pnpm test      # vitest run — the unit tests
 - `netlify/functions/` — the Whisper transcription proxy and the stateless Claude agent relay.
 
 See [CLAUDE.md](CLAUDE.md) for the detailed architecture and contributor guidance.
+Use the [Phase 9A image-overlay manual verification checklist](docs/phase-9a-manual-verification.md)
+for browser end-to-end and export release checks.
