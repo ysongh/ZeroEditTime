@@ -263,6 +263,15 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
+- **Phase 10, Part A (done; stop here):** the typed export-time audio-cleanup settings model.
+  `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
+  `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
+  reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
+  Pure `normalizeAudioCleanupSettings` returns an independent value, clamps finite loudness
+  targets to [-24, -10] LUFS and true-peak limits to [-6, 0] dB, and replaces non-finite targets
+  with the documented defaults. Focused unit tests cover preservation/purity, both bounds, and
+  non-finite recovery. No settings UI, cleanup plan, FFmpeg filter pipeline, capability probing,
+  or export wiring from later Phase-10 parts exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -546,6 +555,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
 - `src/export/` — the Phase-5 export plus Phase-9A Parts J–L image compositing/timing/tests, a read-only
   consumer of the one EDL and overlay state. Fully client-side; no proxy and no React in the
   testable core.
+  - `audioCleanupSettings.ts` — Phase-10 Part-A typed intent model and defaults for export-time
+    cleanup. `normalizeAudioCleanupSettings` is pure and clamps LUFS/true-peak targets to their
+    supported bounds, using documented defaults for non-finite values. It is not wired into the
+    exporter or UI yet.
+  - `audioCleanupSettings.test.ts` — unit coverage for valid-value preservation, input purity,
+    lower/upper clamping, and non-finite fallback behavior.
   - `imageOverlays.ts` — pure export adaptation: derives removed source ranges from kept EDL
     segments, calls `buildImageOverlayRenderPlan`, and builds deterministic image-input/filter
     metadata. Generated numeric VFS names and `ov*` labels keep user filenames/IDs out of ffmpeg
