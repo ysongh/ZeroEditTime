@@ -263,15 +263,21 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Part A (done; stop here):** the typed export-time audio-cleanup settings model.
+- **Phase 10, Parts A–B (done; stop here):** the typed export-time audio-cleanup settings model
+  and pure settings-to-plan boundary. Part A:
   `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
   `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
   reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
   Pure `normalizeAudioCleanupSettings` returns an independent value, clamps finite loudness
   targets to [-24, -10] LUFS and true-peak limits to [-6, 0] dB, and replaces non-finite targets
   with the documented defaults. Focused unit tests cover preservation/purity, both bounds, and
-  non-finite recovery. No settings UI, cleanup plan, FFmpeg filter pipeline, capability probing,
-  or export wiring from later Phase-10 parts exists yet.
+  non-finite recovery. Part B: `src/export/audioCleanupPlan.ts` defines a serializable,
+  deterministic `AudioCleanupPlan`; `buildAudioCleanupPlan` normalizes through the shared Part-A
+  boundary, gates every operation behind the master switch, maps off/light/strong noise intent,
+  and carries validated loudness targets without FFmpeg strings, DOM objects, runtime instances,
+  or input mutation. Unit tests cover defaults, global and individual disabling, shared clamping,
+  determinism, and purity. No settings UI, FFmpeg filter pipeline, capability probing, or export
+  wiring from later Phase-10 parts exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -561,6 +567,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     exporter or UI yet.
   - `audioCleanupSettings.test.ts` — unit coverage for valid-value preservation, input purity,
     lower/upper clamping, and non-finite fallback behavior.
+  - `audioCleanupPlan.ts` — Phase-10 Part-B pure translation from normalized editor intent to a
+    serializable cleanup plan. It gates nested operations behind the global switch and deliberately
+    contains no FFmpeg syntax or browser/runtime objects.
+  - `audioCleanupPlan.test.ts` — unit coverage for default mapping, master and per-operation
+    disabling, validated targets, determinism, and input immutability.
   - `imageOverlays.ts` — pure export adaptation: derives removed source ranges from kept EDL
     segments, calls `buildImageOverlayRenderPlan`, and builds deterministic image-input/filter
     metadata. Generated numeric VFS names and `ov*` labels keep user filenames/IDs out of ffmpeg
