@@ -5,6 +5,8 @@ import {
   type BuildExportOptions,
 } from './ffmpeg'
 import type { ImageOverlayFilterGraph } from './imageOverlays'
+import { buildAudioCleanupPlan } from './audioCleanupPlan'
+import { DEFAULT_AUDIO_CLEANUP_SETTINGS } from './audioCleanupSettings'
 
 /** Pull the single `-filter_complex` string out of the arg array. */
 function filterOf(args: string[]): string {
@@ -177,6 +179,65 @@ describe('buildExportArgs', () => {
         }),
       ).toEqual(buildExportArgs(segments, 'input.mp4', 'output.mp4', existing))
     }
+  })
+
+  it('keeps the legacy arguments byte-identical when audio cleanup is disabled', () => {
+    const disabledPlan = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      enabled: false,
+    })
+    const segmentSets = [
+      [{ start: 0, end: 3.25 }],
+      [
+        { start: 2.983, end: 5.5 },
+        { start: 8.1, end: 12.04 },
+      ],
+    ]
+    const existingOptions: BuildExportOptions[] = [
+      {},
+      { loudnorm: false },
+      { srtFile: 'captions.srt' },
+      { imageOverlayGraph: IMAGE_OVERLAY_GRAPH },
+      {
+        loudnorm: false,
+        srtFile: 'captions.srt',
+        imageOverlayGraph: IMAGE_OVERLAY_GRAPH,
+      },
+    ]
+
+    for (const segments of segmentSets) {
+      for (const existing of existingOptions) {
+        expect(
+          buildExportArgs(segments, 'source.webm', 'result.mp4', {
+            ...existing,
+            audioCleanup: disabledPlan,
+          }),
+        ).toEqual(
+          buildExportArgs(segments, 'source.webm', 'result.mp4', existing),
+        )
+      }
+    }
+  })
+
+  it('adds no filters when every individual cleanup operation is disabled', () => {
+    const noOpPlan = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      enabled: true,
+      noiseReduction: 'off',
+      voiceLeveling: false,
+      loudnessNormalization: false,
+      smoothJoins: false,
+    })
+    const segments = [
+      { start: 1.25, end: 4.75 },
+      { start: 6, end: 9.5 },
+    ]
+
+    expect(
+      buildExportArgs(segments, 'input.mp4', 'output.mp4', {
+        audioCleanup: noOpPlan,
+      }),
+    ).toEqual(buildExportArgs(segments))
   })
 })
 

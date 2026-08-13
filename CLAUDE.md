@@ -263,8 +263,8 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–B (done; stop here):** the typed export-time audio-cleanup settings model
-  and pure settings-to-plan boundary. Part A:
+- **Phase 10, Parts A–C (done; stop here):** the typed export-time audio-cleanup settings model,
+  pure settings-to-plan boundary, and disabled-path compatibility seam. Part A:
   `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
   `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
   reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
@@ -276,8 +276,12 @@ empty folders for future phases.
   boundary, gates every operation behind the master switch, maps off/light/strong noise intent,
   and carries validated loudness targets without FFmpeg strings, DOM objects, runtime instances,
   or input mutation. Unit tests cover defaults, global and individual disabling, shared clamping,
-  determinism, and purity. No settings UI, FFmpeg filter pipeline, capability probing, or export
-  wiring from later Phase-10 parts exists yet.
+  determinism, and purity. Part C: `BuildExportOptions.audioCleanup` accepts the pure plan at the
+  FFmpeg argument boundary, while a globally disabled plan or an enabled plan with every nested
+  operation disabled deliberately adds no filters. Exact-array regression tests cover single and
+  multiple segments plus existing loudnorm fallback, captions, and image-overlay combinations,
+  preserving the legacy path byte-for-byte. No settings UI, enabled cleanup filters, capability
+  probing, or runtime export wiring from later Phase-10 parts exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -601,7 +605,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     into `[ovbase]`, appends the image-only graph, maps `[ovout]` directly when captions are off,
     or feeds `[ovout]` into subtitles when they are on. The graph's extra `-i` args stay between
     the source input and `-filter_complex`; existing audio generation and `[outa]` mapping do not
-    change. With no overlay graph, every prior args-array variant remains byte-identical. Float
+    change. With no overlay graph, every prior args-array variant remains byte-identical. Phase-10
+    Part C adds an optional pure `audioCleanup` plan to `BuildExportOptions`; disabled and all-
+    operations-off plans emit the exact legacy argument array and add no placeholder filters.
+    Enabled-filter translation is deliberately deferred to later Phase-10 parts. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
@@ -634,7 +641,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     so a style regression fails — on both paths, composition with `loudnorm: false`, and
     no-`srtFile` graphs staying byte-identical to Phase 5.5; Part J image inputs, single/multiple
     kept-video routing, unchanged audio, captions after overlays, and the byte-identical empty
-    overlay path), run offline with no ffmpeg.
+    overlay path; and Phase-10 Part-C exact-array coverage for globally disabled and all-
+    operations-off cleanup plans across the established export variants), run offline with no
+    ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,

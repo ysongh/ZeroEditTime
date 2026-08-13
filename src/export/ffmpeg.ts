@@ -19,6 +19,7 @@ import {
   buildImageOverlayFilterGraph,
   type ImageOverlayFilterGraph,
 } from './imageOverlays'
+import type { AudioCleanupPlan } from './audioCleanupPlan'
 
 /** A kept source range, in seconds. Structurally a subset of `Segment`. */
 export type ExportSegment = { start: number; end: number }
@@ -35,6 +36,12 @@ export interface BuildExportOptions {
   loudnorm?: boolean
   srtFile?: string
   imageOverlayGraph?: ImageOverlayFilterGraph | null
+  /**
+   * Phase-10 cleanup intent. Part C establishes the compatibility seam only:
+   * disabled/no-op plans leave the legacy argument array exactly unchanged.
+   * Later parts translate enabled operations into supported filters.
+   */
+  audioCleanup?: AudioCleanupPlan
 }
 
 // Phase-5.5 audio polish. A cut lands mid-waveform, so each segment gets a
@@ -91,6 +98,11 @@ export const FONTS_DIR = '/fonts'
  * are appended, and captions consume the composited result. Audio clauses are
  * unchanged. With no graph, the full argument array remains byte-identical to
  * the pre-overlay path.
+ *
+ * Phase-10 Part C accepts an optional cleanup plan but deliberately adds no
+ * filters for a disabled plan (or one with every operation disabled). Those
+ * paths return the exact legacy argument array; later parts add enabled filter
+ * translation without making the disabled path pay for structural no-ops.
  *
  * `-filter_complex` is ONE single argument string. Float seconds are passed
  * straight through (e.g. 2.983) to preserve frame accuracy. For a single segment
