@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { OverlayRenderSegment } from '../overlays/renderPlan'
 import type { OverlayAsset } from '../overlays/types'
 import { runExport } from './ffmpeg'
+import { buildAudioCleanupPlan } from './audioCleanupPlan'
+import { DEFAULT_AUDIO_CLEANUP_SETTINGS } from './audioCleanupSettings'
 
 vi.mock('@ffmpeg/util', () => ({ fetchFile: vi.fn() }))
 
@@ -272,5 +274,90 @@ describe('runExport with image overlays', () => {
       'overlay_0.png',
       'overlay_1.webp',
     ])
+  })
+})
+
+describe('runExport with noise reduction', () => {
+  it('retries without afftdn, warns, and caches the missing filter', async () => {
+    const fake = createFakeFfmpeg()
+    const file = fakeSourceFile()
+    const firstNote = vi.fn()
+    const secondNote = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      if (filterOfExec(args).includes('afftdn=')) {
+        fake.emitLog("No such filter: 'afftdn'")
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      file,
+      [{ start: 0, end: 4 }],
+      [],
+      firstNote,
+      undefined,
+      cleanup,
+    )
+    await runExport(
+      fake.ffmpeg,
+      file,
+      [{ start: 0, end: 4 }],
+      [],
+      secondNote,
+      undefined,
+      cleanup,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(3)
+    expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('afftdn=')
+    expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('afftdn=')
+    expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('afftdn=')
+    expect(firstNote).toHaveBeenCalledWith(
+      expect.stringContaining('exported without noise reduction'),
+    )
+    expect(secondNote).toHaveBeenCalledWith(
+      expect.stringContaining('exported without noise reduction'),
+    )
+  })
+
+  it('can fall back from afftdn and loudnorm in the same export', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      const filter = filterOfExec(args)
+      if (filter.includes('afftdn=')) {
+        fake.emitLog("No such filter: 'afftdn'")
+        return 1
+      }
+      if (filter.includes('loudnorm=')) {
+        fake.emitLog("No such filter: 'loudnorm'")
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      note,
+      undefined,
+      cleanup,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(3)
+    expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('afftdn=')
+    expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('loudnorm=')
+    expect(note).toHaveBeenCalledOnce()
+    expect(note).toHaveBeenCalledWith(
+      expect.stringMatching(/without noise reduction.*without loudness normalization/),
+    )
   })
 })

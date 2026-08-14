@@ -56,6 +56,19 @@ export const LOUDNORM = 'loudnorm=I=-16:TP=-1.5:LRA=11'
 // encode and chokes some players — pin the rate back in-graph right after it.
 export const OUTPUT_SAMPLE_RATE = 48000
 
+// Phase-10D conservative FFT denoising for steady broadband room noise. The
+// stock core is runtime-verified on first use because ffmpeg.wasm builds can
+// omit native filters. Light stays deliberately below afftdn's 12 dB default;
+// strong uses that default reduction with a less-sensitive floor. Noise-floor
+// tracking stays off so the filter does not chase changing speech as noise.
+export const LIGHT_NOISE_REDUCTION = 'afftdn=nr=6:nf=-45'
+export const STRONG_NOISE_REDUCTION = 'afftdn=nr=12:nf=-40'
+const NOISE_REDUCTION_UNAVAILABLE_NOTE =
+  'This ffmpeg core has no afftdn filter — exported without noise reduction.'
+// The production app has one shared FFmpeg instance. A WeakMap also keeps
+// isolated mocked/test instances independent while caching the runtime result.
+const afftdnSupport = new WeakMap<FFmpeg, boolean>()
+
 // Phase-6 caption burn. libass renders the SRT via the `subtitles` filter,
 // styled entirely through force_style (ASS colors are &HAABBGGRR): white bold
 // text with a black outline (BorderStyle=1 + Outline, no box, no shadow),
@@ -119,10 +132,22 @@ export function buildExportArgs(
     throw new Error('Cannot export: the EDL has no kept segments.')
   }
 
-  const master =
-    (options.loudnorm ?? true)
-      ? `${LOUDNORM},aresample=${OUTPUT_SAMPLE_RATE}`
-      : `aresample=${OUTPUT_SAMPLE_RATE}`
+  const masterFilters: string[] = []
+  if (
+    options.audioCleanup?.enabled === true &&
+    options.audioCleanup.noiseReduction.enabled
+  ) {
+    masterFilters.push(
+      options.audioCleanup.noiseReduction.strength === 'strong'
+        ? STRONG_NOISE_REDUCTION
+        : LIGHT_NOISE_REDUCTION,
+    )
+  }
+  if (options.loudnorm ?? true) {
+    masterFilters.push(LOUDNORM)
+  }
+  masterFilters.push(`aresample=${OUTPUT_SAMPLE_RATE}`)
+  const master = masterFilters.join(',')
 
   const burn =
     options.srtFile !== undefined
@@ -215,6 +240,7 @@ export async function runExport(
   captions: PreparedCaption[] = [],
   onNote?: (note: string) => void,
   imageOverlays?: ImageOverlayExportRequest,
+  audioCleanup?: AudioCleanupPlan,
 ): Promise<Blob> {
   const inputName = `input.${inputExtension(file.name)}`
   const outputName = 'output.mp4'
@@ -239,7 +265,20 @@ export async function runExport(
   }
   ffmpeg.on('log', onLog)
 
-  const encode = async (withLoudnorm: boolean) => {
+  const encode = async (
+    withLoudnorm: boolean,
+    withNoiseReduction: boolean,
+  ) => {
+    const effectiveAudioCleanup =
+      audioCleanup === undefined || withNoiseReduction
+        ? audioCleanup
+        : {
+            ...audioCleanup,
+            noiseReduction: {
+              ...audioCleanup.noiseReduction,
+              enabled: false,
+            },
+          }
     const exitCode = await ffmpeg.exec(
       buildExportArgs(
         segments,
@@ -250,8 +289,13 @@ export async function runExport(
               loudnorm: withLoudnorm,
               srtFile: SRT_NAME,
               imageOverlayGraph,
+              audioCleanup: effectiveAudioCleanup,
             }
-          : { loudnorm: withLoudnorm, imageOverlayGraph },
+          : {
+              loudnorm: withLoudnorm,
+              imageOverlayGraph,
+              audioCleanup: effectiveAudioCleanup,
+            },
       ),
     )
     if (exitCode !== 0) {
@@ -286,26 +330,53 @@ export async function runExport(
       await ffmpeg.writeFile(SRT_NAME, new TextEncoder().encode(buildSrt(captions)))
     }
 
-    let data: Awaited<ReturnType<FFmpeg['readFile']>>
-    try {
-      data = await encode(true)
-    } catch (err) {
-      const log = logs.join('\n')
-      if (isMissingSubtitles(log)) {
-        throw new Error(
-          'This ffmpeg core has no subtitles filter — captions cannot be burned. ' +
-            'Undo the captions to export without them.',
-          { cause: err },
-        )
-      }
-      if (!isMissingLoudnorm(log)) {
+    const noiseRequested =
+      audioCleanup?.enabled === true &&
+      audioCleanup.noiseReduction.enabled
+    let withNoiseReduction =
+      noiseRequested && afftdnSupport.get(ffmpeg) !== false
+    let withLoudnorm = true
+    const fallbackNotes: string[] = []
+
+    if (noiseRequested && !withNoiseReduction) {
+      fallbackNotes.push(NOISE_REDUCTION_UNAVAILABLE_NOTE)
+    }
+
+    let data: Awaited<ReturnType<FFmpeg['readFile']>> | undefined
+    while (data === undefined) {
+      logs.length = 0
+      try {
+        data = await encode(withLoudnorm, withNoiseReduction)
+        if (withNoiseReduction) {
+          afftdnSupport.set(ffmpeg, true)
+        }
+      } catch (err) {
+        const log = logs.join('\n')
+        if (isMissingSubtitles(log)) {
+          throw new Error(
+            'This ffmpeg core has no subtitles filter — captions cannot be burned. ' +
+              'Undo the captions to export without them.',
+            { cause: err },
+          )
+        }
+        if (withNoiseReduction && isMissingAfftdn(log)) {
+          afftdnSupport.set(ffmpeg, false)
+          withNoiseReduction = false
+          fallbackNotes.push(NOISE_REDUCTION_UNAVAILABLE_NOTE)
+          continue
+        }
+        if (withLoudnorm && isMissingLoudnorm(log)) {
+          withLoudnorm = false
+          fallbackNotes.push(
+            'This ffmpeg core has no loudnorm filter — exported without loudness normalization.',
+          )
+          continue
+        }
         throw err
       }
-      logs.length = 0
-      data = await encode(false)
-      onNote?.(
-        'This ffmpeg core has no loudnorm filter — exported without loudness normalization.',
-      )
+    }
+    if (fallbackNotes.length > 0) {
+      onNote?.(fallbackNotes.join(' '))
     }
 
     // readFile returns FileData (Uint8Array | string); a binary read is always a
@@ -329,6 +400,10 @@ export async function runExport(
 
 function isMissingLoudnorm(log: string): boolean {
   return /no such filter:\s*'?loudnorm'?/i.test(log)
+}
+
+function isMissingAfftdn(log: string): boolean {
+  return /no such filter:\s*'?afftdn'?/i.test(log)
 }
 
 function isMissingSubtitles(log: string): boolean {

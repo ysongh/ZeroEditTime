@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   AUDIO_FADE_S,
   buildExportArgs,
+  LIGHT_NOISE_REDUCTION,
+  STRONG_NOISE_REDUCTION,
   type BuildExportOptions,
 } from './ffmpeg'
 import type { ImageOverlayFilterGraph } from './imageOverlays'
@@ -238,6 +240,43 @@ describe('buildExportArgs', () => {
         audioCleanup: noOpPlan,
       }),
     ).toEqual(buildExportArgs(segments))
+  })
+
+  it('adds conservative light noise reduction before the legacy mastering tail', () => {
+    const plan = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    const filter = filterOf(
+      buildExportArgs(
+        [
+          { start: 0, end: 2 },
+          { start: 3, end: 5 },
+        ],
+        'input.mp4',
+        'output.mp4',
+        { audioCleanup: plan },
+      ),
+    )
+
+    expect(filter).toContain(
+      `[ca]${LIGHT_NOISE_REDUCTION},${MASTER_TAIL}[outa]`,
+    )
+    expect(filter.match(/afftdn=/g)).toHaveLength(1)
+  })
+
+  it('maps strong noise intent without changing segment-local cut handling', () => {
+    const plan = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'strong',
+    })
+    const filter = filterOf(
+      buildExportArgs([{ start: 1, end: 4 }], 'input.mp4', 'output.mp4', {
+        audioCleanup: plan,
+      }),
+    )
+
+    expect(filter).toContain(fadesFor(1, 4))
+    expect(filter).toContain(
+      `,${STRONG_NOISE_REDUCTION},${MASTER_TAIL}[outa]`,
+    )
   })
 })
 

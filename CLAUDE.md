@@ -263,8 +263,9 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–C (done; stop here):** the typed export-time audio-cleanup settings model,
-  pure settings-to-plan boundary, and disabled-path compatibility seam. Part A:
+- **Phase 10, Parts A–D (done; stop here):** the typed export-time audio-cleanup settings model,
+  pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
+  reduction. Part A:
   `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
   `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
   reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
@@ -280,8 +281,15 @@ empty folders for future phases.
   FFmpeg argument boundary, while a globally disabled plan or an enabled plan with every nested
   operation disabled deliberately adds no filters. Exact-array regression tests cover single and
   multiple segments plus existing loudnorm fallback, captions, and image-overlay combinations,
-  preserving the legacy path byte-for-byte. No settings UI, enabled cleanup filters, capability
-  probing, or runtime export wiring from later Phase-10 parts exists yet.
+  preserving the legacy path byte-for-byte. Part D: enabled light or strong noise intent adds one
+  `afftdn` after EDL concat and before the existing mastering tail; light is `nr=6:nf=-45`, while
+  strong is `nr=12:nf=-40`. Noise-floor tracking stays off to avoid chasing speech, and existing
+  segment-local declick fades remain unchanged. `runExport` accepts the plan as an optional final
+  argument. It verifies actual core support on first attempted use; a missing `afftdn` retries
+  without denoising, reports a visible `onNote` warning, and caches the result per shared FFmpeg
+  instance so later exports do not retry an unsupported filter. The fallback composes with the
+  existing missing-`loudnorm` retry. No settings UI, voice leveling, later cleanup filters, or
+  default ExportButton integration exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -608,7 +616,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     change. With no overlay graph, every prior args-array variant remains byte-identical. Phase-10
     Part C adds an optional pure `audioCleanup` plan to `BuildExportOptions`; disabled and all-
     operations-off plans emit the exact legacy argument array and add no placeholder filters.
-    Enabled-filter translation is deliberately deferred to later Phase-10 parts. Float
+    Phase-10 Part D translates enabled noise intent into one post-concat `afftdn` before the
+    legacy mastering tail (`nr=6:nf=-45` for light; `nr=12:nf=-40` for strong), leaving per-segment
+    fades unchanged. Other enabled-filter translation remains deferred. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
@@ -619,7 +629,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     subtitles" failure throws a clear error instead — never a drawtext fallback), optionally
     stages each generated overlay image once for both normal/fallback attempts, checks a nonzero
     ffmpeg exit code before reading output, reads the MP4 back as a Blob, and best-effort frees the
-    VFS (input, output, font, SRT, and every planned image path) in a `finally`.
+    VFS (input, output, font, SRT, and every planned image path) in a `finally`. Part D's optional
+    cleanup-plan argument runtime-verifies `afftdn` through the first real encode: a missing filter
+    retries without noise reduction, warns through `onNote`, and is cached per FFmpeg instance;
+    this composes with the existing loudnorm fallback.
     The engine instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
@@ -642,8 +655,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     no-`srtFile` graphs staying byte-identical to Phase 5.5; Part J image inputs, single/multiple
     kept-video routing, unchanged audio, captions after overlays, and the byte-identical empty
     overlay path; and Phase-10 Part-C exact-array coverage for globally disabled and all-
-    operations-off cleanup plans across the established export variants), run offline with no
-    ffmpeg.
+    operations-off cleanup plans across the established export variants; plus Part-D light/strong
+    `afftdn` settings, post-concat ordering, and unchanged join fades), run offline with no ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,
@@ -656,7 +669,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     the complete required 50-case matrix.
   - `ffmpeg.runtime.test.ts` — mocked-engine coverage for unique VFS staging, generated exec args,
     loudnorm retry without restaging, MP4 output, and best-effort cleanup after success or partial
-    staging failure.
+    staging failure. Phase 10D adds missing-`afftdn` retry/warning/cache coverage and verifies that
+    afftdn and loudnorm fallbacks can occur sequentially in one export.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,
