@@ -361,3 +361,53 @@ describe('runExport with noise reduction', () => {
     )
   })
 })
+
+describe('runExport with voice leveling', () => {
+  it('retries without acompressor, warns, and caches the missing filter', async () => {
+    const fake = createFakeFfmpeg()
+    const cleanup = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'off',
+    })
+    const firstNote = vi.fn()
+    const secondNote = vi.fn()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      if (filterOfExec(args).includes('acompressor=')) {
+        fake.emitLog("No such filter: 'acompressor'")
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      firstNote,
+      undefined,
+      cleanup,
+    )
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      secondNote,
+      undefined,
+      cleanup,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(3)
+    expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('acompressor=')
+    expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('acompressor=')
+    expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('acompressor=')
+    expect(firstNote).toHaveBeenCalledWith(
+      expect.stringContaining('exported without voice leveling'),
+    )
+    expect(secondNote).toHaveBeenCalledWith(
+      expect.stringContaining('exported without voice leveling'),
+    )
+  })
+})

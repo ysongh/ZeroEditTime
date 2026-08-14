@@ -3,6 +3,7 @@ import {
   AUDIO_FADE_S,
   buildExportArgs,
   LIGHT_NOISE_REDUCTION,
+  SPEECH_COMPRESSOR,
   STRONG_NOISE_REDUCTION,
   type BuildExportOptions,
 } from './ffmpeg'
@@ -257,7 +258,7 @@ describe('buildExportArgs', () => {
     )
 
     expect(filter).toContain(
-      `[ca]${LIGHT_NOISE_REDUCTION},${MASTER_TAIL}[outa]`,
+      `[ca]${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${MASTER_TAIL}[outa]`,
     )
     expect(filter.match(/afftdn=/g)).toHaveLength(1)
   })
@@ -275,8 +276,32 @@ describe('buildExportArgs', () => {
 
     expect(filter).toContain(fadesFor(1, 4))
     expect(filter).toContain(
-      `,${STRONG_NOISE_REDUCTION},${MASTER_TAIL}[outa]`,
+      `,${STRONG_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${MASTER_TAIL}[outa]`,
     )
+  })
+
+  it('adds voice leveling after denoising and omits it when disabled', () => {
+    const segments = [{ start: 0, end: 4 }]
+    const enabled = filterOf(
+      buildExportArgs(segments, 'input.mp4', 'output.mp4', {
+        audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS),
+      }),
+    )
+    const disabled = filterOf(
+      buildExportArgs(segments, 'input.mp4', 'output.mp4', {
+        audioCleanup: buildAudioCleanupPlan({
+          ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+          voiceLeveling: false,
+        }),
+      }),
+    )
+
+    expect(enabled).toContain(
+      `${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${MASTER_TAIL}`,
+    )
+    expect(enabled.match(/acompressor=/g)).toHaveLength(1)
+    expect(disabled).toContain(`${LIGHT_NOISE_REDUCTION},${MASTER_TAIL}`)
+    expect(disabled).not.toContain('acompressor=')
   })
 })
 

@@ -69,6 +69,19 @@ const NOISE_REDUCTION_UNAVAILABLE_NOTE =
 // isolated mocked/test instances independent while caching the runtime result.
 const afftdnSupport = new WeakMap<FFmpeg, boolean>()
 
+// Phase-10E speech-oriented downward compression. 0.125 amplitude is roughly
+// -18 dBFS; a moderate 3:1 ratio narrows emphasized peaks without a broadcast-
+// style squash. The documented 20 ms attack preserves consonant transients and
+// 250 ms release avoids rapid pumping. RMS detection and a soft knee make gain
+// changes gradual; maximum channel linking preserves stereo balance. Makeup is
+// deliberately 1 (0 dB), avoiding new clipping before downstream loudness work.
+export const SPEECH_COMPRESSOR =
+  'acompressor=threshold=0.125:ratio=3:attack=20:release=250:' +
+  'makeup=1:knee=2.82843:link=maximum:detection=rms'
+const VOICE_LEVELING_UNAVAILABLE_NOTE =
+  'This ffmpeg core has no acompressor filter — exported without voice leveling.'
+const acompressorSupport = new WeakMap<FFmpeg, boolean>()
+
 // Phase-6 caption burn. libass renders the SRT via the `subtitles` filter,
 // styled entirely through force_style (ASS colors are &HAABBGGRR): white bold
 // text with a black outline (BorderStyle=1 + Outline, no box, no shadow),
@@ -142,6 +155,12 @@ export function buildExportArgs(
         ? STRONG_NOISE_REDUCTION
         : LIGHT_NOISE_REDUCTION,
     )
+  }
+  if (
+    options.audioCleanup?.enabled === true &&
+    options.audioCleanup.voiceLeveling.enabled
+  ) {
+    masterFilters.push(SPEECH_COMPRESSOR)
   }
   if (options.loudnorm ?? true) {
     masterFilters.push(LOUDNORM)
@@ -268,15 +287,21 @@ export async function runExport(
   const encode = async (
     withLoudnorm: boolean,
     withNoiseReduction: boolean,
+    withVoiceLeveling: boolean,
   ) => {
     const effectiveAudioCleanup =
-      audioCleanup === undefined || withNoiseReduction
+      audioCleanup === undefined ||
+      (withNoiseReduction && withVoiceLeveling)
         ? audioCleanup
         : {
             ...audioCleanup,
             noiseReduction: {
               ...audioCleanup.noiseReduction,
-              enabled: false,
+              enabled: withNoiseReduction,
+            },
+            voiceLeveling: {
+              ...audioCleanup.voiceLeveling,
+              enabled: withVoiceLeveling,
             },
           }
     const exitCode = await ffmpeg.exec(
@@ -335,20 +360,34 @@ export async function runExport(
       audioCleanup.noiseReduction.enabled
     let withNoiseReduction =
       noiseRequested && afftdnSupport.get(ffmpeg) !== false
+    const voiceLevelingRequested =
+      audioCleanup?.enabled === true && audioCleanup.voiceLeveling.enabled
+    let withVoiceLeveling =
+      voiceLevelingRequested && acompressorSupport.get(ffmpeg) !== false
     let withLoudnorm = true
     const fallbackNotes: string[] = []
 
     if (noiseRequested && !withNoiseReduction) {
       fallbackNotes.push(NOISE_REDUCTION_UNAVAILABLE_NOTE)
     }
+    if (voiceLevelingRequested && !withVoiceLeveling) {
+      fallbackNotes.push(VOICE_LEVELING_UNAVAILABLE_NOTE)
+    }
 
     let data: Awaited<ReturnType<FFmpeg['readFile']>> | undefined
     while (data === undefined) {
       logs.length = 0
       try {
-        data = await encode(withLoudnorm, withNoiseReduction)
+        data = await encode(
+          withLoudnorm,
+          withNoiseReduction,
+          withVoiceLeveling,
+        )
         if (withNoiseReduction) {
           afftdnSupport.set(ffmpeg, true)
+        }
+        if (withVoiceLeveling) {
+          acompressorSupport.set(ffmpeg, true)
         }
       } catch (err) {
         const log = logs.join('\n')
@@ -363,6 +402,12 @@ export async function runExport(
           afftdnSupport.set(ffmpeg, false)
           withNoiseReduction = false
           fallbackNotes.push(NOISE_REDUCTION_UNAVAILABLE_NOTE)
+          continue
+        }
+        if (withVoiceLeveling && isMissingAcompressor(log)) {
+          acompressorSupport.set(ffmpeg, false)
+          withVoiceLeveling = false
+          fallbackNotes.push(VOICE_LEVELING_UNAVAILABLE_NOTE)
           continue
         }
         if (withLoudnorm && isMissingLoudnorm(log)) {
@@ -404,6 +449,10 @@ function isMissingLoudnorm(log: string): boolean {
 
 function isMissingAfftdn(log: string): boolean {
   return /no such filter:\s*'?afftdn'?/i.test(log)
+}
+
+function isMissingAcompressor(log: string): boolean {
+  return /no such filter:\s*'?acompressor'?/i.test(log)
 }
 
 function isMissingSubtitles(log: string): boolean {

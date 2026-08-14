@@ -263,9 +263,9 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–D (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–E (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
-  reduction. Part A:
+  reduction plus voice leveling. Part A:
   `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
   `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
   reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
@@ -288,8 +288,15 @@ empty folders for future phases.
   argument. It verifies actual core support on first attempted use; a missing `afftdn` retries
   without denoising, reports a visible `onNote` warning, and caches the result per shared FFmpeg
   instance so later exports do not retry an unsupported filter. The fallback composes with the
-  existing missing-`loudnorm` retry. No settings UI, voice leveling, later cleanup filters, or
-  default ExportButton integration exists yet.
+  existing missing-`loudnorm` retry. Part E: enabled voice-leveling intent adds one
+  speech-oriented downward `acompressor` after optional denoising and before the legacy loudness
+  tail: threshold 0.125 (~-18 dBFS), 3:1 ratio, 20 ms attack, 250 ms release, soft knee, RMS
+  detection, maximum-channel linking, and no makeup gain (avoiding new clipping before later
+  stages). A missing `acompressor` follows the same per-instance cached retry path, exports without
+  leveling, and contributes a visible warning; multiple fallback warnings are combined into one
+  `onNote` string so the existing UI cannot overwrite an earlier warning. No loudness-target
+  wiring, true-peak limiter, improved joins, settings UI, or default ExportButton integration
+  exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -618,7 +625,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     operations-off plans emit the exact legacy argument array and add no placeholder filters.
     Phase-10 Part D translates enabled noise intent into one post-concat `afftdn` before the
     legacy mastering tail (`nr=6:nf=-45` for light; `nr=12:nf=-40` for strong), leaving per-segment
-    fades unchanged. Other enabled-filter translation remains deferred. Float
+    fades unchanged. Phase-10 Part E appends the conservative `SPEECH_COMPRESSOR` after optional
+    denoising and before loudnorm, with no makeup gain. Other enabled-filter translation remains
+    deferred. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
@@ -632,7 +641,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     VFS (input, output, font, SRT, and every planned image path) in a `finally`. Part D's optional
     cleanup-plan argument runtime-verifies `afftdn` through the first real encode: a missing filter
     retries without noise reduction, warns through `onNote`, and is cached per FFmpeg instance;
-    this composes with the existing loudnorm fallback.
+    this composes with the existing loudnorm fallback. Part E applies the same behavior to a
+    missing `acompressor`, caching support per instance and retrying without voice leveling;
+    fallback messages are consolidated into one final `onNote` call per export.
     The engine instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
@@ -656,7 +667,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     kept-video routing, unchanged audio, captions after overlays, and the byte-identical empty
     overlay path; and Phase-10 Part-C exact-array coverage for globally disabled and all-
     operations-off cleanup plans across the established export variants; plus Part-D light/strong
-    `afftdn` settings, post-concat ordering, and unchanged join fades), run offline with no ffmpeg.
+    `afftdn` settings, post-concat ordering, unchanged join fades, and Part-E compressor parameters,
+    ordering, and per-option omission), run offline with no ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,
@@ -670,7 +682,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `ffmpeg.runtime.test.ts` — mocked-engine coverage for unique VFS staging, generated exec args,
     loudnorm retry without restaging, MP4 output, and best-effort cleanup after success or partial
     staging failure. Phase 10D adds missing-`afftdn` retry/warning/cache coverage and verifies that
-    afftdn and loudnorm fallbacks can occur sequentially in one export.
+    afftdn and loudnorm fallbacks can occur sequentially in one export. Phase 10E adds cached
+    missing-`acompressor` retry and warning coverage.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,
