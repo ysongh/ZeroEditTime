@@ -263,9 +263,9 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–F (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–G (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
-  reduction, voice leveling, and configurable loudness normalization. Part A:
+  reduction, voice leveling, configurable loudness normalization, and peak protection. Part A:
   `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
   `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
   reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
@@ -300,9 +300,15 @@ empty folders for future phases.
   stage (default -16 LUFS), followed by the required 48 kHz resample. Single-pass avoids a full
   browser analysis pass plus parsed measurement plumbing and a second encode. Loudness-off omits
   `loudnorm`; global Phase-10 disable retains the exact legacy `I=-16:TP=-1.5:LRA=11` filter.
-  The -1.5 dB `TP` remains deliberately legacy until Part G implements configurable true-peak
-  protection. The existing missing-loudnorm retry/warning continues to apply. No true-peak
-  limiter, improved joins, settings UI, or default ExportButton integration exists yet.
+  The existing missing-loudnorm retry/warning continues to apply. Part G: an enabled cleanup plan
+  uses its validated true-peak target (default -1 dB) in `loudnorm` when loudness is on and always
+  appends a final look-ahead `alimiter` after the 48 kHz resample. The dB ceiling is converted to
+  deterministic linear amplitude; the limiter uses 5 ms attack, 50 ms release, auto-level off,
+  and latency compensation on so protection neither boosts toward the ceiling nor shifts A/V
+  sync. A missing or option-incompatible `alimiter` retries without it, warns through the combined
+  `onNote`, and caches the result per FFmpeg instance; loudnorm's matching TP remains a secondary
+  guard when enabled. Global Phase-10 disable stays byte-identical. No improved joins, settings UI,
+  or default ExportButton integration exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -636,7 +642,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     denoising and before loudnorm, with no makeup gain. Phase-10 Part F builds the one-pass
     `loudnorm` target from `AudioCleanupPlan.loudness.targetLufs` (default -16), omits it when that
     operation is disabled, and retains the legacy constant when Phase 10 is globally disabled.
-    Its TP remains -1.5 until Part G. Other enabled-filter translation remains deferred. Float
+    Phase-10 Part G feeds the plan's peak target to loudnorm and adds a final post-resample
+    `alimiter` with deterministic dB-to-amplitude conversion, auto-level disabled, and latency
+    compensation enabled. Other enabled-filter translation remains deferred. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
@@ -652,7 +660,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     retries without noise reduction, warns through `onNote`, and is cached per FFmpeg instance;
     this composes with the existing loudnorm fallback. Part E applies the same behavior to a
     missing `acompressor`, caching support per instance and retrying without voice leveling;
-    fallback messages are consolidated into one final `onNote` call per export.
+    fallback messages are consolidated into one final `onNote` call per export. Part G likewise
+    runtime-verifies and caches `alimiter`; missing-filter or incompatible-option failures retry
+    without the limiter while retaining the rest of cleanup.
     The engine instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
@@ -677,8 +687,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     overlay path; and Phase-10 Part-C exact-array coverage for globally disabled and all-
     cleanup plans across the established export variants and per-operation omission; plus Part-D
     light/strong `afftdn` settings, post-concat ordering, unchanged join fades, Part-E compressor
-    parameters/ordering, and Part-F configurable single-pass LUFS targets and loudness-off path),
-    run offline with no ffmpeg.
+    parameters/ordering, Part-F configurable single-pass LUFS targets and loudness-off path, and
+    Part-G configurable limiter ceiling/order/latency compensation), run offline with no ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,
@@ -693,7 +703,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     loudnorm retry without restaging, MP4 output, and best-effort cleanup after success or partial
     staging failure. Phase 10D adds missing-`afftdn` retry/warning/cache coverage and verifies that
     afftdn and loudnorm fallbacks can occur sequentially in one export. Phase 10E adds cached
-    missing-`acompressor` retry and warning coverage.
+    missing-`acompressor` retry and warning coverage. Phase 10G adds cached missing-`alimiter`
+    retry and warning coverage.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,

@@ -34,6 +34,7 @@ export interface ImageOverlayExportRequest {
 
 export interface BuildExportOptions {
   loudnorm?: boolean
+  peakLimiter?: boolean
   srtFile?: string
   imageOverlayGraph?: ImageOverlayFilterGraph | null
   /**
@@ -84,17 +85,40 @@ const VOICE_LEVELING_UNAVAILABLE_NOTE =
   'This ffmpeg core has no acompressor filter — exported without voice leveling.'
 const acompressorSupport = new WeakMap<FFmpeg, boolean>()
 
-function loudnormForTarget(targetLufs: number): string {
+function loudnormForTarget(targetLufs: number, truePeakDb: number): string {
   // Plans built through buildAudioCleanupPlan are already clamped. Keep this
   // pure export boundary defensive for manually constructed typed values too.
   const target = Number.isFinite(targetLufs)
     ? Math.min(-10, Math.max(-24, targetLufs))
     : -16
+  const truePeak = Number.isFinite(truePeakDb)
+    ? Math.min(0, Math.max(-6, truePeakDb))
+    : -1
   return (
-    `loudnorm=I=${target}:TP=${LEGACY_LOUDNORM_TRUE_PEAK_DB}:` +
+    `loudnorm=I=${target}:TP=${truePeak}:` +
     `LRA=${LOUDNORM_LRA}`
   )
 }
+
+function peakLimitAmplitude(truePeakDb: number): string {
+  const clamped = Number.isFinite(truePeakDb)
+    ? Math.min(0, Math.max(-6, truePeakDb))
+    : -1
+  return Math.pow(10, clamped / 20)
+    .toFixed(9)
+    .replace(/\.?0+$/, '')
+}
+
+function limiterForTarget(truePeakDb: number): string {
+  return (
+    `alimiter=limit=${peakLimitAmplitude(truePeakDb)}:` +
+    'attack=5:release=50:level=0:latency=1'
+  )
+}
+
+const PEAK_LIMITER_UNAVAILABLE_NOTE =
+  'This ffmpeg core has no compatible alimiter filter — exported without the final peak limiter.'
+const alimiterSupport = new WeakMap<FFmpeg, boolean>()
 
 // Phase-6 caption burn. libass renders the SRT via the `subtitles` filter,
 // styled entirely through force_style (ASS colors are &HAABBGGRR): white bold
@@ -183,11 +207,19 @@ export function buildExportArgs(
   if ((options.loudnorm ?? true) && loudnessEnabled) {
     masterFilters.push(
       cleanupEnabled
-        ? loudnormForTarget(options.audioCleanup?.loudness.targetLufs ?? -16)
+        ? loudnormForTarget(
+            options.audioCleanup?.loudness.targetLufs ?? -16,
+            options.audioCleanup?.loudness.truePeakDb ?? -1,
+          )
         : LOUDNORM,
     )
   }
   masterFilters.push(`aresample=${OUTPUT_SAMPLE_RATE}`)
+  if (cleanupEnabled && (options.peakLimiter ?? true)) {
+    masterFilters.push(
+      limiterForTarget(options.audioCleanup?.loudness.truePeakDb ?? -1),
+    )
+  }
   const master = masterFilters.join(',')
 
   const burn =
@@ -310,6 +342,7 @@ export async function runExport(
     withLoudnorm: boolean,
     withNoiseReduction: boolean,
     withVoiceLeveling: boolean,
+    withPeakLimiter: boolean,
   ) => {
     const effectiveAudioCleanup =
       audioCleanup === undefined ||
@@ -337,11 +370,13 @@ export async function runExport(
               srtFile: SRT_NAME,
               imageOverlayGraph,
               audioCleanup: effectiveAudioCleanup,
+              peakLimiter: withPeakLimiter,
             }
           : {
               loudnorm: withLoudnorm,
               imageOverlayGraph,
               audioCleanup: effectiveAudioCleanup,
+              peakLimiter: withPeakLimiter,
             },
       ),
     )
@@ -390,6 +425,9 @@ export async function runExport(
       audioCleanup?.enabled === true
         ? audioCleanup.loudness.enabled
         : true
+    const peakLimiterRequested = audioCleanup?.enabled === true
+    let withPeakLimiter =
+      peakLimiterRequested && alimiterSupport.get(ffmpeg) !== false
     const fallbackNotes: string[] = []
 
     if (noiseRequested && !withNoiseReduction) {
@@ -397,6 +435,9 @@ export async function runExport(
     }
     if (voiceLevelingRequested && !withVoiceLeveling) {
       fallbackNotes.push(VOICE_LEVELING_UNAVAILABLE_NOTE)
+    }
+    if (peakLimiterRequested && !withPeakLimiter) {
+      fallbackNotes.push(PEAK_LIMITER_UNAVAILABLE_NOTE)
     }
 
     let data: Awaited<ReturnType<FFmpeg['readFile']>> | undefined
@@ -407,12 +448,16 @@ export async function runExport(
           withLoudnorm,
           withNoiseReduction,
           withVoiceLeveling,
+          withPeakLimiter,
         )
         if (withNoiseReduction) {
           afftdnSupport.set(ffmpeg, true)
         }
         if (withVoiceLeveling) {
           acompressorSupport.set(ffmpeg, true)
+        }
+        if (withPeakLimiter) {
+          alimiterSupport.set(ffmpeg, true)
         }
       } catch (err) {
         const log = logs.join('\n')
@@ -433,6 +478,12 @@ export async function runExport(
           acompressorSupport.set(ffmpeg, false)
           withVoiceLeveling = false
           fallbackNotes.push(VOICE_LEVELING_UNAVAILABLE_NOTE)
+          continue
+        }
+        if (withPeakLimiter && isUnavailableAlimiter(log)) {
+          alimiterSupport.set(ffmpeg, false)
+          withPeakLimiter = false
+          fallbackNotes.push(PEAK_LIMITER_UNAVAILABLE_NOTE)
           continue
         }
         if (withLoudnorm && isMissingLoudnorm(log)) {
@@ -478,6 +529,13 @@ function isMissingAfftdn(log: string): boolean {
 
 function isMissingAcompressor(log: string): boolean {
   return /no such filter:\s*'?acompressor'?/i.test(log)
+}
+
+function isUnavailableAlimiter(log: string): boolean {
+  return (
+    /no such filter:\s*'?alimiter'?/i.test(log) ||
+    /(?:option|error applying option).*?(?:latency|level).*?alimiter/i.test(log)
+  )
 }
 
 function isMissingSubtitles(log: string): boolean {

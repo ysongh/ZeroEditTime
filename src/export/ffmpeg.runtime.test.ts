@@ -411,3 +411,55 @@ describe('runExport with voice leveling', () => {
     )
   })
 })
+
+describe('runExport with peak limiting', () => {
+  it('retries without alimiter, warns, and caches the missing filter', async () => {
+    const fake = createFakeFfmpeg()
+    const cleanup = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'off',
+      voiceLeveling: false,
+      loudnessNormalization: false,
+    })
+    const firstNote = vi.fn()
+    const secondNote = vi.fn()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      if (filterOfExec(args).includes('alimiter=')) {
+        fake.emitLog("No such filter: 'alimiter'")
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      firstNote,
+      undefined,
+      cleanup,
+    )
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      secondNote,
+      undefined,
+      cleanup,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(3)
+    expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('alimiter=')
+    expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('alimiter=')
+    expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('alimiter=')
+    expect(firstNote).toHaveBeenCalledWith(
+      expect.stringContaining('exported without the final peak limiter'),
+    )
+    expect(secondNote).toHaveBeenCalledWith(
+      expect.stringContaining('exported without the final peak limiter'),
+    )
+  })
+})

@@ -30,6 +30,10 @@ function fadesFor(start: number, end: number): string {
 }
 
 const MASTER_TAIL = 'loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000'
+const DEFAULT_LIMITER =
+  'alimiter=limit=0.891250938:attack=5:release=50:level=0:latency=1'
+const DEFAULT_CLEANUP_TAIL =
+  `loudnorm=I=-16:TP=-1:LRA=11,aresample=48000,${DEFAULT_LIMITER}`
 
 const IMAGE_OVERLAY_GRAPH: ImageOverlayFilterGraph = {
   inputArgs: ['-loop', '1', '-i', 'overlay_0.png'],
@@ -242,7 +246,7 @@ describe('buildExportArgs', () => {
       }),
     )
 
-    expect(filter).toContain('[ca]aresample=48000[outa]')
+    expect(filter).toContain(`[ca]aresample=48000,${DEFAULT_LIMITER}[outa]`)
     expect(filter).not.toContain('afftdn=')
     expect(filter).not.toContain('acompressor=')
     expect(filter).not.toContain('loudnorm=')
@@ -263,7 +267,7 @@ describe('buildExportArgs', () => {
     )
 
     expect(filter).toContain(
-      `[ca]${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${MASTER_TAIL}[outa]`,
+      `[ca]${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${DEFAULT_CLEANUP_TAIL}[outa]`,
     )
     expect(filter.match(/afftdn=/g)).toHaveLength(1)
   })
@@ -281,7 +285,7 @@ describe('buildExportArgs', () => {
 
     expect(filter).toContain(fadesFor(1, 4))
     expect(filter).toContain(
-      `,${STRONG_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${MASTER_TAIL}[outa]`,
+      `,${STRONG_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${DEFAULT_CLEANUP_TAIL}[outa]`,
     )
   })
 
@@ -302,10 +306,12 @@ describe('buildExportArgs', () => {
     )
 
     expect(enabled).toContain(
-      `${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${MASTER_TAIL}`,
+      `${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${DEFAULT_CLEANUP_TAIL}`,
     )
     expect(enabled.match(/acompressor=/g)).toHaveLength(1)
-    expect(disabled).toContain(`${LIGHT_NOISE_REDUCTION},${MASTER_TAIL}`)
+    expect(disabled).toContain(
+      `${LIGHT_NOISE_REDUCTION},${DEFAULT_CLEANUP_TAIL}`,
+    )
     expect(disabled).not.toContain('acompressor=')
   })
 
@@ -324,7 +330,7 @@ describe('buildExportArgs', () => {
       )
 
       expect(filter).toContain(
-        `loudnorm=I=${targetLufs}:TP=-1.5:LRA=11,aresample=48000[outa]`,
+        `loudnorm=I=${targetLufs}:TP=-1:LRA=11,aresample=48000,${DEFAULT_LIMITER}[outa]`,
       )
     }
   })
@@ -342,8 +348,30 @@ describe('buildExportArgs', () => {
       }),
     )
 
-    expect(filter).toContain('aresample=48000[outa]')
+    expect(filter).toContain(`aresample=48000,${DEFAULT_LIMITER}[outa]`)
     expect(filter).not.toContain('loudnorm=')
+  })
+
+  it('applies the configured peak ceiling after resampling with latency compensation', () => {
+    const plan = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'off',
+      voiceLeveling: false,
+      truePeakLimitDb: -3,
+    })
+    const filter = filterOf(
+      buildExportArgs([{ start: 0, end: 4 }], 'input.mp4', 'output.mp4', {
+        audioCleanup: plan,
+      }),
+    )
+
+    expect(filter).toContain(
+      'loudnorm=I=-16:TP=-3:LRA=11,aresample=48000,' +
+        'alimiter=limit=0.707945784:attack=5:release=50:level=0:latency=1[outa]',
+    )
+    expect(filter.indexOf('aresample=48000')).toBeLessThan(
+      filter.indexOf('alimiter='),
+    )
   })
 })
 
