@@ -52,6 +52,8 @@ export const AUDIO_FADE_S = 0.015
 // One-pass loudness normalization (EBU R128) mastering the whole mix, so levels
 // are consistent across joins and across exports.
 export const LOUDNORM = 'loudnorm=I=-16:TP=-1.5:LRA=11'
+export const LOUDNORM_LRA = 11
+export const LEGACY_LOUDNORM_TRUE_PEAK_DB = -1.5
 // loudnorm internally upsamples its output (192 kHz), which bloats the AAC
 // encode and chokes some players — pin the rate back in-graph right after it.
 export const OUTPUT_SAMPLE_RATE = 48000
@@ -81,6 +83,18 @@ export const SPEECH_COMPRESSOR =
 const VOICE_LEVELING_UNAVAILABLE_NOTE =
   'This ffmpeg core has no acompressor filter — exported without voice leveling.'
 const acompressorSupport = new WeakMap<FFmpeg, boolean>()
+
+function loudnormForTarget(targetLufs: number): string {
+  // Plans built through buildAudioCleanupPlan are already clamped. Keep this
+  // pure export boundary defensive for manually constructed typed values too.
+  const target = Number.isFinite(targetLufs)
+    ? Math.min(-10, Math.max(-24, targetLufs))
+    : -16
+  return (
+    `loudnorm=I=${target}:TP=${LEGACY_LOUDNORM_TRUE_PEAK_DB}:` +
+    `LRA=${LOUDNORM_LRA}`
+  )
+}
 
 // Phase-6 caption burn. libass renders the SRT via the `subtitles` filter,
 // styled entirely through force_style (ASS colors are &HAABBGGRR): white bold
@@ -162,8 +176,16 @@ export function buildExportArgs(
   ) {
     masterFilters.push(SPEECH_COMPRESSOR)
   }
-  if (options.loudnorm ?? true) {
-    masterFilters.push(LOUDNORM)
+  const cleanupEnabled = options.audioCleanup?.enabled === true
+  const loudnessEnabled = cleanupEnabled
+    ? options.audioCleanup?.loudness.enabled === true
+    : true
+  if ((options.loudnorm ?? true) && loudnessEnabled) {
+    masterFilters.push(
+      cleanupEnabled
+        ? loudnormForTarget(options.audioCleanup?.loudness.targetLufs ?? -16)
+        : LOUDNORM,
+    )
   }
   masterFilters.push(`aresample=${OUTPUT_SAMPLE_RATE}`)
   const master = masterFilters.join(',')
@@ -364,7 +386,10 @@ export async function runExport(
       audioCleanup?.enabled === true && audioCleanup.voiceLeveling.enabled
     let withVoiceLeveling =
       voiceLevelingRequested && acompressorSupport.get(ffmpeg) !== false
-    let withLoudnorm = true
+    let withLoudnorm =
+      audioCleanup?.enabled === true
+        ? audioCleanup.loudness.enabled
+        : true
     const fallbackNotes: string[] = []
 
     if (noiseRequested && !withNoiseReduction) {

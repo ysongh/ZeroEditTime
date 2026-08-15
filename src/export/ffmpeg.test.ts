@@ -222,7 +222,7 @@ describe('buildExportArgs', () => {
     }
   })
 
-  it('adds no filters when every individual cleanup operation is disabled', () => {
+  it('adds no cleanup filters when every individual operation is disabled', () => {
     const noOpPlan = buildAudioCleanupPlan({
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
       enabled: true,
@@ -236,11 +236,16 @@ describe('buildExportArgs', () => {
       { start: 6, end: 9.5 },
     ]
 
-    expect(
+    const filter = filterOf(
       buildExportArgs(segments, 'input.mp4', 'output.mp4', {
         audioCleanup: noOpPlan,
       }),
-    ).toEqual(buildExportArgs(segments))
+    )
+
+    expect(filter).toContain('[ca]aresample=48000[outa]')
+    expect(filter).not.toContain('afftdn=')
+    expect(filter).not.toContain('acompressor=')
+    expect(filter).not.toContain('loudnorm=')
   })
 
   it('adds conservative light noise reduction before the legacy mastering tail', () => {
@@ -302,6 +307,43 @@ describe('buildExportArgs', () => {
     expect(enabled.match(/acompressor=/g)).toHaveLength(1)
     expect(disabled).toContain(`${LIGHT_NOISE_REDUCTION},${MASTER_TAIL}`)
     expect(disabled).not.toContain('acompressor=')
+  })
+
+  it('uses the plan LUFS target in single-pass loudnorm', () => {
+    for (const targetLufs of [-14, -18]) {
+      const plan = buildAudioCleanupPlan({
+        ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+        noiseReduction: 'off',
+        voiceLeveling: false,
+        loudnessTargetLufs: targetLufs,
+      })
+      const filter = filterOf(
+        buildExportArgs([{ start: 0, end: 4 }], 'input.mp4', 'output.mp4', {
+          audioCleanup: plan,
+        }),
+      )
+
+      expect(filter).toContain(
+        `loudnorm=I=${targetLufs}:TP=-1.5:LRA=11,aresample=48000[outa]`,
+      )
+    }
+  })
+
+  it('omits loudnorm when Phase-10 loudness normalization is disabled', () => {
+    const plan = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'off',
+      voiceLeveling: false,
+      loudnessNormalization: false,
+    })
+    const filter = filterOf(
+      buildExportArgs([{ start: 0, end: 4 }], 'input.mp4', 'output.mp4', {
+        audioCleanup: plan,
+      }),
+    )
+
+    expect(filter).toContain('aresample=48000[outa]')
+    expect(filter).not.toContain('loudnorm=')
   })
 })
 

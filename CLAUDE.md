@@ -263,9 +263,9 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–E (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–F (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
-  reduction plus voice leveling. Part A:
+  reduction, voice leveling, and configurable loudness normalization. Part A:
   `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
   `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
   reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
@@ -278,8 +278,9 @@ empty folders for future phases.
   and carries validated loudness targets without FFmpeg strings, DOM objects, runtime instances,
   or input mutation. Unit tests cover defaults, global and individual disabling, shared clamping,
   determinism, and purity. Part C: `BuildExportOptions.audioCleanup` accepts the pure plan at the
-  FFmpeg argument boundary, while a globally disabled plan or an enabled plan with every nested
-  operation disabled deliberately adds no filters. Exact-array regression tests cover single and
+  FFmpeg argument boundary; a globally disabled plan adds no Phase-10 filters and preserves the
+  legacy command exactly, while individually disabled operations add no placeholder filters.
+  Exact-array regression tests cover single and
   multiple segments plus existing loudnorm fallback, captions, and image-overlay combinations,
   preserving the legacy path byte-for-byte. Part D: enabled light or strong noise intent adds one
   `afftdn` after EDL concat and before the existing mastering tail; light is `nr=6:nf=-45`, while
@@ -294,9 +295,14 @@ empty folders for future phases.
   detection, maximum-channel linking, and no makeup gain (avoiding new clipping before later
   stages). A missing `acompressor` follows the same per-instance cached retry path, exports without
   leveling, and contributes a visible warning; multiple fallback warnings are combined into one
-  `onNote` string so the existing UI cannot overwrite an earlier warning. No loudness-target
-  wiring, true-peak limiter, improved joins, settings UI, or default ExportButton integration
-  exists yet.
+  `onNote` string so the existing UI cannot overwrite an earlier warning. Part F: enabled
+  loudness intent uses the plan's validated LUFS target in the existing final one-pass `loudnorm`
+  stage (default -16 LUFS), followed by the required 48 kHz resample. Single-pass avoids a full
+  browser analysis pass plus parsed measurement plumbing and a second encode. Loudness-off omits
+  `loudnorm`; global Phase-10 disable retains the exact legacy `I=-16:TP=-1.5:LRA=11` filter.
+  The -1.5 dB `TP` remains deliberately legacy until Part G implements configurable true-peak
+  protection. The existing missing-loudnorm retry/warning continues to apply. No true-peak
+  limiter, improved joins, settings UI, or default ExportButton integration exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -621,13 +627,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     or feeds `[ovout]` into subtitles when they are on. The graph's extra `-i` args stay between
     the source input and `-filter_complex`; existing audio generation and `[outa]` mapping do not
     change. With no overlay graph, every prior args-array variant remains byte-identical. Phase-10
-    Part C adds an optional pure `audioCleanup` plan to `BuildExportOptions`; disabled and all-
-    operations-off plans emit the exact legacy argument array and add no placeholder filters.
+    Part C adds an optional pure `audioCleanup` plan to `BuildExportOptions`; a globally disabled
+    plan emits the exact legacy argument array, and individually disabled operations add no
+    placeholder filters.
     Phase-10 Part D translates enabled noise intent into one post-concat `afftdn` before the
     legacy mastering tail (`nr=6:nf=-45` for light; `nr=12:nf=-40` for strong), leaving per-segment
     fades unchanged. Phase-10 Part E appends the conservative `SPEECH_COMPRESSOR` after optional
-    denoising and before loudnorm, with no makeup gain. Other enabled-filter translation remains
-    deferred. Float
+    denoising and before loudnorm, with no makeup gain. Phase-10 Part F builds the one-pass
+    `loudnorm` target from `AudioCleanupPlan.loudness.targetLufs` (default -16), omits it when that
+    operation is disabled, and retains the legacy constant when Phase 10 is globally disabled.
+    Its TP remains -1.5 until Part G. Other enabled-filter translation remains deferred. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
@@ -666,9 +675,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     no-`srtFile` graphs staying byte-identical to Phase 5.5; Part J image inputs, single/multiple
     kept-video routing, unchanged audio, captions after overlays, and the byte-identical empty
     overlay path; and Phase-10 Part-C exact-array coverage for globally disabled and all-
-    operations-off cleanup plans across the established export variants; plus Part-D light/strong
-    `afftdn` settings, post-concat ordering, unchanged join fades, and Part-E compressor parameters,
-    ordering, and per-option omission), run offline with no ffmpeg.
+    cleanup plans across the established export variants and per-operation omission; plus Part-D
+    light/strong `afftdn` settings, post-concat ordering, unchanged join fades, Part-E compressor
+    parameters/ordering, and Part-F configurable single-pass LUFS targets and loudness-off path),
+    run offline with no ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,
