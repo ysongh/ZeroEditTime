@@ -50,6 +50,7 @@ export interface BuildExportOptions {
 // hear as a fade. Audio ONLY: the hard video cut is correct (a video fade at
 // every join reads as a slideshow).
 export const AUDIO_FADE_S = 0.015
+export const SMOOTH_JOIN_FADE_CURVE = 'qsin'
 // One-pass loudness normalization (EBU R128) mastering the whole mix, so levels
 // are consistent across joins and across exports.
 export const LOUDNORM = 'loudnorm=I=-16:TP=-1.5:LRA=11'
@@ -145,7 +146,9 @@ export const FONTS_DIR = '/fonts'
  * Audio gets two extra polish steps (video is untouched):
  * - per-segment declick fades, appended AFTER asetpts so times are segment-local:
  *   `afade=t=in:st=0:d=F,afade=t=out:st=(dur-F):d=F` with F clamped to half the
- *   segment duration so a tiny sliver never gets a negative fade-out start;
+ *   segment duration so a tiny sliver never gets a negative fade-out start.
+ *   Phase-10 smooth-join intent adds the `qsin` curve to those same short fades;
+ *   it never overlaps segments or changes concat timing;
  * - a mastering tail on the combined stream: concat emits an intermediate `[ca]`
  *   which runs `loudnorm,aresample=48000` into `[outa]` (single-segment exports
  *   chain the same tail directly). `options.loudnorm: false` drops loudnorm but
@@ -238,15 +241,22 @@ export function buildExportArgs(
 
   const n = segments.length
   const clauses: string[] = []
+  const useSmoothJoinCurve =
+    options.audioCleanup?.enabled === true &&
+    options.audioCleanup.smoothJoins.enabled
   for (let i = 0; i < n; i++) {
     const { start, end } = segments[i]
     // n === 1: label directly as the assembled output so no concat is needed.
     const vLabel = n === 1 ? assembledVideoLabel : `v${i}`
     const segDur = end - start
     const fade = Math.min(AUDIO_FADE_S, segDur / 2)
+    const fadeCurve = useSmoothJoinCurve
+      ? `:curve=${SMOOTH_JOIN_FADE_CURVE}`
+      : ''
     const audioChain =
       `atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS,` +
-      `afade=t=in:st=0:d=${fade},afade=t=out:st=${segDur - fade}:d=${fade}`
+      `afade=t=in:st=0:d=${fade}${fadeCurve},` +
+      `afade=t=out:st=${segDur - fade}:d=${fade}${fadeCurve}`
     clauses.push(`[0:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS[${vLabel}]`)
     clauses.push(
       n === 1 ? `[0:a]${audioChain},${master}[outa]` : `[0:a]${audioChain}[a${i}]`,

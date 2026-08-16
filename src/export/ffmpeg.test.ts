@@ -4,6 +4,7 @@ import {
   buildExportArgs,
   LIGHT_NOISE_REDUCTION,
   SPEECH_COMPRESSOR,
+  SMOOTH_JOIN_FADE_CURVE,
   STRONG_NOISE_REDUCTION,
   type BuildExportOptions,
 } from './ffmpeg'
@@ -27,6 +28,15 @@ function fadesFor(start: number, end: number): string {
   const dur = end - start
   const fade = Math.min(AUDIO_FADE_S, dur / 2)
   return `afade=t=in:st=0:d=${fade},afade=t=out:st=${dur - fade}:d=${fade}`
+}
+
+function smoothFadesFor(start: number, end: number): string {
+  const dur = end - start
+  const fade = Math.min(AUDIO_FADE_S, dur / 2)
+  return (
+    `afade=t=in:st=0:d=${fade}:curve=${SMOOTH_JOIN_FADE_CURVE},` +
+    `afade=t=out:st=${dur - fade}:d=${fade}:curve=${SMOOTH_JOIN_FADE_CURVE}`
+  )
 }
 
 const MASTER_TAIL = 'loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000'
@@ -283,7 +293,7 @@ describe('buildExportArgs', () => {
       }),
     )
 
-    expect(filter).toContain(fadesFor(1, 4))
+    expect(filter).toContain(smoothFadesFor(1, 4))
     expect(filter).toContain(
       `,${STRONG_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${DEFAULT_CLEANUP_TAIL}[outa]`,
     )
@@ -371,6 +381,52 @@ describe('buildExportArgs', () => {
     )
     expect(filter.indexOf('aresample=48000')).toBeLessThan(
       filter.indexOf('alimiter='),
+    )
+  })
+
+  it('uses short qsin fades for smoother joins without changing timing', () => {
+    const segments = [
+      { start: 2, end: 5 },
+      { start: 8, end: 11.5 },
+    ]
+    const filter = filterOf(
+      buildExportArgs(segments, 'input.mp4', 'output.mp4', {
+        audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS),
+      }),
+    )
+
+    expect(filter).toContain(smoothFadesFor(2, 5))
+    expect(filter).toContain(smoothFadesFor(8, 11.5))
+    expect(filter).toContain('concat=n=2:v=1:a=1')
+    expect(filter).not.toContain('acrossfade')
+    expect(filter).not.toContain('adelay')
+    expect(filter).not.toContain('atempo')
+  })
+
+  it('keeps legacy linear declick fades when smooth joins are disabled', () => {
+    const filter = filterOf(
+      buildExportArgs([{ start: 1, end: 4 }], 'input.mp4', 'output.mp4', {
+        audioCleanup: buildAudioCleanupPlan({
+          ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+          smoothJoins: false,
+        }),
+      }),
+    )
+
+    expect(filter).toContain(fadesFor(1, 4))
+    expect(filter).not.toContain('curve=')
+  })
+
+  it('clamps smooth fades to half of a tiny kept segment', () => {
+    const filter = filterOf(
+      buildExportArgs([{ start: 0, end: 0.02 }], 'input.mp4', 'output.mp4', {
+        audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS),
+      }),
+    )
+
+    expect(filter).toContain(
+      'afade=t=in:st=0:d=0.01:curve=qsin,' +
+        'afade=t=out:st=0.01:d=0.01:curve=qsin',
     )
   })
 })
