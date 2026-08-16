@@ -143,16 +143,19 @@ export const FONTS_DIR = '/fonts'
  * float second bounds and reset PTS (`setpts`/`asetpts=PTS-STARTPTS`) so audio and
  * video stay in sync across the joins, then `concat` the labelled streams.
  *
- * Audio gets two extra polish steps (video is untouched):
+ * Audio processing follows one deliberate, timing-safe order (video is untouched):
  * - per-segment declick fades, appended AFTER asetpts so times are segment-local:
  *   `afade=t=in:st=0:d=F,afade=t=out:st=(dur-F):d=F` with F clamped to half the
  *   segment duration so a tiny sliver never gets a negative fade-out start.
  *   Phase-10 smooth-join intent adds the `qsin` curve to those same short fades;
  *   it never overlaps segments or changes concat timing;
- * - a mastering tail on the combined stream: concat emits an intermediate `[ca]`
- *   which runs `loudnorm,aresample=48000` into `[outa]` (single-segment exports
- *   chain the same tail directly). `options.loudnorm: false` drops loudnorm but
- *   keeps the fades and resample — the runtime fallback for a core without it.
+ * - concat kept audio without overlap, preserving the EDL/keep-gap duration;
+ * - run the combined stream through optional denoise, optional voice compression,
+ *   optional loudnorm, the required 48 kHz resample, then the final peak limiter.
+ *   Resampling precedes limiting because loudnorm internally outputs 192 kHz and
+ *   the configured ceiling should be the final operation on the encoded rate.
+ *   None of these filters changes timestamps; alimiter compensates its lookahead.
+ *   A single-segment export chains the identical stages directly after its fades.
  *
  * When `options.srtFile` is set (Phase 6), the assembled video runs one extra
  * `subtitles` stage burning that SRT with the committed Roboto Bold: concat

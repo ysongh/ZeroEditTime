@@ -429,6 +429,78 @@ describe('buildExportArgs', () => {
         'afade=t=out:st=0.01:d=0.01:curve=qsin',
     )
   })
+
+  it('keeps the complete cleanup pipeline in deliberate post-concat order', () => {
+    const filter = filterOf(
+      buildExportArgs(
+        [
+          { start: 1.25, end: 4.5 },
+          { start: 7, end: 10.25 },
+        ],
+        'input.mp4',
+        'output.mp4',
+        { audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS) },
+      ),
+    )
+    const orderedTail =
+      `[ca]${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},` +
+      `${DEFAULT_CLEANUP_TAIL}[outa]`
+
+    expect(filter).toContain(smoothFadesFor(1.25, 4.5))
+    expect(filter).toContain(smoothFadesFor(7, 10.25))
+    expect(filter).toContain(
+      '[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][ca]',
+    )
+    expect(filter).toContain(orderedTail)
+    expect(filter.indexOf('concat=n=2:v=1:a=1')).toBeLessThan(
+      filter.indexOf(LIGHT_NOISE_REDUCTION),
+    )
+    expect(filter.indexOf(LIGHT_NOISE_REDUCTION)).toBeLessThan(
+      filter.indexOf(SPEECH_COMPRESSOR),
+    )
+    expect(filter.indexOf(SPEECH_COMPRESSOR)).toBeLessThan(
+      filter.indexOf('loudnorm='),
+    )
+    expect(filter.indexOf('loudnorm=')).toBeLessThan(
+      filter.indexOf('aresample=48000'),
+    )
+    expect(filter.indexOf('aresample=48000')).toBeLessThan(
+      filter.indexOf('alimiter='),
+    )
+    expect(filter.match(/afftdn=/g)).toHaveLength(1)
+    expect(filter.match(/acompressor=/g)).toHaveLength(1)
+    expect(filter.match(/loudnorm=/g)).toHaveLength(1)
+    expect(filter.match(/alimiter=/g)).toHaveLength(1)
+  })
+
+  it('keeps audio timing tied to the EDL with captions and overlays present', () => {
+    const segments = [
+      { start: 2.983, end: 5.5 },
+      { start: 8.1, end: 12.04 },
+    ]
+    const args = buildExportArgs(segments, 'input.mp4', 'output.mp4', {
+      audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS),
+      imageOverlayGraph: IMAGE_OVERLAY_GRAPH,
+      srtFile: 'captions.srt',
+    })
+    const filter = filterOf(args)
+
+    for (const { start, end } of segments) {
+      expect(filter).toContain(`trim=start=${start}:end=${end}`)
+      expect(filter).toContain(`atrim=start=${start}:end=${end}`)
+    }
+    expect(filter.match(/,setpts=PTS-STARTPTS/g)).toHaveLength(2)
+    expect(filter.match(/,asetpts=PTS-STARTPTS/g)).toHaveLength(2)
+    expect(filter).toContain('concat=n=2:v=1:a=1[ovbase][ca]')
+    const postConcatAudio = filter.slice(filter.indexOf(';[ca]'))
+    expect(postConcatAudio).not.toMatch(/\b(?:atempo|adelay|apad|atrim)\b/)
+    expect(filter.indexOf('[ovbase]null[ovout]')).toBeLessThan(
+      filter.indexOf('[ovout]subtitles='),
+    )
+    expect(args).toEqual(
+      expect.arrayContaining(['-map', '[outv]', '-map', '[outa]']),
+    )
+  })
 })
 
 describe('buildExportArgs with image overlays', () => {

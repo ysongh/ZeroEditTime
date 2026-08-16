@@ -263,10 +263,10 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–H (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–I (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
-  EDL joins. Part A:
+  EDL joins, and locked filter ordering. Part A:
   `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
   `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
   reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
@@ -313,8 +313,15 @@ empty folders for future phases.
   smooth joins are enabled. It deliberately does not use overlap/crossfade, delay, or tempo
   filters, so source ranges, concat duration, A/V sync, and preserved `keep_gap_ms` breathing room
   are unchanged. Smooth-joins-off retains the exact legacy linear declick fades, rather than
-  removing the existing click protection. No settings UI or default ExportButton integration
-  exists yet.
+  removing the existing click protection. Part I locks the complete order to segment trim/PTS
+  reset → short join fades → non-overlapping concat → denoise → compression → loudnorm → 48 kHz
+  resample → final limiter. Resampling precedes limiting because loudnorm internally outputs at
+  192 kHz and the configured ceiling must be applied to the final encoded sample rate. The cleanup
+  tail contains no timing filters; limiter latency compensation remains enabled. Integration tests
+  combine multiple source ranges, captions, and image overlays and assert identical audio/video
+  EDL bounds, PTS resets, shared concat timing, final labels, and mappings. Thus cleanup does not
+  change project duration or desynchronize captions/overlays. No settings UI or default
+  ExportButton integration exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -652,8 +659,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `alimiter` with deterministic dB-to-amplitude conversion, auto-level disabled, and latency
     compensation enabled. Phase-10 Part H adds `curve=qsin` to the same short, clamped per-segment
     fades when smooth-join intent is enabled; it does not overlap or retime segments, while
-    smooth-joins-off preserves the legacy linear fades. Other enabled-filter translation remains
-    deferred. Float
+    smooth-joins-off preserves the legacy linear fades. Phase-10 Part I documents and regression-
+    locks the complete post-concat order; the tail contains no duration-changing filters and the
+    resample intentionally precedes the latency-compensated final limiter. Other enabled-filter
+    translation remains deferred. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
@@ -698,7 +707,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     light/strong `afftdn` settings, post-concat ordering, unchanged join fades, Part-E compressor
     parameters/ordering, Part-F configurable single-pass LUFS targets and loudness-off path, and
     Part-G configurable limiter ceiling/order/latency compensation, and Part-H curved/linear join
-    paths, tiny-segment clamp, and no-retiming invariants), run offline with no ffmpeg.
+    paths, tiny-segment clamp, and no-retiming invariants; and Part-I exact full-pipeline ordering
+    plus combined EDL/caption/image-overlay synchronization), run offline with no ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,
