@@ -95,6 +95,40 @@ describe('buildExportArgs', () => {
     expect(args[args.length - 1]).toBe('output.mp4')
   })
 
+  it('keeps the literal legacy multi-segment argument array byte-identical', () => {
+    const first = { start: 2.983, end: 5.5 }
+    const second = { start: 8.1, end: 12.04 }
+
+    expect(buildExportArgs([first, second])).toEqual([
+      '-i',
+      'input.mp4',
+      '-filter_complex',
+      '[0:v]trim=start=2.983:end=5.5,setpts=PTS-STARTPTS[v0];' +
+        `[0:a]atrim=start=2.983:end=5.5,asetpts=PTS-STARTPTS,${fadesFor(first.start, first.end)}[a0];` +
+        '[0:v]trim=start=8.1:end=12.04,setpts=PTS-STARTPTS[v1];' +
+        `[0:a]atrim=start=8.1:end=12.04,asetpts=PTS-STARTPTS,${fadesFor(second.start, second.end)}[a1];` +
+        '[v0][a0][v1][a1]concat=n=2:v=1:a=1[outv][ca];' +
+        `[ca]${MASTER_TAIL}[outa]`,
+      '-map',
+      '[outv]',
+      '-map',
+      '[outa]',
+      '-c:v',
+      'libx264',
+      '-preset',
+      'ultrafast',
+      '-crf',
+      '23',
+      '-pix_fmt',
+      'yuv420p',
+      '-c:a',
+      'aac',
+      '-b:a',
+      '128k',
+      'output.mp4',
+    ])
+  })
+
   it('skips concat for a single segment and labels the trim outputs directly', () => {
     const args = buildExportArgs([{ start: 0, end: 3.25 }])
     const filter = filterOf(args)

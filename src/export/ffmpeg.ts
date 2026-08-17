@@ -20,6 +20,21 @@ import {
   type ImageOverlayFilterGraph,
 } from './imageOverlays'
 import type { AudioCleanupPlan } from './audioCleanupPlan'
+import {
+  buildAudioCleanupFilterGraph,
+  buildAudioSegmentFilterChain,
+} from './audioCleanupFilters'
+export {
+  AUDIO_FADE_S,
+  LEGACY_LOUDNORM as LOUDNORM,
+  LEGACY_LOUDNORM_TRUE_PEAK_DB,
+  LIGHT_NOISE_REDUCTION,
+  LOUDNORM_LRA,
+  OUTPUT_SAMPLE_RATE,
+  SMOOTH_JOIN_FADE_CURVE,
+  SPEECH_COMPRESSOR,
+  STRONG_NOISE_REDUCTION,
+} from './audioCleanupFilters'
 
 /** A kept source range, in seconds. Structurally a subset of `Segment`. */
 export type ExportSegment = { start: number; end: number }
@@ -45,78 +60,18 @@ export interface BuildExportOptions {
   audioCleanup?: AudioCleanupPlan
 }
 
-// Phase-5.5 audio polish. A cut lands mid-waveform, so each segment gets a
-// ~15 ms fade at both edges — long enough to kill the click, far too short to
-// hear as a fade. Audio ONLY: the hard video cut is correct (a video fade at
-// every join reads as a slideshow).
-export const AUDIO_FADE_S = 0.015
-export const SMOOTH_JOIN_FADE_CURVE = 'qsin'
-// One-pass loudness normalization (EBU R128) mastering the whole mix, so levels
-// are consistent across joins and across exports.
-export const LOUDNORM = 'loudnorm=I=-16:TP=-1.5:LRA=11'
-export const LOUDNORM_LRA = 11
-export const LEGACY_LOUDNORM_TRUE_PEAK_DB = -1.5
-// loudnorm internally upsamples its output (192 kHz), which bloats the AAC
-// encode and chokes some players — pin the rate back in-graph right after it.
-export const OUTPUT_SAMPLE_RATE = 48000
-
-// Phase-10D conservative FFT denoising for steady broadband room noise. The
-// stock core is runtime-verified on first use because ffmpeg.wasm builds can
-// omit native filters. Light stays deliberately below afftdn's 12 dB default;
-// strong uses that default reduction with a less-sensitive floor. Noise-floor
-// tracking stays off so the filter does not chase changing speech as noise.
-export const LIGHT_NOISE_REDUCTION = 'afftdn=nr=6:nf=-45'
-export const STRONG_NOISE_REDUCTION = 'afftdn=nr=12:nf=-40'
+// Runtime capability fallbacks remain here because they depend on the actual
+// FFmpeg instance and its log stream. Pure filter syntax lives exclusively in
+// audioCleanupFilters.ts.
 const NOISE_REDUCTION_UNAVAILABLE_NOTE =
   'This ffmpeg core has no afftdn filter — exported without noise reduction.'
 // The production app has one shared FFmpeg instance. A WeakMap also keeps
 // isolated mocked/test instances independent while caching the runtime result.
 const afftdnSupport = new WeakMap<FFmpeg, boolean>()
 
-// Phase-10E speech-oriented downward compression. 0.125 amplitude is roughly
-// -18 dBFS; a moderate 3:1 ratio narrows emphasized peaks without a broadcast-
-// style squash. The documented 20 ms attack preserves consonant transients and
-// 250 ms release avoids rapid pumping. RMS detection and a soft knee make gain
-// changes gradual; maximum channel linking preserves stereo balance. Makeup is
-// deliberately 1 (0 dB), avoiding new clipping before downstream loudness work.
-export const SPEECH_COMPRESSOR =
-  'acompressor=threshold=0.125:ratio=3:attack=20:release=250:' +
-  'makeup=1:knee=2.82843:link=maximum:detection=rms'
 const VOICE_LEVELING_UNAVAILABLE_NOTE =
   'This ffmpeg core has no acompressor filter — exported without voice leveling.'
 const acompressorSupport = new WeakMap<FFmpeg, boolean>()
-
-function loudnormForTarget(targetLufs: number, truePeakDb: number): string {
-  // Plans built through buildAudioCleanupPlan are already clamped. Keep this
-  // pure export boundary defensive for manually constructed typed values too.
-  const target = Number.isFinite(targetLufs)
-    ? Math.min(-10, Math.max(-24, targetLufs))
-    : -16
-  const truePeak = Number.isFinite(truePeakDb)
-    ? Math.min(0, Math.max(-6, truePeakDb))
-    : -1
-  return (
-    `loudnorm=I=${target}:TP=${truePeak}:` +
-    `LRA=${LOUDNORM_LRA}`
-  )
-}
-
-function peakLimitAmplitude(truePeakDb: number): string {
-  const clamped = Number.isFinite(truePeakDb)
-    ? Math.min(0, Math.max(-6, truePeakDb))
-    : -1
-  return Math.pow(10, clamped / 20)
-    .toFixed(9)
-    .replace(/\.?0+$/, '')
-}
-
-function limiterForTarget(truePeakDb: number): string {
-  return (
-    `alimiter=limit=${peakLimitAmplitude(truePeakDb)}:` +
-    'attack=5:release=50:level=0:latency=1'
-  )
-}
-
 const PEAK_LIMITER_UNAVAILABLE_NOTE =
   'This ffmpeg core has no compatible alimiter filter — exported without the final peak limiter.'
 const alimiterSupport = new WeakMap<FFmpeg, boolean>()
@@ -189,44 +144,10 @@ export function buildExportArgs(
     throw new Error('Cannot export: the EDL has no kept segments.')
   }
 
-  const masterFilters: string[] = []
-  if (
-    options.audioCleanup?.enabled === true &&
-    options.audioCleanup.noiseReduction.enabled
-  ) {
-    masterFilters.push(
-      options.audioCleanup.noiseReduction.strength === 'strong'
-        ? STRONG_NOISE_REDUCTION
-        : LIGHT_NOISE_REDUCTION,
-    )
-  }
-  if (
-    options.audioCleanup?.enabled === true &&
-    options.audioCleanup.voiceLeveling.enabled
-  ) {
-    masterFilters.push(SPEECH_COMPRESSOR)
-  }
-  const cleanupEnabled = options.audioCleanup?.enabled === true
-  const loudnessEnabled = cleanupEnabled
-    ? options.audioCleanup?.loudness.enabled === true
-    : true
-  if ((options.loudnorm ?? true) && loudnessEnabled) {
-    masterFilters.push(
-      cleanupEnabled
-        ? loudnormForTarget(
-            options.audioCleanup?.loudness.targetLufs ?? -16,
-            options.audioCleanup?.loudness.truePeakDb ?? -1,
-          )
-        : LOUDNORM,
-    )
-  }
-  masterFilters.push(`aresample=${OUTPUT_SAMPLE_RATE}`)
-  if (cleanupEnabled && (options.peakLimiter ?? true)) {
-    masterFilters.push(
-      limiterForTarget(options.audioCleanup?.loudness.truePeakDb ?? -1),
-    )
-  }
-  const master = masterFilters.join(',')
+  const audioFilters = buildAudioCleanupFilterGraph(options.audioCleanup, {
+    loudnorm: options.loudnorm,
+    peakLimiter: options.peakLimiter,
+  })
 
   const burn =
     options.srtFile !== undefined
@@ -244,25 +165,19 @@ export function buildExportArgs(
 
   const n = segments.length
   const clauses: string[] = []
-  const useSmoothJoinCurve =
-    options.audioCleanup?.enabled === true &&
-    options.audioCleanup.smoothJoins.enabled
   for (let i = 0; i < n; i++) {
     const { start, end } = segments[i]
     // n === 1: label directly as the assembled output so no concat is needed.
     const vLabel = n === 1 ? assembledVideoLabel : `v${i}`
-    const segDur = end - start
-    const fade = Math.min(AUDIO_FADE_S, segDur / 2)
-    const fadeCurve = useSmoothJoinCurve
-      ? `:curve=${SMOOTH_JOIN_FADE_CURVE}`
-      : ''
-    const audioChain =
-      `atrim=start=${start}:end=${end},asetpts=PTS-STARTPTS,` +
-      `afade=t=in:st=0:d=${fade}${fadeCurve},` +
-      `afade=t=out:st=${segDur - fade}:d=${fade}${fadeCurve}`
+    const audioChain = buildAudioSegmentFilterChain(
+      { start, end },
+      audioFilters.segmentFadeCurve,
+    )
     clauses.push(`[0:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS[${vLabel}]`)
     clauses.push(
-      n === 1 ? `[0:a]${audioChain},${master}[outa]` : `[0:a]${audioChain}[a${i}]`,
+      n === 1
+        ? `[0:a]${audioChain},${audioFilters.filterChain}[outa]`
+        : `[0:a]${audioChain}[a${i}]`,
     )
   }
 
@@ -271,7 +186,7 @@ export function buildExportArgs(
     const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('')
     filter +=
       `;${concatInputs}concat=n=${n}:v=1:a=1` +
-      `[${assembledVideoLabel}][ca];[ca]${master}[outa]`
+      `[${assembledVideoLabel}][ca];[ca]${audioFilters.filterChain}[outa]`
   }
   if (overlayGraph !== null) {
     filter += `;${overlayGraph.filterComplex}`

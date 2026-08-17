@@ -263,10 +263,10 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–I (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–J (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
-  EDL joins, and locked filter ordering. Part A:
+  EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
   `src/export/audioCleanupSettings.ts` defines `NoiseReductionLevel`,
   `AudioCleanupSettings`, and the recommended enabled-by-default configuration (light noise
   reduction, voice leveling, -16 LUFS normalization, -1 dB true-peak limit, and smooth joins).
@@ -320,7 +320,16 @@ empty folders for future phases.
   tail contains no timing filters; limiter latency compensation remains enabled. Integration tests
   combine multiple source ranges, captions, and image overlays and assert identical audio/video
   EDL bounds, PTS resets, shared concat timing, final labels, and mappings. Thus cleanup does not
-  change project duration or desynchronize captions/overlays. No settings UI or default
+  change project duration or desynchronize captions/overlays. Part J extracts every audio-filter
+  string and configurable-number formatter into pure `src/export/audioCleanupFilters.ts`.
+  `buildAudioCleanupFilterGraph` returns a deterministic label-free post-concat chain plus the
+  internal fade curve, matching the existing single/multi-segment architecture without adding
+  labels or changing disabled arrays; `buildAudioSegmentFilterChain` owns the segment-local trim,
+  PTS reset, and fades. Labels remain stable in `buildExportArgs` (`[ca]`/`[outa]`). Numeric intent
+  is bounded and serialized with fixed locale-independent decimals (no exponent or negative zero),
+  and malformed runtime values cannot inject filter syntax. The module has no React, DOM, browser,
+  or FFmpeg-instance dependency and is tested directly in Node; `ffmpeg.ts` retains runtime
+  capability handling and re-exports prior public constants. No settings UI or default
   ExportButton integration exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
@@ -616,6 +625,14 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     contains no FFmpeg syntax or browser/runtime objects.
   - `audioCleanupPlan.test.ts` — unit coverage for default mapping, master and per-operation
     disabling, validated targets, determinism, and input immutability.
+  - `audioCleanupFilters.ts` — Phase-10 Part-J pure FFmpeg audio builder. It owns the legacy and
+    cleanup filter constants, bounded/locale-independent numeric serialization, deterministic
+    post-concat chain construction, and segment-local trim/fade construction. It returns no new
+    labels because `buildExportArgs` retains the established `[ca]`/`[outa]` orchestration.
+  - `audioCleanupFilters.test.ts` — offline coverage for the exact disabled chain, complete order,
+    each stage independently, runtime fallback overrides, bounds/no-exponent/no-negative-zero
+    formatting, malformed-value injection rejection, determinism, immutability, legacy segment
+    strings, smooth curves, and tiny-segment clamping.
   - `imageOverlays.ts` — pure export adaptation: derives removed source ranges from kept EDL
     segments, calls `buildImageOverlayRenderPlan`, and builds deterministic image-input/filter
     metadata. Generated numeric VFS names and `ov*` labels keep user filenames/IDs out of ffmpeg
@@ -661,8 +678,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     fades when smooth-join intent is enabled; it does not overlap or retime segments, while
     smooth-joins-off preserves the legacy linear fades. Phase-10 Part I documents and regression-
     locks the complete post-concat order; the tail contains no duration-changing filters and the
-    resample intentionally precedes the latency-compensated final limiter. Other enabled-filter
-    translation remains deferred. Float
+    resample intentionally precedes the latency-compensated final limiter. Phase-10 Part J moves
+    this syntax into `buildAudioCleanupFilterGraph` and segment trim/fade syntax into
+    `buildAudioSegmentFilterChain`; `buildExportArgs` only composes their pure results with its
+    stable labels, video, captions, and overlays. Other enabled-filter translation remains
+    deferred. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
