@@ -24,6 +24,11 @@ import {
   buildAudioCleanupFilterGraph,
   buildAudioSegmentFilterChain,
 } from './audioCleanupFilters'
+import {
+  canAttemptAudioFilter,
+  getAudioFilterCapabilities,
+  recordAudioFilterSupport,
+} from './audioFilterCapabilities'
 export {
   AUDIO_FADE_S,
   LEGACY_LOUDNORM as LOUDNORM,
@@ -60,21 +65,17 @@ export interface BuildExportOptions {
   audioCleanup?: AudioCleanupPlan
 }
 
-// Runtime capability fallbacks remain here because they depend on the actual
-// FFmpeg instance and its log stream. Pure filter syntax lives exclusively in
-// audioCleanupFilters.ts.
+// Runtime failure classification and fallback orchestration remain here because
+// they depend on the actual FFmpeg log stream. Per-instance capability state is
+// isolated in audioFilterCapabilities.ts; pure syntax is in audioCleanupFilters.ts.
 const NOISE_REDUCTION_UNAVAILABLE_NOTE =
   'This ffmpeg core has no afftdn filter — exported without noise reduction.'
-// The production app has one shared FFmpeg instance. A WeakMap also keeps
-// isolated mocked/test instances independent while caching the runtime result.
-const afftdnSupport = new WeakMap<FFmpeg, boolean>()
-
 const VOICE_LEVELING_UNAVAILABLE_NOTE =
   'This ffmpeg core has no acompressor filter — exported without voice leveling.'
-const acompressorSupport = new WeakMap<FFmpeg, boolean>()
+const LOUDNESS_NORMALIZATION_UNAVAILABLE_NOTE =
+  'This ffmpeg core has no loudnorm filter — exported without loudness normalization.'
 const PEAK_LIMITER_UNAVAILABLE_NOTE =
   'This ffmpeg core has no compatible alimiter filter — exported without the final peak limiter.'
-const alimiterSupport = new WeakMap<FFmpeg, boolean>()
 
 // Phase-6 caption burn. libass renders the SRT via the `subtitles` filter,
 // styled entirely through force_style (ASS colors are &HAABBGGRR): white bold
@@ -258,8 +259,9 @@ export async function runExport(
           },
         )
 
-  // Accumulate ffmpeg's stderr so a failed exec can be classified: only a
-  // missing-loudnorm failure triggers the fallback re-encode.
+  // Accumulate ffmpeg's stderr so a failed exec can be classified. Only precise,
+  // filter-specific failures trigger a fallback; unrelated encode errors remain
+  // fatal and do not change the cached capability state.
   const logs: string[] = []
   const onLog = (event: { message: string }): void => {
     logs.push(event.message)
@@ -340,22 +342,26 @@ export async function runExport(
       await ffmpeg.writeFile(SRT_NAME, new TextEncoder().encode(buildSrt(captions)))
     }
 
+    const capabilities = getAudioFilterCapabilities(ffmpeg)
     const noiseRequested =
       audioCleanup?.enabled === true &&
       audioCleanup.noiseReduction.enabled
     let withNoiseReduction =
-      noiseRequested && afftdnSupport.get(ffmpeg) !== false
+      noiseRequested && canAttemptAudioFilter(capabilities, 'afftdn')
     const voiceLevelingRequested =
       audioCleanup?.enabled === true && audioCleanup.voiceLeveling.enabled
     let withVoiceLeveling =
-      voiceLevelingRequested && acompressorSupport.get(ffmpeg) !== false
-    let withLoudnorm =
+      voiceLevelingRequested &&
+      canAttemptAudioFilter(capabilities, 'acompressor')
+    const loudnormRequested =
       audioCleanup?.enabled === true
         ? audioCleanup.loudness.enabled
         : true
+    let withLoudnorm =
+      loudnormRequested && canAttemptAudioFilter(capabilities, 'loudnorm')
     const peakLimiterRequested = audioCleanup?.enabled === true
     let withPeakLimiter =
-      peakLimiterRequested && alimiterSupport.get(ffmpeg) !== false
+      peakLimiterRequested && canAttemptAudioFilter(capabilities, 'alimiter')
     const fallbackNotes: string[] = []
 
     if (noiseRequested && !withNoiseReduction) {
@@ -363,6 +369,9 @@ export async function runExport(
     }
     if (voiceLevelingRequested && !withVoiceLeveling) {
       fallbackNotes.push(VOICE_LEVELING_UNAVAILABLE_NOTE)
+    }
+    if (loudnormRequested && !withLoudnorm) {
+      fallbackNotes.push(LOUDNESS_NORMALIZATION_UNAVAILABLE_NOTE)
     }
     if (peakLimiterRequested && !withPeakLimiter) {
       fallbackNotes.push(PEAK_LIMITER_UNAVAILABLE_NOTE)
@@ -379,13 +388,16 @@ export async function runExport(
           withPeakLimiter,
         )
         if (withNoiseReduction) {
-          afftdnSupport.set(ffmpeg, true)
+          recordAudioFilterSupport(ffmpeg, 'afftdn', true)
         }
         if (withVoiceLeveling) {
-          acompressorSupport.set(ffmpeg, true)
+          recordAudioFilterSupport(ffmpeg, 'acompressor', true)
+        }
+        if (withLoudnorm) {
+          recordAudioFilterSupport(ffmpeg, 'loudnorm', true)
         }
         if (withPeakLimiter) {
-          alimiterSupport.set(ffmpeg, true)
+          recordAudioFilterSupport(ffmpeg, 'alimiter', true)
         }
       } catch (err) {
         const log = logs.join('\n')
@@ -397,28 +409,27 @@ export async function runExport(
           )
         }
         if (withNoiseReduction && isMissingAfftdn(log)) {
-          afftdnSupport.set(ffmpeg, false)
+          recordAudioFilterSupport(ffmpeg, 'afftdn', false)
           withNoiseReduction = false
           fallbackNotes.push(NOISE_REDUCTION_UNAVAILABLE_NOTE)
           continue
         }
         if (withVoiceLeveling && isMissingAcompressor(log)) {
-          acompressorSupport.set(ffmpeg, false)
+          recordAudioFilterSupport(ffmpeg, 'acompressor', false)
           withVoiceLeveling = false
           fallbackNotes.push(VOICE_LEVELING_UNAVAILABLE_NOTE)
           continue
         }
         if (withPeakLimiter && isUnavailableAlimiter(log)) {
-          alimiterSupport.set(ffmpeg, false)
+          recordAudioFilterSupport(ffmpeg, 'alimiter', false)
           withPeakLimiter = false
           fallbackNotes.push(PEAK_LIMITER_UNAVAILABLE_NOTE)
           continue
         }
         if (withLoudnorm && isMissingLoudnorm(log)) {
+          recordAudioFilterSupport(ffmpeg, 'loudnorm', false)
           withLoudnorm = false
-          fallbackNotes.push(
-            'This ffmpeg core has no loudnorm filter — exported without loudness normalization.',
-          )
+          fallbackNotes.push(LOUDNESS_NORMALIZATION_UNAVAILABLE_NOTE)
           continue
         }
         throw err

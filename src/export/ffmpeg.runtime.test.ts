@@ -6,6 +6,7 @@ import type { OverlayAsset } from '../overlays/types'
 import { runExport } from './ffmpeg'
 import { buildAudioCleanupPlan } from './audioCleanupPlan'
 import { DEFAULT_AUDIO_CLEANUP_SETTINGS } from './audioCleanupSettings'
+import { getAudioFilterCapabilities } from './audioFilterCapabilities'
 
 vi.mock('@ffmpeg/util', () => ({ fetchFile: vi.fn() }))
 
@@ -460,6 +461,126 @@ describe('runExport with peak limiting', () => {
     )
     expect(secondNote).toHaveBeenCalledWith(
       expect.stringContaining('exported without the final peak limiter'),
+    )
+  })
+})
+
+describe('runExport with cached filter capabilities', () => {
+  it('records only filters proven by a successful real encode', async () => {
+    const fake = createFakeFfmpeg()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      undefined,
+      undefined,
+      cleanup,
+    )
+
+    expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
+      afftdn: 'supported',
+      acompressor: 'supported',
+      loudnorm: 'supported',
+      alimiter: 'supported',
+      acrossfade: 'unknown',
+    })
+  })
+
+  it('leaves unrequested filters unknown', async () => {
+    const fake = createFakeFfmpeg()
+    const cleanup = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'off',
+      voiceLeveling: false,
+      loudnessNormalization: false,
+    })
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      undefined,
+      undefined,
+      cleanup,
+    )
+
+    expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
+      afftdn: 'unknown',
+      acompressor: 'unknown',
+      loudnorm: 'unknown',
+      alimiter: 'supported',
+      acrossfade: 'unknown',
+    })
+  })
+
+  it('does not classify an unrelated encode failure as unsupported', async () => {
+    const fake = createFakeFfmpeg()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog('Invalid data found when processing input')
+      return 1
+    })
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+      ),
+    ).rejects.toThrow('ffmpeg export exited with code 1.')
+
+    expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
+      afftdn: 'unknown',
+      acompressor: 'unknown',
+      loudnorm: 'unknown',
+      alimiter: 'unknown',
+      acrossfade: 'unknown',
+    })
+  })
+
+  it('does not retry loudnorm after this FFmpeg instance proved it unsupported', async () => {
+    const fake = createFakeFfmpeg()
+    const firstNote = vi.fn()
+    const secondNote = vi.fn()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      if (filterOfExec(args).includes('loudnorm=')) {
+        fake.emitLog("No such filter: 'loudnorm'")
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      firstNote,
+    )
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      secondNote,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(3)
+    expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('loudnorm=')
+    expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('loudnorm=')
+    expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('loudnorm=')
+    expect(firstNote).toHaveBeenCalledWith(
+      expect.stringContaining('exported without loudness normalization'),
+    )
+    expect(secondNote).toHaveBeenCalledWith(
+      expect.stringContaining('exported without loudness normalization'),
     )
   })
 })

@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–J (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–K (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -328,9 +328,18 @@ empty folders for future phases.
   PTS reset, and fades. Labels remain stable in `buildExportArgs` (`[ca]`/`[outa]`). Numeric intent
   is bounded and serialized with fixed locale-independent decimals (no exponent or negative zero),
   and malformed runtime values cannot inject filter syntax. The module has no React, DOM, browser,
-  or FFmpeg-instance dependency and is tested directly in Node; `ffmpeg.ts` retains runtime
-  capability handling and re-exports prior public constants. No settings UI or default
-  ExportButton integration exists yet.
+  or FFmpeg-instance dependency and is tested directly in Node; `ffmpeg.ts` re-exports prior
+  public constants. Part K adds `src/export/audioFilterCapabilities.ts`, a lightweight tri-state
+  (`unknown`/`supported`/`unsupported`) capability cache keyed by the already-loaded FFmpeg
+  instance. Importing or reading it cannot create/load FFmpeg, and it executes no separate probe:
+  the first requested real encode verifies the exact filter invocation, successful filters are
+  cached, and precisely classified missing/incompatible filters are cached before the existing
+  warned fallback retry. Generic media/encode failures remain fatal and do not alter capability
+  state. Later exports skip known-unsupported filters without probing again. `acrossfade` remains
+  an exposed candidate but deliberately unknown because Part H uses non-overlapping `afade=qsin`,
+  not crossfades. Focused tests cover defaults, updates, immutable snapshots, per-instance
+  isolation, actual-use recording, unrequested filters, unrelated failures, and cached loudnorm.
+  No settings UI or default ExportButton integration exists yet.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -633,6 +642,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     each stage independently, runtime fallback overrides, bounds/no-exponent/no-negative-zero
     formatting, malformed-value injection rejection, determinism, immutability, legacy segment
     strings, smooth curves, and tiny-segment clamping.
+  - `audioFilterCapabilities.ts` — Phase-10 Part-K lazy-safe, per-FFmpeg-instance tri-state cache
+    for candidate audio filters. It learns from actual requested encodes instead of running a
+    separate `-filters` probe, allowing the runtime to skip verified-unsupported stages later.
+  - `audioFilterCapabilities.test.ts` — offline coverage for unknown defaults, attempt decisions,
+    isolated updates, per-instance caching, and immutable returned snapshots.
   - `imageOverlays.ts` — pure export adaptation: derives removed source ranges from kept EDL
     segments, calls `buildImageOverlayRenderPlan`, and builds deterministic image-input/filter
     metadata. Generated numeric VFS names and `ov*` labels keep user filenames/IDs out of ffmpeg
@@ -681,8 +695,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     resample intentionally precedes the latency-compensated final limiter. Phase-10 Part J moves
     this syntax into `buildAudioCleanupFilterGraph` and segment trim/fade syntax into
     `buildAudioSegmentFilterChain`; `buildExportArgs` only composes their pure results with its
-    stable labels, video, captions, and overlays. Other enabled-filter translation remains
-    deferred. Float
+    stable labels, video, captions, and overlays. Phase-10 Part K consults the lazy-safe
+    per-instance capability cache after staging and records only filters attempted in a successful
+    encode; known-unsupported filters are skipped with the established warning, while unknown
+    filters are verified by their first real use. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
@@ -700,7 +716,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     missing `acompressor`, caching support per instance and retrying without voice leveling;
     fallback messages are consolidated into one final `onNote` call per export. Part G likewise
     runtime-verifies and caches `alimiter`; missing-filter or incompatible-option failures retry
-    without the limiter while retaining the rest of cleanup.
+    without the limiter while retaining the rest of cleanup. Part K consolidates those results
+    plus loudnorm into the shared tri-state cache; precise missing-filter failures downgrade, the
+    limiter also recognizes its fixed option incompatibility, and unrecognized failures stay
+    fatal rather than silently removing cleanup.
     The engine instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
@@ -744,7 +763,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     staging failure. Phase 10D adds missing-`afftdn` retry/warning/cache coverage and verifies that
     afftdn and loudnorm fallbacks can occur sequentially in one export. Phase 10E adds cached
     missing-`acompressor` retry and warning coverage. Phase 10G adds cached missing-`alimiter`
-    retry and warning coverage.
+    retry and warning coverage. Phase 10K adds tri-state actual-use recording, unrequested-filter
+    preservation, unrelated-failure safety, and cached missing-`loudnorm` coverage.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,
