@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–K (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–L (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -339,7 +339,15 @@ empty folders for future phases.
   an exposed candidate but deliberately unknown because Part H uses non-overlapping `afade=qsin`,
   not crossfades. Focused tests cover defaults, updates, immutable snapshots, per-instance
   isolation, actual-use recording, unrequested filters, unrelated failures, and cached loudnorm.
-  No settings UI or default ExportButton integration exists yet.
+  Part L adds a compact, accessible `AudioCleanupControls` fieldset to the existing export section.
+  Local React state starts from the recommended defaults and exposes only the master switch,
+  Off/Light/Strong denoising, voice leveling, smooth joins, -14/-16/-18 LUFS presets, and a bounded
+  dB peak input—never compressor/filter internals. Strong denoising shows a concise voice-quality
+  warning. Turning cleanup off preserves but disables the detail choices; all settings lock while
+  FFmpeg is loading or encoding. Node-side server-render tests cover defaults/options,
+  internal-detail omission, the Strong warning, master gating, preserved values, and the busy
+  state. Per the requested part boundary, comparison preview (Part M) and passing this state
+  through `buildAudioCleanupPlan` into final export (Part N) remain deferred.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -647,6 +655,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     separate `-filters` probe, allowing the runtime to skip verified-unsupported stages later.
   - `audioFilterCapabilities.test.ts` — offline coverage for unknown defaults, attempt decisions,
     isolated updates, per-instance caching, and immutable returned snapshots.
+  - `AudioCleanupControls.tsx` — Phase-10 Part-L controlled, accessible export-settings fieldset.
+    It normalizes edits through the shared settings boundary and exposes only simple user intent;
+    nested values remain intact when the master switch is off.
+  - `AudioCleanupControls.test.tsx` — server-rendered UI coverage for recommended defaults and
+    presets, the Strong warning, absence of low-level parameters, master/detail disabling, and
+    busy-state locking.
   - `imageOverlays.ts` — pure export adaptation: derives removed source ranges from kept EDL
     segments, calls `buildImageOverlayRenderPlan`, and builds deterministic image-input/filter
     metadata. Generated numeric VFS names and `ov*` labels keep user filenames/IDs out of ffmpeg
@@ -733,7 +747,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     captions exist) passes the prepared captions to `runExport` when on and `[]` when off
     (no font/SRT staged; the Phase 5.5-identical no-srtFile graph). Part J also derives the current
     overlay render plan from the EDL/assets/layers and passes it plus source dimensions to
-    `runExport`; FFmpeg filter construction remains outside React.
+    `runExport`; FFmpeg filter construction remains outside React. Phase-10 Part L renders the
+    audio-cleanup fieldset and owns its normalized local settings state, disabling edits during
+    loading/encoding; Part N will pass its derived plan to `runExport`.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off

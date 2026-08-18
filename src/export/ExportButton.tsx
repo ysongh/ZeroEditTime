@@ -8,7 +8,8 @@
 // "Download SRT" button that serializes the same prepared output-time captions
 // the burn would use — so the .srt always lines up with the exported .mp4.
 // Phase 9A Part J also projects current image overlays through the EDL and hands
-// that data to the non-React export layer for compositing.
+// that data to the non-React export layer for compositing. Phase 10 Part L adds
+// compact local audio-cleanup settings; final runExport wiring belongs to Part N.
 
 import { useState } from 'react'
 import type { ChangeEvent } from 'react'
@@ -18,6 +19,11 @@ import { buildSrt, prepareCaptionsForExport } from '../captions/captions'
 import { getFfmpeg, loadFfmpeg } from '../ffmpeg/engine'
 import { buildImageOverlayRenderPlanForEdl } from './imageOverlays'
 import { runExport } from './ffmpeg'
+import AudioCleanupControls from './AudioCleanupControls'
+import {
+  DEFAULT_AUDIO_CLEANUP_SETTINGS,
+  type AudioCleanupSettings,
+} from './audioCleanupSettings'
 
 type ExportButtonProps = {
   edl: EDL
@@ -56,6 +62,12 @@ export default function ExportButton({
   // video as before; unchecked exports a clean video (the no-srtFile graph,
   // byte-identical to Phase 5.5) for the video-plus-sidecar-SRT workflow.
   const [burnCaptions, setBurnCaptions] = useState(true)
+  // Export-only intent stays local to this mounted editor. Part L owns the UI;
+  // Part N will translate this value into the plan passed to runExport.
+  const [audioCleanupSettings, setAudioCleanupSettings] =
+    useState<AudioCleanupSettings>(() => ({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+    }))
 
   const hasSegments = edl.segments.length > 0
   const canExport = file !== null && hasSegments && phase === 'idle'
@@ -153,6 +165,12 @@ export default function ExportButton({
 
   return (
     <div style={{ marginTop: 16, textAlign: 'center' }}>
+      <AudioCleanupControls
+        settings={audioCleanupSettings}
+        disabled={phase !== 'idle'}
+        onChange={setAudioCleanupSettings}
+      />
+
       <button type="button" onClick={() => void handleExport()} disabled={!canExport}>
         {label}
       </button>

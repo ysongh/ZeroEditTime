@@ -109,3 +109,73 @@ code {
   padding: 4px 8px;
   background: var(--code-bg);
 }
+
+.audio-cleanup-controls {
+  width: min(100%, 420px);
+  box-sizing: border-box;
+  margin: 0 auto 12px;
+  padding: 10px 14px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  text-align: left;
+}
+
+.audio-cleanup-controls legend {
+  padding: 0 6px;
+  color: var(--text-h);
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.audio-cleanup-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-cleanup-master {
+  color: var(--text-h);
+  font-weight: 500;
+}
+
+.audio-cleanup-details {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  font-size: 14px;
+}
+
+.audio-cleanup-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.audio-cleanup-row select,
+.audio-cleanup-row input[type='number'] {
+  box-sizing: border-box;
+  width: 128px;
+  font: inherit;
+}
+
+.audio-cleanup-number {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.audio-cleanup-number input[type='number'] {
+  width: 96px;
+}
+
+.audio-cleanup-warning {
+  padding: 7px 9px;
+  border-radius: 6px;
+  color: var(--text-h);
+  background: var(--accent-bg);
+  font-size: 13px;
+  line-height: 1.35;
+}
