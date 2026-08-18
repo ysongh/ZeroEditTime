@@ -19,6 +19,13 @@ function filterOf(args: string[]): string {
   return args[i + 1]
 }
 
+/** Return every explicitly mapped output in command order. */
+function mappedStreams(args: string[]): string[] {
+  return args.flatMap((arg, index) =>
+    arg === '-map' && args[index + 1] !== undefined ? [args[index + 1]] : [],
+  )
+}
+
 /**
  * The expected per-segment declick fades, computed with the SAME float
  * arithmetic as the implementation (dur = end - start; out starts at dur - fade)
@@ -270,7 +277,7 @@ describe('buildExportArgs', () => {
     }
   })
 
-  it('adds no cleanup filters when every individual operation is disabled', () => {
+  it('keeps one audio output when individually toggleable operations are disabled', () => {
     const noOpPlan = buildAudioCleanupPlan({
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
       enabled: true,
@@ -284,16 +291,16 @@ describe('buildExportArgs', () => {
       { start: 6, end: 9.5 },
     ]
 
-    const filter = filterOf(
-      buildExportArgs(segments, 'input.mp4', 'output.mp4', {
-        audioCleanup: noOpPlan,
-      }),
-    )
+    const args = buildExportArgs(segments, 'input.mp4', 'output.mp4', {
+      audioCleanup: noOpPlan,
+    })
+    const filter = filterOf(args)
 
     expect(filter).toContain(`[ca]aresample=48000,${DEFAULT_LIMITER}[outa]`)
     expect(filter).not.toContain('afftdn=')
     expect(filter).not.toContain('acompressor=')
     expect(filter).not.toContain('loudnorm=')
+    expect(mappedStreams(args)).toEqual(['[outv]', '[outa]'])
   })
 
   it('adds conservative light noise reduction before the legacy mastering tail', () => {
@@ -528,12 +535,18 @@ describe('buildExportArgs', () => {
     expect(filter).toContain('concat=n=2:v=1:a=1[ovbase][ca]')
     const postConcatAudio = filter.slice(filter.indexOf(';[ca]'))
     expect(postConcatAudio).not.toMatch(/\b(?:atempo|adelay|apad|atrim)\b/)
+    expect(postConcatAudio).toContain(
+      `[ca]${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${DEFAULT_CLEANUP_TAIL}[outa]`,
+    )
+    expect(postConcatAudio.match(/afftdn=/g)).toHaveLength(1)
+    expect(postConcatAudio.match(/acompressor=/g)).toHaveLength(1)
+    expect(postConcatAudio.match(/loudnorm=/g)).toHaveLength(1)
+    expect(postConcatAudio.match(/aresample=/g)).toHaveLength(1)
+    expect(postConcatAudio.match(/alimiter=/g)).toHaveLength(1)
     expect(filter.indexOf('[ovbase]null[ovout]')).toBeLessThan(
       filter.indexOf('[ovout]subtitles='),
     )
-    expect(args).toEqual(
-      expect.arrayContaining(['-map', '[outv]', '-map', '[outa]']),
-    )
+    expect(mappedStreams(args)).toEqual(['[outv]', '[outa]'])
   })
 })
 

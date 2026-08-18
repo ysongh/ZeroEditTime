@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–L (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–N (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -346,8 +346,25 @@ empty folders for future phases.
   warning. Turning cleanup off preserves but disables the detail choices; all settings lock while
   FFmpeg is loading or encoding. Node-side server-render tests cover defaults/options,
   internal-detail omission, the Strong warning, master gating, preserved values, and the busy
-  state. Per the requested part boundary, comparison preview (Part M) and passing this state
-  through `buildAudioCleanupPlan` into final export (Part N) remain deferred.
+  state. Part M intentionally defers Original/Cleaned comparison under the phase specification's
+  permitted limitation. The app has one shared but currently unserialized FFmpeg instance;
+  transcription and export own separate busy state, use fixed VFS input/output names, and attach
+  per-operation listeners to the same log/progress emitter. A third preview job could therefore
+  overwrite, read, or delete another operation's files and mix progress or fallback-classification
+  logs. Reusing `runExport` would unnecessarily H.264-encode a video, while `extractAudio`'s mono
+  16 kHz transcription output would not be a truthful quality comparison. A safe implementation
+  first needs centralized FFmpeg job serialization, unique per-job paths, and an on-demand bounded
+  audio-only renderer with cleanup/fallback parity, player URL cleanup, and stale-result handling.
+  No disabled or misleading comparison controls were added; live/generated comparison is not
+  available. Part N completes final-export integration: `ExportButton` snapshots the current
+  Part-L settings at click time, normalizes them through `buildAudioCleanupPlan`, and passes the
+  resulting plan as the existing final `runExport` argument. The default UI now produces the full
+  cleanup chain; turning the master switch off preserves the byte-identical legacy audio path.
+  Captions-to-burn, image-overlay projection, source EDL segments, lazy loading, progress/error
+  listeners, codec/container settings, and output download remain on their existing branches.
+  Combined graph regressions require exactly two explicit mappings—processed `[outv]` and one
+  processed `[outa]`—with no original or duplicate audio mapping; the path with every individually
+  toggleable operation off also retains exactly one `[outa]` mapping.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -749,7 +766,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     overlay render plan from the EDL/assets/layers and passes it plus source dimensions to
     `runExport`; FFmpeg filter construction remains outside React. Phase-10 Part L renders the
     audio-cleanup fieldset and owns its normalized local settings state, disabling edits during
-    loading/encoding; Part N will pass its derived plan to `runExport`.
+    loading/encoding. Part M deliberately adds no comparison control: a safe on-demand audio
+    preview requires shared-engine job serialization and a bounded audio-only render path that do
+    not exist yet. Phase-10 Part N builds the plan from those settings at export click time and
+    passes it to `runExport` without changing caption/overlay inputs, EDL ranges, progress/error
+    handling, lazy engine loading, or download behavior.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off
@@ -763,7 +784,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     parameters/ordering, Part-F configurable single-pass LUFS targets and loudness-off path, and
     Part-G configurable limiter ceiling/order/latency compensation, and Part-H curved/linear join
     paths, tiny-segment clamp, and no-retiming invariants; and Part-I exact full-pipeline ordering
-    plus combined EDL/caption/image-overlay synchronization), run offline with no ffmpeg.
+    plus combined EDL/caption/image-overlay synchronization; Part N additionally locks the full
+    cleanup chain and exactly one processed-audio mapping for the combined path, plus one audio
+    mapping when every individually toggleable operation is off), run offline with no ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,

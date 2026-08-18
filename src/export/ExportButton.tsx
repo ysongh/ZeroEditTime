@@ -9,7 +9,8 @@
 // the burn would use — so the .srt always lines up with the exported .mp4.
 // Phase 9A Part J also projects current image overlays through the EDL and hands
 // that data to the non-React export layer for compositing. Phase 10 Part L adds
-// compact local audio-cleanup settings; final runExport wiring belongs to Part N.
+// compact local audio-cleanup settings; Part N passes their validated plan into
+// the existing final-export path.
 
 import { useState } from 'react'
 import type { ChangeEvent } from 'react'
@@ -24,6 +25,7 @@ import {
   DEFAULT_AUDIO_CLEANUP_SETTINGS,
   type AudioCleanupSettings,
 } from './audioCleanupSettings'
+import { buildAudioCleanupPlan } from './audioCleanupPlan'
 
 type ExportButtonProps = {
   edl: EDL
@@ -62,8 +64,8 @@ export default function ExportButton({
   // video as before; unchecked exports a clean video (the no-srtFile graph,
   // byte-identical to Phase 5.5) for the video-plus-sidecar-SRT workflow.
   const [burnCaptions, setBurnCaptions] = useState(true)
-  // Export-only intent stays local to this mounted editor. Part L owns the UI;
-  // Part N will translate this value into the plan passed to runExport.
+  // Export-only intent stays local to this mounted editor. It is snapshotted and
+  // normalized through buildAudioCleanupPlan at the final export boundary.
   const [audioCleanupSettings, setAudioCleanupSettings] =
     useState<AudioCleanupSettings>(() => ({
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
@@ -105,6 +107,7 @@ export default function ExportButton({
     if (file === null || !hasSegments || phase !== 'idle') {
       return
     }
+    const audioCleanupPlan = buildAudioCleanupPlan(audioCleanupSettings)
     setError(null)
     const ffmpeg = getFfmpeg()
 
@@ -134,7 +137,7 @@ export default function ExportButton({
                 frameWidth: edl.source.width ?? Number.NaN,
                 frameHeight: edl.source.height ?? Number.NaN,
               }
-        // A loudnorm-fallback note (non-fatal) surfaces via the same error line.
+        // Non-fatal cleanup fallback notes surface via the same existing line.
         const blob = await runExport(
           ffmpeg,
           file,
@@ -142,6 +145,7 @@ export default function ExportButton({
           captionsToBurn,
           (note) => setError(note),
           overlayExport,
+          audioCleanupPlan,
         )
         downloadBlob(blob, 'zero-edit-time.mp4')
       } finally {
