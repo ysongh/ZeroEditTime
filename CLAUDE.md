@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–N (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–O (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -364,7 +364,16 @@ empty folders for future phases.
   listeners, codec/container settings, and output download remain on their existing branches.
   Combined graph regressions require exactly two explicit mappings—processed `[outv]` and one
   processed `[outa]`—with no original or duplicate audio mapping; the path with every individually
-  toggleable operation off also retains exactly one `[outa]` mapping.
+  toggleable operation off also retains exactly one `[outa]` mapping. Part O keeps source-format
+  handling metadata-neutral. FFmpeg discovers sample rate and channel layout from the decoded
+  stream; the graph specifies only `aresample=48000` and never `-ac`, `aformat`, `pan`,
+  `channelmap`, or a forced layout. The 48 kHz output target handles 44.1 kHz sources and returns
+  loudnorm's internal 192 kHz output to the established encode rate; omitting channel directives
+  is intended to preserve FFmpeg's negotiated mono/stereo layout into AAC. Offline regressions
+  verify that invariant across legacy/default cleanup and single/concat paths: exactly one
+  `aresample=48000`, no channel-rematrix directive, and one audio mapping. They do not pretend to
+  execute real source formats. Actual CDN-wasm exports of mono/stereo × 44.1/48 kHz fixtures,
+  inspected for output rate/layout and checked for sync/listening, remain manual verification.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -729,7 +738,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     stable labels, video, captions, and overlays. Phase-10 Part K consults the lazy-safe
     per-instance capability cache after staging and records only filters attempted in a successful
     encode; known-unsupported filters are skipped with the established warning, while unknown
-    filters are verified by their first real use. Float
+    filters are verified by their first real use. Phase-10 Part O deliberately supplies only the
+    48 kHz output rate—no channel-count/layout directive—so decoded mono and stereo layouts remain
+    negotiated end to end. Float
     seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
@@ -786,7 +797,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     paths, tiny-segment clamp, and no-retiming invariants; and Part-I exact full-pipeline ordering
     plus combined EDL/caption/image-overlay synchronization; Part N additionally locks the full
     cleanup chain and exactly one processed-audio mapping for the combined path, plus one audio
-    mapping when every individually toggleable operation is off), run offline with no ffmpeg.
+    mapping when every individually toggleable operation is off; Part O locks the format-neutral
+    rate/layout invariant across legacy/default and single/concat paths), run offline with no
+    ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,

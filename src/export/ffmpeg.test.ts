@@ -548,6 +548,61 @@ describe('buildExportArgs', () => {
     )
     expect(mappedStreams(args)).toEqual(['[outv]', '[outa]'])
   })
+
+  it('pins only sample rate across legacy and cleanup assembly paths', () => {
+    const disabledPlan = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      enabled: false,
+    })
+    const cases: Array<{
+      segments: Array<{ start: number; end: number }>
+      options: BuildExportOptions
+    }> = [
+      { segments: [{ start: 0, end: 4 }], options: {} },
+      {
+        segments: [
+          { start: 0, end: 2 },
+          { start: 3, end: 5 },
+        ],
+        options: { audioCleanup: disabledPlan },
+      },
+      {
+        segments: [
+          { start: 0, end: 2 },
+          { start: 3, end: 5 },
+        ],
+        options: {
+          audioCleanup: buildAudioCleanupPlan(
+            DEFAULT_AUDIO_CLEANUP_SETTINGS,
+          ),
+        },
+      },
+    ]
+
+    for (const { segments, options } of cases) {
+      // Source metadata is intentionally absent: FFmpeg discovers it while
+      // decoding. These invariants prevent the command from forcing a mono or
+      // stereo conversion while retaining the established 48 kHz output.
+      const args = buildExportArgs(
+        segments,
+        'input.mp4',
+        'output.mp4',
+        options,
+      )
+      const filter = filterOf(args)
+
+      expect(filter.match(/\baresample=/g)).toHaveLength(1)
+      expect(filter.match(/aresample=48000/g)).toHaveLength(1)
+      expect(filter).not.toMatch(
+        /\b(?:aformat|amerge|channelmap|channelsplit|join|pan)=/,
+      )
+      expect(args.some((arg) => /^-ac(?::.*)?$/.test(arg))).toBe(false)
+      expect(
+        args.some((arg) => /^-(?:ch_layout|channel_layout)(?::.*)?$/.test(arg)),
+      ).toBe(false)
+      expect(mappedStreams(args)).toEqual(['[outv]', '[outa]'])
+    }
+  })
 })
 
 describe('buildExportArgs with image overlays', () => {

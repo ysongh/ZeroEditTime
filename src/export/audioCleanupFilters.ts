@@ -99,8 +99,10 @@ export function buildAudioCleanupFilterGraph(
     )
   }
 
-  // loudnorm internally outputs 192 kHz. Pinning the final encode rate before
-  // limiting makes the ceiling the last operation on the actual output signal.
+  // loudnorm internally outputs 192 kHz. Pinning only the final sample rate
+  // before limiting makes the ceiling the last operation on the actual output
+  // signal. Deliberately omit channel-count/layout options: FFmpeg keeps the
+  // decoded layout it negotiated, so mono remains mono and stereo remains stereo.
   filters.push(`aresample=${OUTPUT_SAMPLE_RATE}`)
 
   if (enabled && (overrides.peakLimiter ?? true)) {

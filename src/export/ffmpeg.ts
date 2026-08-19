@@ -110,7 +110,9 @@ export const FONTS_DIR = '/fonts'
  *   optional loudnorm, the required 48 kHz resample, then the final peak limiter.
  *   Resampling precedes limiting because loudnorm internally outputs 192 kHz and
  *   the configured ceiling should be the final operation on the encoded rate.
- *   None of these filters changes timestamps; alimiter compensates its lookahead.
+ *   The graph never forces a channel count/layout, so FFmpeg preserves negotiated
+ *   mono or stereo input layout. None of these filters changes timestamps;
+ *   alimiter compensates its lookahead.
  *   A single-segment export chains the identical stages directly after its fades.
  *
  * When `options.srtFile` is set (Phase 6), the assembled video runs one extra
