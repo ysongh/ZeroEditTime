@@ -55,6 +55,8 @@ export interface ImageOverlayExportRequest {
 export interface BuildExportOptions {
   loudnorm?: boolean
   peakLimiter?: boolean
+  /** Omit every audio input/filter/map/codec argument for a known video-only source. */
+  includeAudio?: boolean
   srtFile?: string
   imageOverlayGraph?: ImageOverlayFilterGraph | null
   /**
@@ -76,6 +78,10 @@ const LOUDNESS_NORMALIZATION_UNAVAILABLE_NOTE =
   'This ffmpeg core has no loudnorm filter — exported without loudness normalization.'
 const PEAK_LIMITER_UNAVAILABLE_NOTE =
   'This ffmpeg core has no compatible alimiter filter — exported without the final peak limiter.'
+const NO_AUDIO_STREAM_NOTE =
+  'The source has no audio track — exported video without audio.'
+const SILENT_LOUDNESS_NORMALIZATION_NOTE =
+  'Loudness normalization could not analyze silent audio — exported without it.'
 
 // Phase-6 caption burn. libass renders the SRT via the `subtitles` filter,
 // styled entirely through force_style (ASS colors are &HAABBGGRR): white bold
@@ -129,8 +135,10 @@ export const FONTS_DIR = '/fonts'
  *
  * Phase-10 Part C accepts an optional cleanup plan but deliberately adds no
  * filters for a disabled plan (or one with every operation disabled). Those
- * paths return the exact legacy argument array; later parts add enabled filter
- * translation without making the disabled path pay for structural no-ops.
+ * paths return the exact legacy argument array. Part P's `includeAudio: false`
+ * is a narrow retry path for a source proven to have no audio stream: it emits
+ * video-only trim/concat, overlay, caption, mapping, and codec arguments, with
+ * no `[0:a]`, cleanup filters, `[outa]`, or AAC options.
  *
  * `-filter_complex` is ONE single argument string. Float seconds are passed
  * straight through (e.g. 2.983) to preserve frame accuracy. For a single segment
@@ -147,10 +155,13 @@ export function buildExportArgs(
     throw new Error('Cannot export: the EDL has no kept segments.')
   }
 
-  const audioFilters = buildAudioCleanupFilterGraph(options.audioCleanup, {
-    loudnorm: options.loudnorm,
-    peakLimiter: options.peakLimiter,
-  })
+  const includeAudio = options.includeAudio !== false
+  const audioFilters = includeAudio
+    ? buildAudioCleanupFilterGraph(options.audioCleanup, {
+        loudnorm: options.loudnorm,
+        peakLimiter: options.peakLimiter,
+      })
+    : null
 
   const burn =
     options.srtFile !== undefined
@@ -172,24 +183,33 @@ export function buildExportArgs(
     const { start, end } = segments[i]
     // n === 1: label directly as the assembled output so no concat is needed.
     const vLabel = n === 1 ? assembledVideoLabel : `v${i}`
-    const audioChain = buildAudioSegmentFilterChain(
-      { start, end },
-      audioFilters.segmentFadeCurve,
-    )
     clauses.push(`[0:v]trim=start=${start}:end=${end},setpts=PTS-STARTPTS[${vLabel}]`)
-    clauses.push(
-      n === 1
-        ? `[0:a]${audioChain},${audioFilters.filterChain}[outa]`
-        : `[0:a]${audioChain}[a${i}]`,
-    )
+    if (audioFilters !== null) {
+      const audioChain = buildAudioSegmentFilterChain(
+        { start, end },
+        audioFilters.segmentFadeCurve,
+      )
+      clauses.push(
+        n === 1
+          ? `[0:a]${audioChain},${audioFilters.filterChain}[outa]`
+          : `[0:a]${audioChain}[a${i}]`,
+      )
+    }
   }
 
   let filter = clauses.join(';')
   if (n > 1) {
-    const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('')
-    filter +=
-      `;${concatInputs}concat=n=${n}:v=1:a=1` +
-      `[${assembledVideoLabel}][ca];[ca]${audioFilters.filterChain}[outa]`
+    if (audioFilters === null) {
+      const concatInputs = segments.map((_, i) => `[v${i}]`).join('')
+      filter +=
+        `;${concatInputs}concat=n=${n}:v=1:a=0` +
+        `[${assembledVideoLabel}]`
+    } else {
+      const concatInputs = segments.map((_, i) => `[v${i}][a${i}]`).join('')
+      filter +=
+        `;${concatInputs}concat=n=${n}:v=1:a=1` +
+        `[${assembledVideoLabel}][ca];[ca]${audioFilters.filterChain}[outa]`
+    }
   }
   if (overlayGraph !== null) {
     filter += `;${overlayGraph.filterComplex}`
@@ -202,9 +222,10 @@ export function buildExportArgs(
     '-i', inputName,
     ...(overlayGraph?.inputArgs ?? []),
     '-filter_complex', filter,
-    '-map', `[${mappedVideoLabel}]`, '-map', '[outa]',
+    '-map', `[${mappedVideoLabel}]`,
+    ...(includeAudio ? ['-map', '[outa]'] : []),
     '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', '128k',
+    ...(includeAudio ? ['-c:a', 'aac', '-b:a', '128k'] : []),
     outputName,
   ]
 }
@@ -229,13 +250,13 @@ const SRT_NAME = 'captions.srt'
  * They are composited before the optional caption burn and are deleted in the
  * same best-effort cleanup as every other temporary export file.
  *
- * If the exec fails specifically because the core lacks the loudnorm filter
- * (unlikely — it's native libavfilter), the encode retries WITHOUT loudnorm
- * (fades + aresample stay) and `onNote` receives a UI-visible explanation. Any
- * other failure is rethrown; we never substitute a different normalizer. A
- * missing `subtitles` filter is NOT retried around — the default core includes
- * libass, so that failure is surfaced as a clear error instead of silently
- * exporting without the captions the user asked for.
+ * Precise runtime failures have conservative retry paths: a source whose audio
+ * stream specifier matches no streams is re-encoded video-only, and loudnorm is
+ * skipped for this export if its own failure contains a non-finite silence
+ * measurement. Neither input-specific case poisons the per-core capability
+ * cache. Missing filters retain their established warned fallbacks. Unrelated
+ * failures, including malformed media, are rethrown. A missing `subtitles`
+ * filter is also fatal so requested captions are never silently discarded.
  */
 export async function runExport(
   ffmpeg: FFmpeg,
@@ -271,6 +292,7 @@ export async function runExport(
   ffmpeg.on('log', onLog)
 
   const encode = async (
+    withAudio: boolean,
     withLoudnorm: boolean,
     withNoiseReduction: boolean,
     withVoiceLeveling: boolean,
@@ -303,12 +325,14 @@ export async function runExport(
               imageOverlayGraph,
               audioCleanup: effectiveAudioCleanup,
               peakLimiter: withPeakLimiter,
+              includeAudio: withAudio,
             }
           : {
               loudnorm: withLoudnorm,
               imageOverlayGraph,
               audioCleanup: effectiveAudioCleanup,
               peakLimiter: withPeakLimiter,
+              includeAudio: withAudio,
             },
       ),
     )
@@ -365,6 +389,7 @@ export async function runExport(
     let withPeakLimiter =
       peakLimiterRequested && canAttemptAudioFilter(capabilities, 'alimiter')
     const fallbackNotes: string[] = []
+    let withAudio = true
 
     if (noiseRequested && !withNoiseReduction) {
       fallbackNotes.push(NOISE_REDUCTION_UNAVAILABLE_NOTE)
@@ -384,21 +409,22 @@ export async function runExport(
       logs.length = 0
       try {
         data = await encode(
+          withAudio,
           withLoudnorm,
           withNoiseReduction,
           withVoiceLeveling,
           withPeakLimiter,
         )
-        if (withNoiseReduction) {
+        if (withAudio && withNoiseReduction) {
           recordAudioFilterSupport(ffmpeg, 'afftdn', true)
         }
-        if (withVoiceLeveling) {
+        if (withAudio && withVoiceLeveling) {
           recordAudioFilterSupport(ffmpeg, 'acompressor', true)
         }
-        if (withLoudnorm) {
+        if (withAudio && withLoudnorm) {
           recordAudioFilterSupport(ffmpeg, 'loudnorm', true)
         }
-        if (withPeakLimiter) {
+        if (withAudio && withPeakLimiter) {
           recordAudioFilterSupport(ffmpeg, 'alimiter', true)
         }
       } catch (err) {
@@ -409,6 +435,17 @@ export async function runExport(
               'Undo the captions to export without them.',
             { cause: err },
           )
+        }
+        if (withAudio && isMissingSourceAudioStream(log)) {
+          await safeDelete(ffmpeg, outputName)
+          withAudio = false
+          withNoiseReduction = false
+          withVoiceLeveling = false
+          withLoudnorm = false
+          withPeakLimiter = false
+          fallbackNotes.length = 0
+          fallbackNotes.push(NO_AUDIO_STREAM_NOTE)
+          continue
         }
         if (withNoiseReduction && isMissingAfftdn(log)) {
           recordAudioFilterSupport(ffmpeg, 'afftdn', false)
@@ -432,6 +469,14 @@ export async function runExport(
           recordAudioFilterSupport(ffmpeg, 'loudnorm', false)
           withLoudnorm = false
           fallbackNotes.push(LOUDNESS_NORMALIZATION_UNAVAILABLE_NOTE)
+          continue
+        }
+        if (withLoudnorm && isSilenceRelatedLoudnormFailure(log)) {
+          // A runtime analysis failure may have left a partial MP4 behind. The
+          // retry reuses the fixed VFS output name, so clear it first.
+          await safeDelete(ffmpeg, outputName)
+          withLoudnorm = false
+          fallbackNotes.push(SILENT_LOUDNESS_NORMALIZATION_NOTE)
           continue
         }
         throw err
@@ -462,6 +507,45 @@ export async function runExport(
 
 function isMissingLoudnorm(log: string): boolean {
   return /no such filter:\s*'?loudnorm'?/i.test(log)
+}
+
+function isMissingSourceAudioStream(log: string): boolean {
+  return log.split('\n').some(
+    (line) =>
+      /stream specifier\s+['"]?(?:0)?:a(?:[:0-9]*)?['"]?/i.test(line) &&
+      /matches no streams/i.test(line),
+  )
+}
+
+function isSilenceRelatedLoudnormFailure(log: string): boolean {
+  const lines = log.split('\n')
+  const hasLoudnorm = (line: string): boolean => /loudnorm/i.test(line)
+  const hasNonFiniteValue = (line: string): boolean =>
+    /(?:^|[^a-z])(?:nan|[-+]?inf(?:inity)?)(?:$|[^a-z])/i.test(line)
+  const hasFailure = (line: string): boolean =>
+    /(?:error|invalid|failed|out of range|numerical)/i.test(line)
+  const hasLoudnessMeasurement = (line: string): boolean =>
+    /(?:input|measured)_(?:i|tp|lra|thresh)|target_offset/i.test(line)
+
+  return lines.some((line, index) => {
+    if (hasLoudnorm(line) && hasNonFiniteValue(line) && hasFailure(line)) {
+      return true
+    }
+
+    // Some builds split `Value -inf for measured_I` from `Error applying ...
+    // to loudnorm`. Require the measurement half and the failure half to each
+    // be loudnorm-specific so an adjacent malformed-input error is never hidden.
+    const adjacent = [lines[index - 1], lines[index + 1]].filter(
+      (candidate): candidate is string => candidate !== undefined,
+    )
+    return (
+      hasLoudnessMeasurement(line) &&
+      hasNonFiniteValue(line) &&
+      adjacent.some((candidate) =>
+        hasLoudnorm(candidate) && hasFailure(candidate),
+      )
+    )
+  })
 }
 
 function isMissingAfftdn(log: string): boolean {

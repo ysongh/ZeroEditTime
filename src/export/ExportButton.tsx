@@ -137,7 +137,7 @@ export default function ExportButton({
                 frameWidth: edl.source.width ?? Number.NaN,
                 frameHeight: edl.source.height ?? Number.NaN,
               }
-        // Non-fatal cleanup fallback notes surface via the same existing line.
+        // Non-fatal export fallback notes surface via the same existing line.
         const blob = await runExport(
           ffmpeg,
           file,

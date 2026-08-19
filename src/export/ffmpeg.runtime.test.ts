@@ -142,6 +142,12 @@ function filterOfExec(args: string[]): string {
   return args[index + 1]
 }
 
+function mappedStreamsOfExec(args: string[]): string[] {
+  return args.flatMap((arg, index) =>
+    arg === '-map' && args[index + 1] !== undefined ? [args[index + 1]] : [],
+  )
+}
+
 beforeEach(() => {
   fetchFileMock.mockReset()
 })
@@ -465,6 +471,159 @@ describe('runExport with peak limiting', () => {
   })
 })
 
+describe('runExport with silent or missing audio', () => {
+  it('retries a precisely diagnosed no-audio source as video-only', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      if (fake.exec.mock.calls.length === 1) {
+        fake.emitLog(
+          "Stream specifier ':a' in filtergraph description matches no streams.",
+        )
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [
+        { start: 0, end: 2 },
+        { start: 3, end: 5 },
+      ],
+      [],
+      note,
+      undefined,
+      cleanup,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(2)
+    const firstArgs = fake.exec.mock.calls[0][0]
+    const retryArgs = fake.exec.mock.calls[1][0]
+    expect(filterOfExec(firstArgs)).toContain('[0:a]')
+    expect(filterOfExec(firstArgs)).toContain('loudnorm=')
+    expect(filterOfExec(retryArgs)).toContain('concat=n=2:v=1:a=0[outv]')
+    expect(filterOfExec(retryArgs)).not.toMatch(
+      /\[0:a\]|\[outa\]|atrim|afade|afftdn|acompressor|loudnorm|aresample|alimiter/,
+    )
+    expect(mappedStreamsOfExec(retryArgs)).toEqual(['[outv]'])
+    expect(retryArgs).not.toContain('-c:a')
+    expect(retryArgs).not.toContain('-b:a')
+    expect(fetchFileMock).toHaveBeenCalledTimes(1)
+    expect(fake.writeFile).toHaveBeenCalledTimes(1)
+    expect(fake.deleteFile.mock.calls[0][0]).toBe('output.mp4')
+    expect(note).toHaveBeenCalledWith(
+      'The source has no audio track — exported video without audio.',
+    )
+    expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
+      afftdn: 'unknown',
+      acompressor: 'unknown',
+      loudnorm: 'unknown',
+      alimiter: 'unknown',
+      acrossfade: 'unknown',
+    })
+  })
+
+  it('does not misclassify a missing video stream as missing audio', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog(
+        "Stream specifier ':v' in filtergraph description matches no streams.",
+      )
+      return 1
+    })
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [],
+        note,
+      ),
+    ).rejects.toThrow('ffmpeg export exited with code 1.')
+
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(note).not.toHaveBeenCalled()
+  })
+
+  it('skips only loudnorm when it fails on non-finite silence measurements', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      if (filterOfExec(args).includes('loudnorm=')) {
+        fake.emitLog(
+          "Value -inf for parameter 'input_i' out of range",
+        )
+        fake.emitLog(
+          "Error applying option 'input_i' to filter 'loudnorm': Numerical result out of range",
+        )
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      note,
+      undefined,
+      cleanup,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(2)
+    const retryFilter = filterOfExec(fake.exec.mock.calls[1][0])
+    expect(retryFilter).not.toContain('loudnorm=')
+    expect(retryFilter).toContain('afftdn=')
+    expect(retryFilter).toContain('acompressor=')
+    expect(retryFilter).toContain('aresample=48000')
+    expect(retryFilter).toContain('alimiter=')
+    expect(fake.deleteFile.mock.calls[0][0]).toBe('output.mp4')
+    expect(note).toHaveBeenCalledWith(
+      'Loudness normalization could not analyze silent audio — exported without it.',
+    )
+    expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
+      afftdn: 'supported',
+      acompressor: 'supported',
+      loudnorm: 'unknown',
+      alimiter: 'supported',
+      acrossfade: 'unknown',
+    })
+  })
+
+  it('does not retry when loudnorm successfully accepts silent audio', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog('[Parsed_loudnorm_2] input_i: -inf input_tp: -inf')
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      note,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('loudnorm=')
+    expect(note).not.toHaveBeenCalled()
+    expect(getAudioFilterCapabilities(fake.ffmpeg).loudnorm).toBe('supported')
+  })
+})
+
 describe('runExport with cached filter capabilities', () => {
   it('records only filters proven by a successful real encode', async () => {
     const fake = createFakeFfmpeg()
@@ -519,10 +678,12 @@ describe('runExport with cached filter capabilities', () => {
     })
   })
 
-  it('does not classify an unrelated encode failure as unsupported', async () => {
+  it('keeps malformed audio fatal even near a non-finite loudnorm diagnostic', async () => {
     const fake = createFakeFfmpeg()
+    const note = vi.fn()
     fetchFileMock.mockResolvedValue(new Uint8Array([9]))
     fake.exec.mockImplementation(async () => {
+      fake.emitLog('[Parsed_loudnorm_2] input_i: -inf input_tp: -inf')
       fake.emitLog('Invalid data found when processing input')
       return 1
     })
@@ -532,9 +693,13 @@ describe('runExport with cached filter capabilities', () => {
         fake.ffmpeg,
         fakeSourceFile(),
         [{ start: 0, end: 4 }],
+        [],
+        note,
       ),
     ).rejects.toThrow('ffmpeg export exited with code 1.')
 
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(note).not.toHaveBeenCalled()
     expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
       afftdn: 'unknown',
       acompressor: 'unknown',

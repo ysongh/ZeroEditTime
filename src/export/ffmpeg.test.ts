@@ -549,6 +549,89 @@ describe('buildExportArgs', () => {
     expect(mappedStreams(args)).toEqual(['[outv]', '[outa]'])
   })
 
+  it('builds a complete video-only graph for a source proven to have no audio', () => {
+    const args = buildExportArgs(
+      [
+        { start: 1.25, end: 4.75 },
+        { start: 6, end: 9.5 },
+      ],
+      'input.mp4',
+      'output.mp4',
+      {
+        includeAudio: false,
+        audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS),
+        imageOverlayGraph: IMAGE_OVERLAY_GRAPH,
+        srtFile: 'captions.srt',
+      },
+    )
+    const filter = filterOf(args)
+
+    expect(filter).toBe(
+      '[0:v]trim=start=1.25:end=4.75,setpts=PTS-STARTPTS[v0];' +
+        '[0:v]trim=start=6:end=9.5,setpts=PTS-STARTPTS[v1];' +
+        '[v0][v1]concat=n=2:v=1:a=0[ovbase];' +
+        '[ovbase]null[ovout];' +
+        `[ovout]${SUBTITLES_CLAUSE}[outv]`,
+    )
+    expect(filter).not.toMatch(
+      /\[0:a\]|\[outa\]|\[ca\]|atrim|afade|afftdn|acompressor|loudnorm|aresample|alimiter/,
+    )
+    expect(mappedStreams(args)).toEqual(['[outv]'])
+    expect(args).not.toContain('-c:a')
+    expect(args).not.toContain('-b:a')
+  })
+
+  it('keeps the no-audio single-segment path free of concat and audio syntax', () => {
+    const args = buildExportArgs(
+      [{ start: 0, end: 0.5 }],
+      'input.mp4',
+      'output.mp4',
+      { includeAudio: false },
+    )
+
+    expect(filterOf(args)).toBe(
+      '[0:v]trim=start=0:end=0.5,setpts=PTS-STARTPTS[outv]',
+    )
+    expect(mappedStreams(args)).toEqual(['[outv]'])
+  })
+
+  it('keeps cleanup valid for a one-millisecond audio clip', () => {
+    const args = buildExportArgs(
+      [{ start: 0, end: 0.001 }],
+      'input.mp4',
+      'output.mp4',
+      { audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS) },
+    )
+    const filter = filterOf(args)
+
+    expect(filter).toContain(
+      'afade=t=in:st=0:d=0.0005:curve=qsin,' +
+        'afade=t=out:st=0.0005:d=0.0005:curve=qsin',
+    )
+    expect(filter).toContain(
+      `${LIGHT_NOISE_REDUCTION},${SPEECH_COMPRESSOR},${DEFAULT_CLEANUP_TAIL}[outa]`,
+    )
+    expect(mappedStreams(args)).toEqual(['[outv]', '[outa]'])
+  })
+
+  it('does not invent padding or shortest-stream truncation for shorter audio', () => {
+    const args = buildExportArgs(
+      [
+        { start: 0, end: 2 },
+        { start: 3, end: 5 },
+      ],
+      'input.mp4',
+      'output.mp4',
+      { audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS) },
+    )
+
+    // The concat filter retains FFmpeg's established stream-duration handling.
+    // Cleanup adds no timing policy such as synthetic padding or `-shortest`.
+    expect(filterOf(args)).toContain('concat=n=2:v=1:a=1[outv][ca]')
+    expect(filterOf(args)).not.toMatch(/\bapad(?:=|\b)/)
+    expect(args).not.toContain('-shortest')
+  })
+
   it('pins only sample rate across legacy and cleanup assembly paths', () => {
     const disabledPlan = buildAudioCleanupPlan({
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,

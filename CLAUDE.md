@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–O (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–P (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -374,6 +374,21 @@ empty folders for future phases.
   `aresample=48000`, no channel-rematrix directive, and one audio mapping. They do not pretend to
   execute real source formats. Actual CDN-wasm exports of mono/stereo × 44.1/48 kHz fixtures,
   inspected for output rate/layout and checked for sync/listening, remain manual verification.
+  Part P adds an explicit video-only argument path plus input-specific runtime recovery. The
+  normal command remains byte-identical; only FFmpeg's precise `:a ... matches no streams`
+  diagnostic clears any failed-attempt output and retries the already-staged export with video
+  trim/concat (`a=0`), overlays, and captions intact while omitting every audio input label,
+  cleanup filter, `[outa]` map, and AAC
+  option. That successful video-only retry does not mark any audio filter supported or unsupported
+  and reports one visible note. Valid silent or almost-silent audio still attempts the established
+  one-pass loudnorm path. If loudnorm itself fails with a non-finite loudness measurement, only
+  loudnorm is removed for that export; denoising, voice leveling, 48 kHz resampling, and limiting
+  remain, and loudnorm capability stays unknown because silence is an input condition rather than
+  a core limitation. A neighboring generic malformed-input error is deliberately not classified
+  as silence and remains fatal after one exec. One-millisecond clips retain nonnegative half-length
+  fades. No `apad` or `-shortest` policy was added: multi-segment concat keeps FFmpeg's established
+  shorter-stream handling, while real no/silent/short-audio media still requires browser-wasm
+  fixture verification rather than being claimed by the mocked/offline suites.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -740,8 +755,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     encode; known-unsupported filters are skipped with the established warning, while unknown
     filters are verified by their first real use. Phase-10 Part O deliberately supplies only the
     48 kHz output rate—no channel-count/layout directive—so decoded mono and stereo layouts remain
-    negotiated end to end. Float
-    seconds pass straight through for frame accuracy; re-encodes (never `-c copy`, which only cuts
+    negotiated end to end. Phase-10 Part P adds `BuildExportOptions.includeAudio`; its default is
+    true and preserves every established array, while false builds video-only trim/concat (using
+    `a=0` for multiple segments), overlay, caption, mapping, and codec syntax without constructing
+    any audio filter graph. Float seconds pass straight through for frame accuracy; re-encodes
+    (never `-c copy`, which only cuts
     on keyframes). Alongside it, `runExport` (using
     the shared engine's `inputExtension`) writes the source into the VFS — plus, when given
     non-empty PREPARED captions, the committed font (fetched same-origin from
@@ -761,13 +779,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     without the limiter while retaining the rest of cleanup. Part K consolidates those results
     plus loudnorm into the shared tri-state cache; precise missing-filter failures downgrade, the
     limiter also recognizes its fixed option incompatibility, and unrecognized failures stay
-    fatal rather than silently removing cleanup.
+    fatal rather than silently removing cleanup. Part P adds two non-cached input fallbacks: the
+    exact missing-source-audio diagnostic retries video-only, and a loudnorm-specific non-finite
+    silence failure retries without that stage. Successful silent normalization is accepted;
+    malformed input remains fatal. Video-only success records no audio-filter support.
     The engine instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
     "Loading engine…" state), encodes with a progress bar, and downloads `zero-edit-time.mp4`.
-    Disabled while busy and when nothing is kept. Routes `runExport`'s non-fatal loudnorm-fallback
-    note into its existing error line (no new UI). Phase 8: a render-time
+    Disabled while busy and when nothing is kept. Routes `runExport`'s non-fatal fallback notes
+    into its existing error line (no new UI). Phase 8: a render-time
     `prepareCaptionsForExport(edl.captions, edl)` feeds both the burn and "Download SRT"
     (`buildSrt` → text/plain `zero-edit-time.srt` via the same download helper as the MP4;
     output-time, so it matches the exported file; disabled with a hint when every caption was
@@ -798,8 +819,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     plus combined EDL/caption/image-overlay synchronization; Part N additionally locks the full
     cleanup chain and exactly one processed-audio mapping for the combined path, plus one audio
     mapping when every individually toggleable operation is off; Part O locks the format-neutral
-    rate/layout invariant across legacy/default and single/concat paths), run offline with no
-    ffmpeg.
+    rate/layout invariant across legacy/default and single/concat paths; Part P locks single- and
+    multi-segment video-only graphs (including captions/overlays), absence of all audio syntax, a
+    one-millisecond cleanup path, and absence of newly invented padding/shortest policy), run
+    offline with no ffmpeg.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,
@@ -816,7 +839,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     afftdn and loudnorm fallbacks can occur sequentially in one export. Phase 10E adds cached
     missing-`acompressor` retry and warning coverage. Phase 10G adds cached missing-`alimiter`
     retry and warning coverage. Phase 10K adds tri-state actual-use recording, unrequested-filter
-    preservation, unrelated-failure safety, and cached missing-`loudnorm` coverage.
+    preservation, unrelated-failure safety, and cached missing-`loudnorm` coverage. Phase 10P adds
+    precise no-audio video-only retry, non-cached silence-specific loudnorm bypass, accepted silent
+    success, and malformed-stream one-attempt fatality coverage.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,
