@@ -1,11 +1,13 @@
 import {
   Children,
   isValidElement,
+  type ComponentProps,
   type ReactElement,
   type ReactNode,
 } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EDL } from '../edl/types'
+import AudioCleanupControls from './AudioCleanupControls'
 import ExportButton from './ExportButton'
 import { buildAudioCleanupPlan } from './audioCleanupPlan'
 import { DEFAULT_AUDIO_CLEANUP_SETTINGS } from './audioCleanupSettings'
@@ -70,6 +72,29 @@ function findButton(node: ReactNode, label: string): ReactElement<ButtonProps> {
   throw new Error(`Could not find button "${label}".`)
 }
 
+function findAudioCleanupControls(
+  node: ReactNode,
+): ReactElement<ComponentProps<typeof AudioCleanupControls>> {
+  if (!isValidElement(node)) {
+    throw new Error('Could not find AudioCleanupControls.')
+  }
+  const element = node as ReactElement<{ children?: ReactNode }>
+  if (element.type === AudioCleanupControls) {
+    return element as ReactElement<ComponentProps<typeof AudioCleanupControls>>
+  }
+  for (const child of Children.toArray(element.props.children)) {
+    if (!isValidElement(child)) {
+      continue
+    }
+    try {
+      return findAudioCleanupControls(child)
+    } catch {
+      // Keep walking sibling branches.
+    }
+  }
+  throw new Error('Could not find AudioCleanupControls.')
+}
+
 function renderExportButton(): ReactElement {
   harness.stateSetters.length = 0
   return ExportButton({
@@ -125,6 +150,27 @@ afterEach(() => {
 })
 
 describe('ExportButton orchestration', () => {
+  it('does not access FFmpeg while rendering or changing cleanup settings', () => {
+    const view = renderExportButton()
+
+    expect(harness.getFfmpeg).not.toHaveBeenCalled()
+    expect(harness.loadFfmpeg).not.toHaveBeenCalled()
+    expect(harness.runExport).not.toHaveBeenCalled()
+
+    findAudioCleanupControls(view).props.onChange({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'strong',
+    })
+
+    expect(harness.stateSetters[4]).toHaveBeenCalledWith({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'strong',
+    })
+    expect(harness.getFfmpeg).not.toHaveBeenCalled()
+    expect(harness.loadFfmpeg).not.toHaveBeenCalled()
+    expect(harness.runExport).not.toHaveBeenCalled()
+  })
+
   it('loads lazily, forwards the default cleanup plan, and reports progress', async () => {
     const fake = createFfmpeg(false)
     const anchor = {

@@ -30,6 +30,10 @@ const CORE_BASE_URL = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}
 // The single instance, shared by every caller for the app's life. Built on first
 // use (see above) and cached here thereafter.
 let instance: FFmpeg | null = null
+// File selection preloads in the background, while Transcribe/Export also await
+// this loader. `ffmpeg.loaded` changes only after the worker replies, so it
+// cannot by itself deduplicate callers that overlap during that window.
+let inFlightLoad: Promise<void> | null = null
 
 /** The one shared FFmpeg instance. Always go through this — never `new FFmpeg()`. */
 export function getFfmpeg(): FFmpeg {
@@ -40,20 +44,43 @@ export function getFfmpeg(): FFmpeg {
 }
 
 /**
- * Load the single-threaded ffmpeg core from the CDN, once. Guarded on
- * `ffmpeg.loaded` so repeated calls (StrictMode, preload + an awaited use) can't
- * load twice. Single-threaded → no `workerURL`, no SharedArrayBuffer / cross-origin
- * isolation, so it works under plain `pnpm dev`.
+ * Load the single-threaded ffmpeg core from the CDN, once. Completed loads are
+ * guarded by `ffmpeg.loaded`; overlapping preload/awaited callers share the same
+ * in-flight promise, and a rejected attempt is cleared so a later call can retry.
+ * Single-threaded → no `workerURL`, no SharedArrayBuffer / cross-origin isolation,
+ * so it works under plain `pnpm dev`.
  */
 export async function loadFfmpeg(): Promise<void> {
   const ffmpeg = getFfmpeg()
   if (ffmpeg.loaded) {
     return
   }
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${CORE_BASE_URL}/ffmpeg-core.js`, 'text/javascript'),
-    wasmURL: await toBlobURL(`${CORE_BASE_URL}/ffmpeg-core.wasm`, 'application/wasm'),
-  })
+  if (inFlightLoad !== null) {
+    return inFlightLoad
+  }
+
+  const pending = (async (): Promise<void> => {
+    await ffmpeg.load({
+      coreURL: await toBlobURL(
+        `${CORE_BASE_URL}/ffmpeg-core.js`,
+        'text/javascript',
+      ),
+      wasmURL: await toBlobURL(
+        `${CORE_BASE_URL}/ffmpeg-core.wasm`,
+        'application/wasm',
+      ),
+    })
+  })()
+  inFlightLoad = pending
+
+  try {
+    await pending
+  } finally {
+    // A rejected background preload must not poison later awaited uses.
+    if (inFlightLoad === pending) {
+      inFlightLoad = null
+    }
+  }
 }
 
 /** The source extension (lowercased) so the VFS write keeps a decodable name. */

@@ -84,4 +84,46 @@ describe('shared FFmpeg engine laziness', () => {
         'blob:application/wasm:https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.wasm',
     })
   })
+
+  it('shares one in-flight core load between overlapping callers', async () => {
+    const engine = await import('./engine')
+    let finishLoad: (() => void) | undefined
+    engineMocks.instance.load.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLoad = () => {
+            engineMocks.instance.loaded = true
+            resolve()
+          }
+        }),
+    )
+
+    const preload = engine.loadFfmpeg()
+    const awaitedUse = engine.loadFfmpeg()
+
+    await vi.waitFor(() =>
+      expect(engineMocks.instance.load).toHaveBeenCalledOnce(),
+    )
+    expect(engineMocks.FFmpeg).toHaveBeenCalledTimes(1)
+    expect(engineMocks.toBlobURL).toHaveBeenCalledTimes(2)
+
+    finishLoad?.()
+    await Promise.all([preload, awaitedUse])
+  })
+
+  it('allows a later caller to retry after a failed preload', async () => {
+    const engine = await import('./engine')
+    engineMocks.instance.load
+      .mockRejectedValueOnce(new Error('core download failed'))
+      .mockImplementationOnce(async () => {
+        engineMocks.instance.loaded = true
+      })
+
+    await expect(engine.loadFfmpeg()).rejects.toThrow('core download failed')
+    await engine.loadFfmpeg()
+
+    expect(engineMocks.FFmpeg).toHaveBeenCalledTimes(1)
+    expect(engineMocks.instance.load).toHaveBeenCalledTimes(2)
+    expect(engineMocks.toBlobURL).toHaveBeenCalledTimes(4)
+  })
 })

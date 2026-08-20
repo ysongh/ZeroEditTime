@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–R (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–T (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -410,7 +410,31 @@ empty folders for future phases.
   progress clamping/listener removal, and error recovery; a fully mocked engine suite proves import
   and pure filename work construct nothing, explicit access is singleton, and repeated load skips
   network setup. The normal suite remains offline: mono/stereo and 44.1/48 kHz are command-neutrality
-  invariants, while actual sound, timestamps, and media decoding remain Part S manual verification.
+  invariants, while actual sound, timestamps, and media decoding remain manual verification.
+  Part S adds `docs/phase-10-manual-verification.md`, an explicitly unexecuted real-browser and
+  headphone-listening checklist. It defines reproducible fixtures and blank result records for the
+  pre-Phase-10/cleanup-off/default-on baseline, Off/Light/Strong steady-noise comparisons, voice
+  dynamics, quiet/normal/loud normalization and peak safety, difficult linear-versus-curved join
+  comparisons, and multi-cut lip/caption/image-overlay synchronization. It also provides fields to
+  record actual runtime support or visible fallback for each optional audio filter and covers real spoken mono/
+  stereo at 44.1/48 kHz across MP4 and an already-supported MOV, plus video-only, silent,
+  nearly-silent, and very short sources. The document supplies pass/fail/blocked criteria and an
+  optional `ffprobe` metadata check but claims no browser export, listening result, or filter
+  availability until a tester fills it in.
+  Part T keeps cleanup processing out of startup and playback and adds no extra normal media
+  pass. The shared engine still constructs lazily and begins loading only through the existing
+  file-selection preload or an explicitly awaited Transcribe/Export use; overlapping preload/use calls now share
+  one in-flight core-load promise, while a failed background attempt clears that promise so a
+  later awaited action can retry. Cleanup settings remain inert until Export, and a supported
+  default export performs denoising, compression, one-pass loudness normalization, resampling,
+  and limiting inside the existing single trim/concat encode command. Master OFF remains the
+  byte-identical legacy graph—so it avoids every additional Phase-10 filter but is not raw audio
+  or stream copy. Precisely classified first-use compatibility failures may still require a
+  correctness-preserving retry; the per-engine cache prevents repeating an unsupported optional
+  stage on later exports. Focused tests lock concurrent-load deduplication, retry after a rejected
+  preload, and zero FFmpeg access during ExportButton render/settings changes. The manual guide
+  adds blank, optional startup and warm OFF/ON export timing records. No benchmark was performed;
+  extra filters may increase browser export time, and no material slowdown is claimed or ruled out.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -686,14 +710,17 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
     never at module load: `new FFmpeg()` throws under node and would crash the offline unit tests
     that import the pure `inputExtension` from here), the CDN `loadFfmpeg` (single-threaded, guarded
-    on `ffmpeg.loaded`), and the `inputExtension` helper. **Load the ESM core
+    on `ffmpeg.loaded` plus one shared in-flight promise), and the `inputExtension` helper.
+    Concurrent background-preload and awaited-use callers share one load; rejection clears the
+    promise so a later use can retry. **Load the ESM core
     (`@ffmpeg/core@<ver>/dist/esm`), not umd** — Vite bundles `@ffmpeg/ffmpeg`'s worker as a
     *module* worker, and only the ESM build has the `export default createFFmpegCore` it imports;
     the umd build leaves `createFFmpegCore` undefined there and load fails with "failed to import
     ffmpeg-core.js".
   - `engine.test.ts` — Part-R fully mocked proof that importing the module or calling
     `inputExtension` constructs/loads nothing, first explicit access creates one singleton, and a
-    completed load prevents repeat CDN/core setup without making a network request.
+    completed load prevents repeat CDN/core setup without making a network request. Part T adds
+    overlapping-call deduplication and failed-preload retry coverage.
 - `src/export/` — the Phase-5 export plus Phase-9A Parts J–L image compositing/timing/tests, a read-only
   consumer of the one EDL and overlay state. Fully client-side; no proxy and no React in the
   testable core.
@@ -836,7 +863,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `ExportButton.test.tsx` — Part-R no-DOM orchestration harness. It invokes the real click handler
     with mocked hooks/engine/runtime to verify load-on-demand ordering, normalized default-plan
     handoff, progress clamping, listener removal on success/failure, download reachability, and
-    visible error-state recovery without loading FFmpeg.
+    visible error-state recovery without loading FFmpeg. Part T also proves rendering and changing
+    cleanup settings never accesses, loads, or runs the engine.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off
@@ -889,6 +917,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,
   controlled failure recovery, and issue recording; it is not an automated pass claim.
+- `docs/phase-10-manual-verification.md` — Part S's real-spoken-media browser/headphone checklist.
+  It records controlled cleanup-off/on, denoise strength, leveling, loudness/peak, difficult-cut,
+  combined synchronization, channel/rate/container, silent/no-audio/short-media, and actual runtime
+  filter-support results with explicit PASS/FAIL/BLOCKED/NOT RUN criteria. Part T adds optional
+  blank startup and warm cleanup-OFF/ON export timing tables that separate core loading, fallback
+  retries, and the legacy processing baseline. All fields begin blank; the file documents how to
+  verify Phase 10 without claiming that anyone has run it.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the audio to Whisper, returns
   `{ words: Word[] }`, and hides the API key. The OpenAI upload is named from the request's
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in
