@@ -10,7 +10,8 @@
 // Phase 9A Part J also projects current image overlays through the EDL and hands
 // that data to the non-React export layer for compositing. Phase 10 Part L adds
 // compact local audio-cleanup settings; Part N passes their validated plan into
-// the existing final-export path.
+// the existing final-export path. Part Q keeps them in this mounted editor state:
+// the app has no project save/load boundary, so it adds no one-off persistence.
 
 import { useState } from 'react'
 import type { ChangeEvent } from 'react'
@@ -65,7 +66,9 @@ export default function ExportButton({
   // byte-identical to Phase 5.5) for the video-plus-sidecar-SRT workflow.
   const [burnCaptions, setBurnCaptions] = useState(true)
   // Export-only intent stays local to this mounted editor. It is snapshotted and
-  // normalized through buildAudioCleanupPlan at the final export boundary.
+  // normalized through buildAudioCleanupPlan at the final export boundary. There
+  // is no project serializer to extend yet, so a fresh editor gets a cloned safe
+  // default rather than an audio-only localStorage format.
   const [audioCleanupSettings, setAudioCleanupSettings] =
     useState<AudioCleanupSettings>(() => ({
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,

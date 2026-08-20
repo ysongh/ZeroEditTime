@@ -60,11 +60,15 @@ describe('normalizeAudioCleanupSettings', () => {
     })
   })
 
-  it('uses documented defaults for non-finite targets', () => {
+  it.each([
+    ['NaN', Number.NaN],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['negative infinity', Number.NEGATIVE_INFINITY],
+  ])('uses documented defaults for %s targets', (_name, invalid) => {
     const normalized = normalizeAudioCleanupSettings({
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
-      loudnessTargetLufs: Number.NaN,
-      truePeakLimitDb: Number.POSITIVE_INFINITY,
+      loudnessTargetLufs: invalid,
+      truePeakLimitDb: invalid,
     })
 
     expect(normalized.loudnessTargetLufs).toBe(

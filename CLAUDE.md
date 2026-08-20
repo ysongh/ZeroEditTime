@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–P (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–R (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -378,9 +378,9 @@ empty folders for future phases.
   normal command remains byte-identical; only FFmpeg's precise `:a ... matches no streams`
   diagnostic clears any failed-attempt output and retries the already-staged export with video
   trim/concat (`a=0`), overlays, and captions intact while omitting every audio input label,
-  cleanup filter, `[outa]` map, and AAC
-  option. That successful video-only retry does not mark any audio filter supported or unsupported
-  and reports one visible note. Valid silent or almost-silent audio still attempts the established
+  cleanup filter, `[outa]` map, and AAC option. That successful video-only retry does not mark any
+  audio filter supported or unsupported and reports one visible note. Valid silent or almost-silent
+  audio still attempts the established
   one-pass loudnorm path. If loudnorm itself fails with a non-finite loudness measurement, only
   loudnorm is removed for that export; denoising, voice leveling, 48 kHz resampling, and limiting
   remain, and loudnorm capability stays unknown because silence is an input condition rather than
@@ -388,7 +388,29 @@ empty folders for future phases.
   as silence and remains fatal after one exec. One-millisecond clips retain nonnegative half-length
   fades. No `apad` or `-shortest` policy was added: multi-segment concat keeps FFmpeg's established
   shorter-stream handling, while real no/silent/short-audio media still requires browser-wasm
-  fixture verification rather than being claimed by the mocked/offline suites.
+  fixture verification rather than being claimed by the mocked/offline suites. Part Q deliberately
+  adds no persistence mechanism. This repository has no project serializer/deserializer, project
+  file import/export, local/session storage, or persisted settings schema; its EDL, overlays, and
+  export choices are an in-memory React editor session, and save/load remains explicitly out of
+  scope. Audio-cleanup settings therefore stay in the existing mounted `ExportButton` state and
+  start from a fresh clone of `DEFAULT_AUDIO_CLEANUP_SETTINGS`. There is currently no older project
+  payload to migrate and no missing `audioCleanup` field to parse. A future shared project format
+  must default an absent field through the same settings default/normalization boundary, but Part Q
+  does not scaffold that future format or create audio-only `localStorage` behavior. Part R audits
+  all 60 requested automated-test cases against the existing suites and adds the missing focused
+  coverage. Settings tests now exercise every noise level and independently default NaN and both
+  infinities. Pure Phase-10 integration tests feed no-cut, one-cut-through-speech, several-cut,
+  closely-spaced-cut, and natural-pacing `removeSilences` EDLs into the real argument builder,
+  checking paired A/V source bounds, stable labels, one audio map, preserved summed kept duration,
+  three-or-more-segment concat, tiny fade clamping, and absence of retiming filters. Mocked runtime
+  tests compose cleanup + captions + overlays, verify all VFS cleanup after a failed encode, keep a
+  caller progress listener reachable, reject a missing required audio stage with a useful non-raw
+  error, and cover successful finite loudnorm reports for nearly silent, very quiet, and already
+  loud inputs. A no-DOM `ExportButton` harness verifies lazy load ordering, the default plan handoff,
+  progress clamping/listener removal, and error recovery; a fully mocked engine suite proves import
+  and pure filename work construct nothing, explicit access is singleton, and repeated load skips
+  network setup. The normal suite remains offline: mono/stereo and 44.1/48 kHz are command-neutrality
+  invariants, while actual sound, timestamps, and media decoding remain Part S manual verification.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -669,20 +691,25 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     *module* worker, and only the ESM build has the `export default createFFmpegCore` it imports;
     the umd build leaves `createFFmpegCore` undefined there and load fails with "failed to import
     ffmpeg-core.js".
+  - `engine.test.ts` — Part-R fully mocked proof that importing the module or calling
+    `inputExtension` constructs/loads nothing, first explicit access creates one singleton, and a
+    completed load prevents repeat CDN/core setup without making a network request.
 - `src/export/` — the Phase-5 export plus Phase-9A Parts J–L image compositing/timing/tests, a read-only
   consumer of the one EDL and overlay state. Fully client-side; no proxy and no React in the
   testable core.
   - `audioCleanupSettings.ts` — Phase-10 Part-A typed intent model and defaults for export-time
     cleanup. `normalizeAudioCleanupSettings` is pure and clamps LUFS/true-peak targets to their
-    supported bounds, using documented defaults for non-finite values. It is not wired into the
-    exporter or UI yet.
+    supported bounds, using documented defaults for non-finite values. Parts L/N wire that model
+    through the controls and final export; Part Q intentionally leaves it in mounted React state
+    until a shared project persistence boundary exists.
   - `audioCleanupSettings.test.ts` — unit coverage for valid-value preservation, input purity,
-    lower/upper clamping, and non-finite fallback behavior.
+    lower/upper clamping, and independent NaN/positive-infinity/negative-infinity fallback behavior.
   - `audioCleanupPlan.ts` — Phase-10 Part-B pure translation from normalized editor intent to a
     serializable cleanup plan. It gates nested operations behind the global switch and deliberately
     contains no FFmpeg syntax or browser/runtime objects.
   - `audioCleanupPlan.test.ts` — unit coverage for default mapping, master and per-operation
-    disabling, validated targets, determinism, and input immutability.
+    disabling, explicit off/light/strong noise intent, validated targets, determinism, and input
+    immutability.
   - `audioCleanupFilters.ts` — Phase-10 Part-J pure FFmpeg audio builder. It owns the legacy and
     cleanup filter constants, bounded/locale-independent numeric serialization, deterministic
     post-concat chain construction, and segment-local trim/fade construction. It returns no new
@@ -802,7 +829,14 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     preview requires shared-engine job serialization and a bounded audio-only render path that do
     not exist yet. Phase-10 Part N builds the plan from those settings at export click time and
     passes it to `runExport` without changing caption/overlay inputs, EDL ranges, progress/error
-    handling, lazy engine loading, or download behavior.
+    handling, lazy engine loading, or download behavior. Part Q leaves settings in the same local
+    mounted-editor state as the burn-caption export choice. No project persistence boundary exists
+    to extend, so it adds neither an EDL field nor a parallel storage/migration format; a fresh
+    mount clones the recommended defaults.
+  - `ExportButton.test.tsx` — Part-R no-DOM orchestration harness. It invokes the real click handler
+    with mocked hooks/engine/runtime to verify load-on-demand ordering, normalized default-plan
+    handoff, progress clamping, listener removal on success/failure, download reachability, and
+    visible error-state recovery without loading FFmpeg.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off
@@ -823,6 +857,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     multi-segment video-only graphs (including captions/overlays), absence of all audio syntax, a
     one-millisecond cleanup path, and absence of newly invented padding/shortest policy), run
     offline with no ffmpeg.
+  - `phase10.integration.test.ts` — Part-R pure cross-layer coverage that carries real EDL and
+    `removeSilences` results into `buildExportArgs`: no cut, a speech cut, several cuts, closely
+    spaced cuts with a tiny kept segment, and two naturally paced silent-gap removals. It asserts
+    deterministic labels, paired trim/PTS bounds, three/four-segment concat, a single cleanup tail
+    and audio map, equal enabled/disabled video clauses, summed kept duration, and no retiming
+    filters; these are command invariants, not a claim about decoded-media timestamps.
   - `imageOverlays.test.ts` — pure coverage for EDL-complement derivation/projection, safe
     asset deduplication and input splitting, fit/geometry at even output dimensions, PNG alpha +
     opacity, normal and overlapping fades, half-open enables, deterministic/equal-z layer order,
@@ -841,7 +881,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     retry and warning coverage. Phase 10K adds tri-state actual-use recording, unrequested-filter
     preservation, unrelated-failure safety, and cached missing-`loudnorm` coverage. Phase 10P adds
     precise no-audio video-only retry, non-cached silence-specific loudnorm bypass, accepted silent
-    success, and malformed-stream one-attempt fatality coverage.
+    success, and malformed-stream one-attempt fatality coverage. Part R adds combined
+    cleanup/caption/overlay staging and success, all-file cleanup after failed exec, caller progress
+    continuity, a required-audio-stage fatal message with unchanged capabilities, and finite
+    near-silent/quiet/already-loud diagnostic paths. Every engine/runtime dependency remains mocked.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,

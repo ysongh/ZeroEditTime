@@ -52,6 +52,19 @@ describe('buildAudioCleanupPlan', () => {
     })
   })
 
+  it.each([
+    ['off' as const, false, 'light' as const],
+    ['light' as const, true, 'light' as const],
+    ['strong' as const, true, 'strong' as const],
+  ])('maps enabled noise setting %s explicitly', (setting, enabled, strength) => {
+    const plan = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: setting,
+    })
+
+    expect(plan.noiseReduction).toEqual({ enabled, strength })
+  })
+
   it('clamps plan targets through the shared settings boundary', () => {
     const plan = buildAudioCleanupPlan({
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,

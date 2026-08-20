@@ -70,15 +70,24 @@ function fakeSourceFile(): File {
 
 function createFakeFfmpeg() {
   type LogListener = (event: { message: string }) => void
+  type ProgressListener = (event: { progress: number; time: number }) => void
+  type EventListener = LogListener | ProgressListener
   const logListeners = new Set<LogListener>()
-  const on = vi.fn((event: string, listener: LogListener) => {
+  const progressListeners = new Set<ProgressListener>()
+  const on = vi.fn((event: string, listener: EventListener) => {
     if (event === 'log') {
-      logListeners.add(listener)
+      logListeners.add(listener as LogListener)
+    }
+    if (event === 'progress') {
+      progressListeners.add(listener as ProgressListener)
     }
   })
-  const off = vi.fn((event: string, listener: LogListener) => {
+  const off = vi.fn((event: string, listener: EventListener) => {
     if (event === 'log') {
-      logListeners.delete(listener)
+      logListeners.delete(listener as LogListener)
+    }
+    if (event === 'progress') {
+      progressListeners.delete(listener as ProgressListener)
     }
   })
   const writeFile = vi.fn(async (path: string, data: unknown) => {
@@ -123,6 +132,11 @@ function createFakeFfmpeg() {
     emitLog(message: string): void {
       for (const listener of logListeners) {
         listener({ message })
+      }
+    },
+    emitProgress(progress: number, time = 0): void {
+      for (const listener of progressListeners) {
+        listener({ progress, time })
       }
     },
   }
@@ -206,6 +220,85 @@ describe('runExport with image overlays', () => {
     expect(fake.off).toHaveBeenCalledWith('log', fake.on.mock.calls[0][1])
   })
 
+  it('composes cleanup, captions, and an overlay in one runtime export', async () => {
+    const fake = createFakeFfmpeg()
+    const file = fakeSourceFile()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+
+    await runExport(
+      fake.ffmpeg,
+      file,
+      [
+        { start: 0, end: 2 },
+        { start: 3, end: 5 },
+      ],
+      [{ text: 'Keep this caption', start: 0.25, end: 1.25 }],
+      undefined,
+      overlayRequest([PLAN[0]], [PNG]),
+      cleanup,
+    )
+
+    expect(fake.writeFile.mock.calls.map(([path]) => path)).toEqual([
+      'input.mp4',
+      'overlay_0.png',
+      '/fonts/Roboto-Bold.ttf',
+      'captions.srt',
+    ])
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    const args = fake.exec.mock.calls[0][0]
+    const filter = filterOfExec(args)
+    expect(filter).toContain('concat=n=2:v=1:a=1[ovbase][ca]')
+    expect(filter).toContain('afftdn=')
+    expect(filter).toContain('acompressor=')
+    expect(filter).toContain('loudnorm=')
+    expect(filter).toContain('aresample=48000')
+    expect(filter).toContain('alimiter=')
+    expect(filter.indexOf('[ovbase]')).toBeLessThan(
+      filter.indexOf('[ovout]subtitles='),
+    )
+    expect(mappedStreamsOfExec(args)).toEqual(['[outv]', '[outa]'])
+    expect(fake.deleteFile.mock.calls.map(([path]) => path)).toEqual([
+      'input.mp4',
+      'output.mp4',
+      'captions.srt',
+      '/fonts/Roboto-Bold.ttf',
+      'overlay_0.png',
+    ])
+  })
+
+  it('cleans every staged caption and overlay file after an encode failure', async () => {
+    const fake = createFakeFfmpeg()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog('Error while encoding: Cannot allocate memory')
+      return 1
+    })
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [{ text: 'Caption', start: 0, end: 1 }],
+        undefined,
+        overlayRequest([PLAN[0]], [PNG]),
+        cleanup,
+      ),
+    ).rejects.toThrow('ffmpeg export exited with code 1.')
+
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(fake.deleteFile.mock.calls.map(([path]) => path)).toEqual([
+      'input.mp4',
+      'output.mp4',
+      'captions.srt',
+      '/fonts/Roboto-Bold.ttf',
+      'overlay_0.png',
+    ])
+    expect(fake.off).toHaveBeenCalledWith('log', fake.on.mock.calls[0][1])
+  })
+
   it('reuses staged images when a missing loudnorm filter triggers the fallback', async () => {
     const fake = createFakeFfmpeg()
     const file = fakeSourceFile()
@@ -281,6 +374,71 @@ describe('runExport with image overlays', () => {
       'overlay_0.png',
       'overlay_1.webp',
     ])
+  })
+})
+
+describe('runExport lifecycle callbacks and required processing', () => {
+  it('keeps a caller-owned progress callback reachable during encoding', async () => {
+    const fake = createFakeFfmpeg()
+    const onProgress = vi.fn(
+      (event: { progress: number; time: number }): void => {
+        void event
+      },
+    )
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.ffmpeg.on('progress', onProgress)
+    fake.exec.mockImplementation(async () => {
+      fake.emitProgress(0.42, 1_250_000)
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+    )
+
+    expect(onProgress).toHaveBeenCalledWith({
+      progress: 0.42,
+      time: 1_250_000,
+    })
+    expect(fake.off).not.toHaveBeenCalledWith('progress', onProgress)
+  })
+
+  it('returns a useful error when required audio processing is unavailable', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog("No such filter: 'aresample'")
+      return 1
+    })
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [],
+        note,
+        undefined,
+        cleanup,
+      ),
+    ).rejects.toThrow(
+      'This ffmpeg core is missing required audio processing — ' +
+        'the export cannot preserve audio safely.',
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(note).not.toHaveBeenCalled()
+    expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
+      afftdn: 'unknown',
+      acompressor: 'unknown',
+      loudnorm: 'unknown',
+      alimiter: 'unknown',
+      acrossfade: 'unknown',
+    })
   })
 })
 
@@ -622,10 +780,48 @@ describe('runExport with silent or missing audio', () => {
     expect(note).not.toHaveBeenCalled()
     expect(getAudioFilterCapabilities(fake.ffmpeg).loudnorm).toBe('supported')
   })
+
+  it.each([
+    { name: 'nearly silent', inputI: -89, inputTp: -87 },
+    { name: 'very quiet', inputI: -55, inputTp: -50 },
+    { name: 'already loud', inputI: -8, inputTp: -0.2 },
+  ])(
+    'accepts a successful finite loudnorm report for $name audio',
+    async ({ inputI, inputTp }) => {
+      const fake = createFakeFfmpeg()
+      const note = vi.fn()
+      const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+      fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+      fake.exec.mockImplementation(async () => {
+        fake.emitLog(
+          `[Parsed_loudnorm_2] input_i: ${inputI} input_tp: ${inputTp}`,
+        )
+        return 0
+      })
+
+      await runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [],
+        note,
+        undefined,
+        cleanup,
+      )
+
+      expect(fake.exec).toHaveBeenCalledTimes(1)
+      const filter = filterOfExec(fake.exec.mock.calls[0][0])
+      expect(filter).toContain('afftdn=')
+      expect(filter).toContain('acompressor=')
+      expect(filter).toContain('loudnorm=')
+      expect(filter).toContain('alimiter=')
+      expect(note).not.toHaveBeenCalled()
+    },
+  )
 })
 
 describe('runExport with cached filter capabilities', () => {
-  it('records only filters proven by a successful real encode', async () => {
+  it('records only filters present in a successful encode result', async () => {
     const fake = createFakeFfmpeg()
     const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
     fetchFileMock.mockResolvedValue(new Uint8Array([9]))

@@ -254,7 +254,8 @@ const SRT_NAME = 'captions.srt'
  * stream specifier matches no streams is re-encoded video-only, and loudnorm is
  * skipped for this export if its own failure contains a non-finite silence
  * measurement. Neither input-specific case poisons the per-core capability
- * cache. Missing filters retain their established warned fallbacks. Unrelated
+ * cache. Missing optional filters retain their established warned fallbacks;
+ * missing required audio primitives produce a clear fatal error. Unrelated
  * failures, including malformed media, are rethrown. A missing `subtitles`
  * filter is also fatal so requested captions are never silently discarded.
  */
@@ -447,6 +448,13 @@ export async function runExport(
           fallbackNotes.push(NO_AUDIO_STREAM_NOTE)
           continue
         }
+        if (isMissingRequiredAudioProcessing(log)) {
+          throw new Error(
+            'This ffmpeg core is missing required audio processing — ' +
+              'the export cannot preserve audio safely.',
+            { cause: err },
+          )
+        }
         if (withNoiseReduction && isMissingAfftdn(log)) {
           recordAudioFilterSupport(ffmpeg, 'afftdn', false)
           withNoiseReduction = false
@@ -514,6 +522,12 @@ function isMissingSourceAudioStream(log: string): boolean {
     (line) =>
       /stream specifier\s+['"]?(?:0)?:a(?:[:0-9]*)?['"]?/i.test(line) &&
       /matches no streams/i.test(line),
+  )
+}
+
+function isMissingRequiredAudioProcessing(log: string): boolean {
+  return /no such filter:\s*['"]?(?:atrim|asetpts|afade|aresample)['"]?(?:\s|$)/i.test(
+    log,
   )
 }
 
