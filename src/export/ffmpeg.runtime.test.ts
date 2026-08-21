@@ -162,6 +162,20 @@ function mappedStreamsOfExec(args: string[]): string[] {
   )
 }
 
+async function captureExportError(work: () => Promise<unknown>): Promise<Error> {
+  try {
+    await work()
+  } catch (error) {
+    if (error instanceof Error) {
+      return error
+    }
+    throw new Error('Expected export to reject with an Error instance.', {
+      cause: error,
+    })
+  }
+  throw new Error('Expected export to reject.')
+}
+
 beforeEach(() => {
   fetchFileMock.mockReset()
 })
@@ -286,7 +300,9 @@ describe('runExport with image overlays', () => {
         overlayRequest([PLAN[0]], [PNG]),
         cleanup,
       ),
-    ).rejects.toThrow('ffmpeg export exited with code 1.')
+    ).rejects.toThrow(
+      'The browser ran out of memory during export. Close other tabs or export a shorter, simpler edit and try again.',
+    )
 
     expect(fake.exec).toHaveBeenCalledTimes(1)
     expect(fake.deleteFile.mock.calls.map(([path]) => path)).toEqual([
@@ -337,6 +353,7 @@ describe('runExport with image overlays', () => {
     )
     expect(note).toHaveBeenCalledOnce()
     expect(fake.deleteFile.mock.calls.map(([path]) => path)).toEqual([
+      'output.mp4',
       'input.mp4',
       'output.mp4',
       'overlay_0.png',
@@ -361,7 +378,9 @@ describe('runExport with image overlays', () => {
         undefined,
         overlayRequest(),
       ),
-    ).rejects.toThrow('Could not stage image "cutaway.webp" for export.')
+    ).rejects.toThrow(
+      'Could not read image "cutaway.webp" for export. Re-add the image and try again.',
+    )
 
     expect(fake.exec).not.toHaveBeenCalled()
     expect(fake.writeFile.mock.calls.map(([path]) => path)).toEqual([
@@ -426,8 +445,7 @@ describe('runExport lifecycle callbacks and required processing', () => {
         cleanup,
       ),
     ).rejects.toThrow(
-      'This ffmpeg core is missing required audio processing — ' +
-        'the export cannot preserve audio safely.',
+      'This export engine is missing required audio processing, so the export was stopped to preserve audio safely.',
     )
 
     expect(fake.exec).toHaveBeenCalledTimes(1)
@@ -439,6 +457,374 @@ describe('runExport lifecycle callbacks and required processing', () => {
       alimiter: 'unknown',
       acrossfade: 'unknown',
     })
+  })
+})
+
+describe('runExport user-facing fatal errors', () => {
+  it.each([
+    {
+      name: 'an unsupported channel layout',
+      log: "Input channel_layout '5.1(side)' is not supported by this filter",
+      expected:
+        'The source audio uses a channel layout this exporter cannot process. Convert it to mono or stereo and try again.',
+    },
+    {
+      name: 'a parsed loudness-normalization failure',
+      log: '[Parsed_loudnorm_4 @ 0x123] Failed to configure output pad',
+      expected:
+        'Audio cleanup failed during loudness normalization. The export was stopped. Try another source file or re-encode the source audio.',
+    },
+    {
+      name: 'an audio mapping failure',
+      log: "Output with label 'outa' does not exist in any defined filter graph.",
+      expected:
+        'Processed audio could not be connected to the exported MP4. The export was stopped to avoid missing or untreated audio.',
+    },
+    {
+      name: 'a parsed denoising failure',
+      log: '[Parsed_afftdn_1 @ 0x123] Error initializing filter graph',
+      expected:
+        'Audio cleanup failed while processing this source. The export was stopped; turn off Improve voice audio or try another source file.',
+    },
+    {
+      name: 'a parsed voice-leveling failure',
+      log: '[Parsed_acompressor_2 @ 0x123] Failed to configure output pad',
+      expected:
+        'Audio cleanup failed while processing this source. The export was stopped; turn off Improve voice audio or try another source file.',
+    },
+    {
+      name: 'a parsed peak-limiting failure',
+      log: '[Parsed_alimiter_3 @ 0x123] Invalid argument',
+      expected:
+        'Audio cleanup failed while processing this source. The export was stopped; turn off Improve voice audio or try another source file.',
+    },
+    {
+      name: 'an unrelated encoder failure',
+      log: 'Error while opening encoder for output stream #0:0',
+      expected:
+        'The MP4 could not be encoded. Try again with a shorter or simpler edit.',
+    },
+    {
+      name: 'an out-of-memory failure even when loudnorm is mentioned',
+      log: 'loudnorm: Error configuring filter: Cannot allocate memory',
+      expected:
+        'The browser ran out of memory during export. Close other tabs or export a shorter, simpler edit and try again.',
+    },
+    {
+      name: 'an Emscripten memory-growth failure',
+      log: 'Cannot enlarge memory arrays to size 2147483648 bytes',
+      expected:
+        'The browser ran out of memory during export. Close other tabs or export a shorter, simpler edit and try again.',
+    },
+  ])('stops without retrying for $name', async ({ log, expected }) => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog(log)
+      return 1
+    })
+
+    const error = await captureExportError(() =>
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [],
+        note,
+        undefined,
+        cleanup,
+      ),
+    )
+
+    expect(error.message).toBe(expected)
+    expect(error.message).not.toContain('ffmpeg export exited')
+    expect(error.cause).toBeInstanceOf(Error)
+    expect((error.cause as Error).message).toContain(log)
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(note).not.toHaveBeenCalled()
+    expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
+      afftdn: 'unknown',
+      acompressor: 'unknown',
+      loudnorm: 'unknown',
+      alimiter: 'unknown',
+      acrossfade: 'unknown',
+    })
+  })
+
+  it.each([
+    {
+      name: 'an abort-shaped error',
+      rawName: 'AbortError',
+      rawMessage: 'raw worker abort detail',
+      expected: 'Export was canceled. No output file was created.',
+    },
+    {
+      name: 'a terminated shared engine',
+      rawName: 'Error',
+      rawMessage: 'called FFmpeg.terminate() while worker was running',
+      expected:
+        'The export engine stopped before the export finished. Try the export again.',
+    },
+  ])(
+    'normalizes $name without retrying',
+    async ({ rawName, rawMessage, expected }) => {
+      const fake = createFakeFfmpeg()
+      const note = vi.fn()
+      const raw = new Error(rawMessage)
+      raw.name = rawName
+      fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+      fake.exec.mockRejectedValue(raw)
+
+      const error = await captureExportError(() =>
+        runExport(
+          fake.ffmpeg,
+          fakeSourceFile(),
+          [{ start: 0, end: 4 }],
+          [],
+          note,
+        ),
+      )
+
+      expect(error.message).toBe(expected)
+      expect(error.cause).toBe(raw)
+      expect(fake.exec).toHaveBeenCalledTimes(1)
+      expect(note).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps a missing caption filter fatal instead of silently dropping captions', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog("No such filter: 'subtitles'")
+      return 1
+    })
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [{ text: 'Keep me', start: 0, end: 1 }],
+        note,
+      ),
+    ).rejects.toThrow(
+      'This export engine cannot burn captions. Turn off Burn captions into video and try again.',
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(note).not.toHaveBeenCalled()
+  })
+
+  it('lets an exact optional-filter fallback outrank an unrelated malformed-media warning', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      if (filterOfExec(args).includes('afftdn=')) {
+        fake.emitLog('Could not find codec parameters for stream 0:2')
+        fake.emitLog("No such filter: 'afftdn'")
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      note,
+      undefined,
+      cleanup,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(2)
+    expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('afftdn=')
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining('Noise reduction is unavailable'),
+    )
+    expect(getAudioFilterCapabilities(fake.ffmpeg).afftdn).toBe('unsupported')
+  })
+
+  it.each([
+    "No such filter: 'afftdnoise'",
+    "No such filter: 'acompressor2'",
+    "No such filter: 'loudnormalizer'",
+    "No such filter: 'alimiteralike'",
+    "No such filter: 'aresampler'",
+    "No such filter: 'subtitles2'",
+    "Stream specifier ':audio' in filtergraph description matches no streams.",
+    '[Parsed_loudnormalizer_4 @ 0x123] Error configuring filter output',
+    "alimiter option latency enabled\nError while opening encoder for output stream #0:0",
+  ])('does not treat an imprecise diagnostic as a safe fallback: %s', async (log) => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog(log)
+      return 1
+    })
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [],
+        note,
+        undefined,
+        cleanup,
+      ),
+    ).rejects.toThrow(
+      'The MP4 could not be encoded. Try again with a shorter or simpler edit.',
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(note).not.toHaveBeenCalled()
+    expect(getAudioFilterCapabilities(fake.ffmpeg)).toEqual({
+      afftdn: 'unknown',
+      acompressor: 'unknown',
+      loudnorm: 'unknown',
+      alimiter: 'unknown',
+      acrossfade: 'unknown',
+    })
+  })
+})
+
+describe('runExport staging errors', () => {
+  it('wraps a source read failure and still detaches the log listener', async () => {
+    const fake = createFakeFfmpeg()
+    fetchFileMock.mockRejectedValue(new Error('raw revoked object URL'))
+
+    const error = await captureExportError(() =>
+      runExport(fake.ffmpeg, fakeSourceFile(), [{ start: 0, end: 4 }]),
+    )
+
+    expect(error.message).toBe(
+      'Could not read the source file for export. Re-select the file and try again.',
+    )
+    expect(fake.exec).not.toHaveBeenCalled()
+    expect(fake.off).toHaveBeenCalledWith('log', fake.on.mock.calls[0][1])
+  })
+
+  it('wraps a source VFS write failure without attempting an encode', async () => {
+    const fake = createFakeFfmpeg()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.writeFile.mockRejectedValueOnce(new Error('Errno 28 raw VFS detail'))
+
+    await expect(
+      runExport(fake.ffmpeg, fakeSourceFile(), [{ start: 0, end: 4 }]),
+    ).rejects.toThrow(
+      'The browser could not write temporary export files. Free browser memory and try again.',
+    )
+
+    expect(fake.exec).not.toHaveBeenCalled()
+  })
+
+  it('wraps an overlay VFS write failure without exposing the VFS path', async () => {
+    const fake = createFakeFfmpeg()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.writeFile
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('write overlay_0.png failed'))
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [],
+        undefined,
+        overlayRequest([PLAN[0]], [PNG]),
+      ),
+    ).rejects.toThrow(
+      'The browser could not write temporary image files for export. Free browser memory and try again.',
+    )
+
+    expect(fake.exec).not.toHaveBeenCalled()
+  })
+
+  it('wraps a caption font read failure and recommends disabling caption burn', async () => {
+    const fake = createFakeFfmpeg()
+    fetchFileMock
+      .mockResolvedValueOnce(new Uint8Array([9]))
+      .mockRejectedValueOnce(new Error('raw font fetch failure'))
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [{ text: 'Caption', start: 0, end: 1 }],
+      ),
+    ).rejects.toThrow(
+      'Could not load the caption font for export. Turn off Burn captions into video and try again.',
+    )
+
+    expect(fake.exec).not.toHaveBeenCalled()
+  })
+
+  it('wraps a caption VFS write failure without attempting an encode', async () => {
+    const fake = createFakeFfmpeg()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.writeFile
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('raw captions.srt write failure'))
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [{ text: 'Caption', start: 0, end: 1 }],
+      ),
+    ).rejects.toThrow(
+      'The browser could not write temporary caption files. Turn off Burn captions into video or free browser memory and try again.',
+    )
+
+    expect(fake.exec).not.toHaveBeenCalled()
+  })
+
+  it('does not retry or announce a fallback when the encoded output cannot be read', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      if (filterOfExec(args).includes('afftdn=')) {
+        fake.emitLog("No such filter: 'afftdn'")
+        return 1
+      }
+      return 0
+    })
+    fake.readFile.mockRejectedValue(new Error('raw output.mp4 VFS read failure'))
+
+    const error = await captureExportError(() =>
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [],
+        note,
+        undefined,
+        cleanup,
+      ),
+    )
+
+    expect(error.message).toBe(
+      'The export finished, but the browser could not read the generated MP4. Free browser memory and try again.',
+    )
+    expect(fake.exec).toHaveBeenCalledTimes(2)
+    expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('afftdn=')
+    expect(note).not.toHaveBeenCalled()
+    expect(fake.off).toHaveBeenCalledWith('log', fake.on.mock.calls[0][1])
   })
 })
 
@@ -481,11 +867,12 @@ describe('runExport with noise reduction', () => {
     expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('afftdn=')
     expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('afftdn=')
     expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('afftdn=')
+    expect(fake.deleteFile.mock.calls[0][0]).toBe('output.mp4')
     expect(firstNote).toHaveBeenCalledWith(
-      expect.stringContaining('exported without noise reduction'),
+      expect.stringContaining('Noise reduction is unavailable'),
     )
     expect(secondNote).toHaveBeenCalledWith(
-      expect.stringContaining('exported without noise reduction'),
+      expect.stringContaining('Noise reduction is unavailable'),
     )
   })
 
@@ -520,9 +907,15 @@ describe('runExport with noise reduction', () => {
     expect(fake.exec).toHaveBeenCalledTimes(3)
     expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('afftdn=')
     expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('loudnorm=')
+    expect(fake.deleteFile.mock.calls.slice(0, 2)).toEqual([
+      ['output.mp4'],
+      ['output.mp4'],
+    ])
     expect(note).toHaveBeenCalledOnce()
     expect(note).toHaveBeenCalledWith(
-      expect.stringMatching(/without noise reduction.*without loudness normalization/),
+      expect.stringMatching(
+        /Noise reduction is unavailable.*Loudness normalization is unavailable/,
+      ),
     )
   })
 })
@@ -568,11 +961,12 @@ describe('runExport with voice leveling', () => {
     expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('acompressor=')
     expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('acompressor=')
     expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('acompressor=')
+    expect(fake.deleteFile.mock.calls[0][0]).toBe('output.mp4')
     expect(firstNote).toHaveBeenCalledWith(
-      expect.stringContaining('exported without voice leveling'),
+      expect.stringContaining('Voice leveling is unavailable'),
     )
     expect(secondNote).toHaveBeenCalledWith(
-      expect.stringContaining('exported without voice leveling'),
+      expect.stringContaining('Voice leveling is unavailable'),
     )
   })
 })
@@ -620,12 +1014,52 @@ describe('runExport with peak limiting', () => {
     expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('alimiter=')
     expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('alimiter=')
     expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('alimiter=')
+    expect(fake.deleteFile.mock.calls[0][0]).toBe('output.mp4')
     expect(firstNote).toHaveBeenCalledWith(
-      expect.stringContaining('exported without the final peak limiter'),
+      expect.stringContaining('Peak limiting is unavailable'),
     )
     expect(secondNote).toHaveBeenCalledWith(
-      expect.stringContaining('exported without the final peak limiter'),
+      expect.stringContaining('Peak limiting is unavailable'),
     )
+  })
+
+  it('retries only for a specifically failed alimiter option', async () => {
+    const fake = createFakeFfmpeg()
+    const cleanup = buildAudioCleanupPlan({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'off',
+      voiceLeveling: false,
+      loudnessNormalization: false,
+    })
+    const note = vi.fn()
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async (args: string[]) => {
+      if (filterOfExec(args).includes('alimiter=')) {
+        fake.emitLog(
+          "Error applying option 'latency' to filter 'alimiter': Option not found",
+        )
+        return 1
+      }
+      return 0
+    })
+
+    await runExport(
+      fake.ffmpeg,
+      fakeSourceFile(),
+      [{ start: 0, end: 4 }],
+      [],
+      note,
+      undefined,
+      cleanup,
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(2)
+    expect(filterOfExec(fake.exec.mock.calls[0][0])).toContain('alimiter=')
+    expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('alimiter=')
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining('Peak limiting is unavailable'),
+    )
+    expect(getAudioFilterCapabilities(fake.ffmpeg).alimiter).toBe('unsupported')
   })
 })
 
@@ -704,7 +1138,9 @@ describe('runExport with silent or missing audio', () => {
         [],
         note,
       ),
-    ).rejects.toThrow('ffmpeg export exited with code 1.')
+    ).rejects.toThrow(
+      'The MP4 could not be encoded. Try again with a shorter or simpler edit.',
+    )
 
     expect(fake.exec).toHaveBeenCalledTimes(1)
     expect(note).not.toHaveBeenCalled()
@@ -756,6 +1192,35 @@ describe('runExport with silent or missing audio', () => {
       alimiter: 'supported',
       acrossfade: 'unknown',
     })
+  })
+
+  it('does not call an unrelated loudnorm NaN failure silent audio', async () => {
+    const fake = createFakeFfmpeg()
+    const note = vi.fn()
+    const cleanup = buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS)
+    fetchFileMock.mockResolvedValue(new Uint8Array([9]))
+    fake.exec.mockImplementation(async () => {
+      fake.emitLog('[Parsed_loudnorm_2 @ 0x123] Error processing timestamp NaN')
+      return 1
+    })
+
+    await expect(
+      runExport(
+        fake.ffmpeg,
+        fakeSourceFile(),
+        [{ start: 0, end: 4 }],
+        [],
+        note,
+        undefined,
+        cleanup,
+      ),
+    ).rejects.toThrow(
+      'Audio cleanup failed during loudness normalization. The export was stopped.',
+    )
+
+    expect(fake.exec).toHaveBeenCalledTimes(1)
+    expect(note).not.toHaveBeenCalled()
+    expect(getAudioFilterCapabilities(fake.ffmpeg).loudnorm).toBe('unknown')
   })
 
   it('does not retry when loudnorm successfully accepts silent audio', async () => {
@@ -892,7 +1357,9 @@ describe('runExport with cached filter capabilities', () => {
         [],
         note,
       ),
-    ).rejects.toThrow('ffmpeg export exited with code 1.')
+    ).rejects.toThrow(
+      'The source media is malformed or uses a codec this exporter cannot decode.',
+    )
 
     expect(fake.exec).toHaveBeenCalledTimes(1)
     expect(note).not.toHaveBeenCalled()
@@ -938,10 +1405,10 @@ describe('runExport with cached filter capabilities', () => {
     expect(filterOfExec(fake.exec.mock.calls[1][0])).not.toContain('loudnorm=')
     expect(filterOfExec(fake.exec.mock.calls[2][0])).not.toContain('loudnorm=')
     expect(firstNote).toHaveBeenCalledWith(
-      expect.stringContaining('exported without loudness normalization'),
+      expect.stringContaining('Loudness normalization is unavailable'),
     )
     expect(secondNote).toHaveBeenCalledWith(
-      expect.stringContaining('exported without loudness normalization'),
+      expect.stringContaining('Loudness normalization is unavailable'),
     )
   })
 })

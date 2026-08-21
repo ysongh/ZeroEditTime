@@ -40,13 +40,19 @@ type Phase = 'idle' | 'loading' | 'encoding'
 
 function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = filename
-  document.body.appendChild(anchor)
-  anchor.click()
-  anchor.remove()
-  URL.revokeObjectURL(url)
+  try {
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    document.body.appendChild(anchor)
+    try {
+      anchor.click()
+    } finally {
+      anchor.remove()
+    }
+  } finally {
+    URL.revokeObjectURL(url)
+  }
 }
 
 export default function ExportButton({
@@ -61,6 +67,7 @@ export default function ExportButton({
   const [phase, setPhase] = useState<Phase>('idle')
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   // Phase 8: burning is opt-out. Checked (default) burns the captions into the
   // video as before; unchecked exports a clean video (the no-srtFile graph,
   // byte-identical to Phase 5.5) for the video-plus-sidecar-SRT workflow.
@@ -110,14 +117,31 @@ export default function ExportButton({
     if (file === null || !hasSegments || phase !== 'idle') {
       return
     }
-    const audioCleanupPlan = buildAudioCleanupPlan(audioCleanupSettings)
     setError(null)
-    const ffmpeg = getFfmpeg()
+    setNotice(null)
 
     try {
+      const audioCleanupPlan = buildAudioCleanupPlan(audioCleanupSettings)
+      let ffmpeg: ReturnType<typeof getFfmpeg>
+      try {
+        ffmpeg = getFfmpeg()
+      } catch (error) {
+        throw new Error(
+          'Could not start the export engine. Reload the page and try again.',
+          { cause: error },
+        )
+      }
+
       if (!ffmpeg.loaded) {
         setPhase('loading')
-        await loadFfmpeg()
+        try {
+          await loadFfmpeg()
+        } catch (error) {
+          throw new Error(
+            'Could not load the export engine. Check your connection and try again.',
+            { cause: error },
+          )
+        }
       }
 
       setProgress(0)
@@ -140,23 +164,38 @@ export default function ExportButton({
                 frameWidth: edl.source.width ?? Number.NaN,
                 frameHeight: edl.source.height ?? Number.NaN,
               }
-        // Non-fatal export fallback notes surface via the same existing line.
+        // A resolved Blob plus onNote is a degraded success, kept visually
+        // distinct from a rejected export's fatal error.
         const blob = await runExport(
           ffmpeg,
           file,
           edl.segments,
           captionsToBurn,
-          (note) => setError(note),
+          (note) => setNotice(note),
           overlayExport,
           audioCleanupPlan,
         )
-        downloadBlob(blob, 'zero-edit-time.mp4')
+        try {
+          downloadBlob(blob, 'zero-edit-time.mp4')
+        } catch (error) {
+          throw new Error(
+            'The video was exported, but the download could not start. Try again.',
+            { cause: error },
+          )
+        }
       } finally {
         ffmpeg.off('progress', onProgress)
       }
     } catch (err) {
       console.error('Export failed:', err)
-      setError(err instanceof Error ? err.message : String(err))
+      // A fatal failure means no usable download was delivered, even if a
+      // prior encode attempt had already reported a recoverable fallback.
+      setNotice(null)
+      setError(
+        err instanceof Error
+          ? err.message
+          : 'Export failed. Reload the page and try again.',
+      )
     } finally {
       setPhase('idle')
       setProgress(0)
@@ -226,8 +265,19 @@ export default function ExportButton({
         </div>
       )}
 
+      {notice !== null && (
+        <p
+          role="status"
+          style={{ color: '#7a4f00', marginTop: 8, fontSize: 14 }}
+        >
+          {notice}
+        </p>
+      )}
+
       {error !== null && (
-        <p style={{ color: 'crimson', marginTop: 8, fontSize: 14 }}>{error}</p>
+        <p role="alert" style={{ color: 'crimson', marginTop: 8, fontSize: 14 }}>
+          {error}
+        </p>
       )}
     </div>
   )

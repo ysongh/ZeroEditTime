@@ -51,10 +51,10 @@ FFmpeg download. File selection may preload it, so `Loading engine…` can be
 brief or absent. Do not run transcription and export at the same time; they
 share one FFmpeg instance.
 
-Successful fallback notes and fatal errors use the same crimson status line. A
-fallback counts as a successful degraded export only when an MP4 downloads; a
-fatal error does not. Record the exact text immediately because the next export
-clears the line.
+Successful fallback notes use an amber status line and count as a degraded
+success only when an MP4 downloads. Fatal errors use a crimson alert and do not
+produce a usable download. A fatal download failure clears any earlier fallback
+notice, and the next export clears both kinds of message.
 
 ## Fixtures
 
@@ -147,8 +147,8 @@ condition, change only Noise reduction and export Off, Light, and Strong.
 - [ ] Strong causes no unacceptable metallic ringing, robotic chirping,
       lisping, hollowing, or intelligibility loss.
 - [ ] Selecting Strong displays `Strong noise reduction may alter voice quality.`
-- [ ] No export reports that `afftdn` was unavailable. If it does, fallback
-      visibility may pass, but the affected listening result is BLOCKED.
+- [ ] No export reports that `Noise reduction is unavailable`. If it does,
+      fallback visibility may pass, but the affected listening result is BLOCKED.
 - Noise-reduction result/observations:
 
 ## Voice leveling
@@ -166,8 +166,8 @@ unchecked and once with it checked.
 - [ ] Loud phrases are controlled without sounding flattened or distorted.
 - [ ] There is no excessive pumping, breathing/noise swell, transient smearing,
       or unnatural voice change.
-- [ ] No export reports that `acompressor` was unavailable. If it does, fallback
-      visibility may pass, but the leveling result is BLOCKED.
+- [ ] No export reports that `Voice leveling is unavailable`. If it does,
+      fallback visibility may pass, but the leveling result is BLOCKED.
 - Voice-leveling result/observations:
 
 ## Loudness and peak safety
@@ -189,8 +189,9 @@ fixture again at `-14 LUFS` and `-18 LUFS` with all else unchanged.
       level after export.
 - [ ] The -14 LUFS export is predictably louder than the -18 LUFS export.
 - [ ] No export has audible clipping, crackle, or flattened/distorted peaks.
-- [ ] No export reports that `loudnorm` or `alimiter` was unavailable. If one is
-      skipped, mark the corresponding normalization or peak result BLOCKED.
+- [ ] No export reports that `Loudness normalization is unavailable` or `Peak
+      limiting is unavailable`. If one is skipped, mark the corresponding
+      normalization or peak result BLOCKED.
 - [ ] If a trusted meter is available, record its readings without requiring an
       exact -16 LUFS or -1 dB result: normalization is one-pass and AAC encoding
       can shift measured peaks slightly.
@@ -330,6 +331,36 @@ warning confirms that exact invocation in this core.
 - [ ] Any missing required audio-processing stage caused a clear fatal export
       error rather than an untreated success.
 - Runtime-support observations:
+
+## Failure recovery
+
+These checks validate the visible boundary, not the raw developer diagnostics
+preserved in the browser console. Do not deliberately exhaust memory on a
+machine with other unsaved work; the automated suite covers the memory
+classifier.
+
+- [ ] With an uncached core request blocked or offline, Export shows `Could not
+      load the export engine. Check your connection and try again.`, returns to
+      idle, and can be retried after connectivity is restored.
+- [ ] A corrupted or truncated copy of an otherwise supported fixture fails
+      without downloading an MP4 and shows a source-media or generic encode
+      message, not a filter graph, stream label, VFS path, CDN URL, or exit code.
+- [ ] A successful optional-stage fallback downloads an MP4 and shows one amber
+      note naming the omitted treatment; retrying does not repeat the failed
+      first attempt for a capability already learned as unavailable.
+- [ ] A fatal export after any earlier recoverable attempt shows only the crimson
+      fatal message, downloads nothing usable, returns the UI to idle, and allows
+      a later export attempt.
+- [ ] A caption-font or temporary-file failure gives a specific recovery action
+      without exposing a raw browser or FFmpeg exception.
+- Failure-recovery fixtures, exact messages, and results:
+
+There is intentionally no Cancel button in this phase. The installed FFmpeg
+AbortSignal rejects only the caller while the worker can keep running, and true
+termination would kill the one engine shared with transcription. User-driven
+cancellation remains deferred until shared FFmpeg jobs have centralized ownership
+and serialization. An abort-shaped error received from the engine is still shown
+as a safe fatal `Export was canceled` message.
 
 ## Optional performance measurements
 

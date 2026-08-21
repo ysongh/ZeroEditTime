@@ -71,17 +71,32 @@ export interface BuildExportOptions {
 // they depend on the actual FFmpeg log stream. Per-instance capability state is
 // isolated in audioFilterCapabilities.ts; pure syntax is in audioCleanupFilters.ts.
 const NOISE_REDUCTION_UNAVAILABLE_NOTE =
-  'This ffmpeg core has no afftdn filter — exported without noise reduction.'
+  'Noise reduction is unavailable in this browser export engine — exported without it.'
 const VOICE_LEVELING_UNAVAILABLE_NOTE =
-  'This ffmpeg core has no acompressor filter — exported without voice leveling.'
+  'Voice leveling is unavailable in this browser export engine — exported without it.'
 const LOUDNESS_NORMALIZATION_UNAVAILABLE_NOTE =
-  'This ffmpeg core has no loudnorm filter — exported without loudness normalization.'
+  'Loudness normalization is unavailable in this browser export engine — exported without it.'
 const PEAK_LIMITER_UNAVAILABLE_NOTE =
-  'This ffmpeg core has no compatible alimiter filter — exported without the final peak limiter.'
+  'Peak limiting is unavailable in this browser export engine — exported without it.'
 const NO_AUDIO_STREAM_NOTE =
   'The source has no audio track — exported video without audio.'
 const SILENT_LOUDNESS_NORMALIZATION_NOTE =
   'Loudness normalization could not analyze silent audio — exported without it.'
+
+const EXPORT_CANCELED_MESSAGE =
+  'Export was canceled. No output file was created.'
+const EXPORT_ENGINE_STOPPED_MESSAGE =
+  'The export engine stopped before the export finished. Try the export again.'
+const EXPORT_OUT_OF_MEMORY_MESSAGE =
+  'The browser ran out of memory during export. Close other tabs or export a shorter, simpler edit and try again.'
+const MALFORMED_SOURCE_MESSAGE =
+  'The source media is malformed or uses a codec this exporter cannot decode. Try another file or re-encode the source.'
+const UNSUPPORTED_CHANNEL_LAYOUT_MESSAGE =
+  'The source audio uses a channel layout this exporter cannot process. Convert it to mono or stereo and try again.'
+const AUDIO_MAPPING_FAILURE_MESSAGE =
+  'Processed audio could not be connected to the exported MP4. The export was stopped to avoid missing or untreated audio.'
+const GENERIC_EXPORT_FAILURE_MESSAGE =
+  'The MP4 could not be encoded. Try again with a shorter or simpler edit.'
 
 // Phase-6 caption burn. libass renders the SRT via the `subtitles` filter,
 // styled entirely through force_style (ASS colors are &HAABBGGRR): white bold
@@ -246,7 +261,7 @@ const SRT_NAME = 'captions.srt'
  * the built SRT are staged into the VFS and the exec burns them; when empty the
  * burn is skipped entirely and the graph is byte-identical to Phase 5.5.
  * `imageOverlays`, when supplied with a non-empty render plan, are staged once
- * under generated VFS names and reused if loudnorm needs a fallback encode.
+ * under generated VFS names and reused if a safe fallback encode is needed.
  * They are composited before the optional caption burn and are deleted in the
  * same best-effort cleanup as every other temporary export file.
  *
@@ -255,9 +270,10 @@ const SRT_NAME = 'captions.srt'
  * skipped for this export if its own failure contains a non-finite silence
  * measurement. Neither input-specific case poisons the per-core capability
  * cache. Missing optional filters retain their established warned fallbacks;
- * missing required audio primitives produce a clear fatal error. Unrelated
- * failures, including malformed media, are rethrown. A missing `subtitles`
- * filter is also fatal so requested captions are never silently discarded.
+ * missing required audio primitives produce a clear fatal error. All other
+ * failures are classified only after those precise branches and receive stable
+ * user-facing messages with raw diagnostics retained as their cause. A missing
+ * `subtitles` filter is fatal so requested captions are never silently discarded.
  */
 export async function runExport(
   ffmpeg: FFmpeg,
@@ -271,17 +287,25 @@ export async function runExport(
   const inputName = `input.${inputExtension(file.name)}`
   const outputName = 'output.mp4'
   const burn = captions.length > 0
-  const imageOverlayGraph =
-    imageOverlays === undefined
-      ? null
-      : buildImageOverlayFilterGraph(
-          imageOverlays.renderPlan,
-          imageOverlays.assets,
-          {
-            frameWidth: imageOverlays.frameWidth,
-            frameHeight: imageOverlays.frameHeight,
-          },
-        )
+  let imageOverlayGraph: ImageOverlayFilterGraph | null
+  try {
+    imageOverlayGraph =
+      imageOverlays === undefined
+        ? null
+        : buildImageOverlayFilterGraph(
+            imageOverlays.renderPlan,
+            imageOverlays.assets,
+            {
+              frameWidth: imageOverlays.frameWidth,
+              frameHeight: imageOverlays.frameHeight,
+            },
+          )
+  } catch (error) {
+    throw classifyStageFailure(
+      error,
+      'Could not prepare image overlays for export. Remove the affected image and try again.',
+    )
+  }
 
   // Accumulate ffmpeg's stderr so a failed exec can be classified. Only precise,
   // filter-specific failures trigger a fallback; unrelated encode errors remain
@@ -340,19 +364,43 @@ export async function runExport(
     if (exitCode !== 0) {
       throw new Error(`ffmpeg export exited with code ${exitCode}.`)
     }
-    return ffmpeg.readFile(outputName)
   }
 
   try {
-    await ffmpeg.writeFile(inputName, await fetchFile(file))
+    let sourceData: Uint8Array
+    try {
+      sourceData = await fetchFile(file)
+    } catch (error) {
+      throw classifyStageFailure(
+        error,
+        'Could not read the source file for export. Re-select the file and try again.',
+      )
+    }
+    try {
+      await ffmpeg.writeFile(inputName, sourceData)
+    } catch (error) {
+      throw classifyStageFailure(
+        error,
+        'The browser could not write temporary export files. Free browser memory and try again.',
+      )
+    }
 
     for (const staged of imageOverlayGraph?.stagedAssets ?? []) {
+      let imageData: Uint8Array
       try {
-        await ffmpeg.writeFile(staged.inputName, await fetchFile(staged.src))
+        imageData = await fetchFile(staged.src)
       } catch (error) {
-        throw new Error(
-          `Could not stage image "${staged.name}" for export.`,
-          { cause: error },
+        throw classifyStageFailure(
+          error,
+          `Could not read image "${staged.name}" for export. Re-add the image and try again.`,
+        )
+      }
+      try {
+        await ffmpeg.writeFile(staged.inputName, imageData)
+      } catch (error) {
+        throw classifyStageFailure(
+          error,
+          'The browser could not write temporary image files for export. Free browser memory and try again.',
         )
       }
     }
@@ -365,8 +413,27 @@ export async function runExport(
       } catch {
         // The dir survives from an earlier export this session — fine.
       }
-      await ffmpeg.writeFile(FONT_VFS_PATH, await fetchFile(FONT_URL))
-      await ffmpeg.writeFile(SRT_NAME, new TextEncoder().encode(buildSrt(captions)))
+      let fontData: Uint8Array
+      try {
+        fontData = await fetchFile(FONT_URL)
+      } catch (error) {
+        throw classifyStageFailure(
+          error,
+          'Could not load the caption font for export. Turn off Burn captions into video and try again.',
+        )
+      }
+      try {
+        await ffmpeg.writeFile(FONT_VFS_PATH, fontData)
+        await ffmpeg.writeFile(
+          SRT_NAME,
+          new TextEncoder().encode(buildSrt(captions)),
+        )
+      } catch (error) {
+        throw classifyStageFailure(
+          error,
+          'The browser could not write temporary caption files. Turn off Burn captions into video or free browser memory and try again.',
+        )
+      }
     }
 
     const capabilities = getAudioFilterCapabilities(ffmpeg)
@@ -405,11 +472,11 @@ export async function runExport(
       fallbackNotes.push(PEAK_LIMITER_UNAVAILABLE_NOTE)
     }
 
-    let data: Awaited<ReturnType<FFmpeg['readFile']>> | undefined
-    while (data === undefined) {
+    let encoded = false
+    while (!encoded) {
       logs.length = 0
       try {
-        data = await encode(
+        await encode(
           withAudio,
           withLoudnorm,
           withNoiseReduction,
@@ -428,13 +495,18 @@ export async function runExport(
         if (withAudio && withPeakLimiter) {
           recordAudioFilterSupport(ffmpeg, 'alimiter', true)
         }
+        encoded = true
       } catch (err) {
         const log = logs.join('\n')
+        const earlyFailure = classifyEarlyExportFailure(log, err)
+        if (earlyFailure !== null) {
+          throw earlyFailure
+        }
         if (isMissingSubtitles(log)) {
-          throw new Error(
-            'This ffmpeg core has no subtitles filter — captions cannot be burned. ' +
-              'Undo the captions to export without them.',
-            { cause: err },
+          throw makeUserFacingError(
+            'This export engine cannot burn captions. Turn off Burn captions into video and try again.',
+            err,
+            log,
           )
         }
         if (withAudio && isMissingSourceAudioStream(log)) {
@@ -449,31 +521,35 @@ export async function runExport(
           continue
         }
         if (isMissingRequiredAudioProcessing(log)) {
-          throw new Error(
-            'This ffmpeg core is missing required audio processing — ' +
-              'the export cannot preserve audio safely.',
-            { cause: err },
+          throw makeUserFacingError(
+            'This export engine is missing required audio processing, so the export was stopped to preserve audio safely.',
+            err,
+            log,
           )
         }
         if (withNoiseReduction && isMissingAfftdn(log)) {
+          await safeDelete(ffmpeg, outputName)
           recordAudioFilterSupport(ffmpeg, 'afftdn', false)
           withNoiseReduction = false
           fallbackNotes.push(NOISE_REDUCTION_UNAVAILABLE_NOTE)
           continue
         }
         if (withVoiceLeveling && isMissingAcompressor(log)) {
+          await safeDelete(ffmpeg, outputName)
           recordAudioFilterSupport(ffmpeg, 'acompressor', false)
           withVoiceLeveling = false
           fallbackNotes.push(VOICE_LEVELING_UNAVAILABLE_NOTE)
           continue
         }
         if (withPeakLimiter && isUnavailableAlimiter(log)) {
+          await safeDelete(ffmpeg, outputName)
           recordAudioFilterSupport(ffmpeg, 'alimiter', false)
           withPeakLimiter = false
           fallbackNotes.push(PEAK_LIMITER_UNAVAILABLE_NOTE)
           continue
         }
         if (withLoudnorm && isMissingLoudnorm(log)) {
+          await safeDelete(ffmpeg, outputName)
           recordAudioFilterSupport(ffmpeg, 'loudnorm', false)
           withLoudnorm = false
           fallbackNotes.push(LOUDNESS_NORMALIZATION_UNAVAILABLE_NOTE)
@@ -487,18 +563,35 @@ export async function runExport(
           fallbackNotes.push(SILENT_LOUDNESS_NORMALIZATION_NOTE)
           continue
         }
-        throw err
+        throw classifyFinalExportFailure(
+          log,
+          err,
+          audioCleanup?.enabled === true,
+        )
       }
     }
+
+    let blob: Blob
+    try {
+      const data = await ffmpeg.readFile(outputName)
+      // A binary read is always Uint8Array. Narrow it to an ArrayBuffer-backed
+      // view so it is a valid BlobPart under strict DOM typings.
+      const bytes: BlobPart =
+        typeof data === 'string' ? data : (data as Uint8Array<ArrayBuffer>)
+      blob = new Blob([bytes], { type: 'video/mp4' })
+    } catch (error) {
+      throw classifyStageFailure(
+        error,
+        'The export finished, but the browser could not read the generated MP4. Free browser memory and try again.',
+      )
+    }
+
+    // Notes describe an actual degraded success, so emit them only after the
+    // final output was read successfully and is ready to return.
     if (fallbackNotes.length > 0) {
       onNote?.(fallbackNotes.join(' '))
     }
-
-    // readFile returns FileData (Uint8Array | string); a binary read is always a
-    // Uint8Array. Narrow it to an ArrayBuffer-backed view so it's a valid BlobPart.
-    const bytes: BlobPart =
-      typeof data === 'string' ? data : (data as Uint8Array<ArrayBuffer>)
-    return new Blob([bytes], { type: 'video/mp4' })
+    return blob
   } finally {
     ffmpeg.off('log', onLog)
     await safeDelete(ffmpeg, inputName)
@@ -513,27 +606,53 @@ export async function runExport(
   }
 }
 
+function isMissingFilter(log: string, filterName: string): boolean {
+  return log.split('\n').some((line) => {
+    const match = /no such filter:\s*['"]?([a-z0-9_]+)['"]?(?=\s|$|[.,;:])/i.exec(
+      line,
+    )
+    return match?.[1]?.toLowerCase() === filterName
+  })
+}
+
+function lineMentionsExactFilter(line: string, filterName: string): boolean {
+  const normalizedName = filterName.toLowerCase()
+  const parsedPrefix = `parsed_${normalizedName}_`
+  const identifiers = line.toLowerCase().match(/[a-z0-9_]+/g) ?? []
+  return identifiers.some((identifier) => {
+    if (identifier === normalizedName) {
+      return true
+    }
+    if (!identifier.startsWith(parsedPrefix)) {
+      return false
+    }
+    return /^\d+$/.test(identifier.slice(parsedPrefix.length))
+  })
+}
+
 function isMissingLoudnorm(log: string): boolean {
-  return /no such filter:\s*'?loudnorm'?/i.test(log)
+  return isMissingFilter(log, 'loudnorm')
 }
 
 function isMissingSourceAudioStream(log: string): boolean {
   return log.split('\n').some(
     (line) =>
-      /stream specifier\s+['"]?(?:0)?:a(?:[:0-9]*)?['"]?/i.test(line) &&
-      /matches no streams/i.test(line),
+      /stream specifier\s+['"]?(?:0)?:a(?::\d+)?['"]?(?=\s|$)/i.test(
+        line,
+      ) && /matches no streams/i.test(line),
   )
 }
 
 function isMissingRequiredAudioProcessing(log: string): boolean {
-  return /no such filter:\s*['"]?(?:atrim|asetpts|afade|aresample)['"]?(?:\s|$)/i.test(
-    log,
+  return ['atrim', 'asetpts', 'afade', 'aresample'].some((filterName) =>
+    isMissingFilter(log, filterName),
   )
 }
 
 function isSilenceRelatedLoudnormFailure(log: string): boolean {
   const lines = log.split('\n')
-  const hasLoudnorm = (line: string): boolean => /loudnorm/i.test(line)
+  const hasLoudnorm = (line: string): boolean =>
+    lineMentionsExactFilter(line, 'loudnorm')
   const hasNonFiniteValue = (line: string): boolean =>
     /(?:^|[^a-z])(?:nan|[-+]?inf(?:inity)?)(?:$|[^a-z])/i.test(line)
   const hasFailure = (line: string): boolean =>
@@ -542,7 +661,12 @@ function isSilenceRelatedLoudnormFailure(log: string): boolean {
     /(?:input|measured)_(?:i|tp|lra|thresh)|target_offset/i.test(line)
 
   return lines.some((line, index) => {
-    if (hasLoudnorm(line) && hasNonFiniteValue(line) && hasFailure(line)) {
+    if (
+      hasLoudnorm(line) &&
+      hasLoudnessMeasurement(line) &&
+      hasNonFiniteValue(line) &&
+      hasFailure(line)
+    ) {
       return true
     }
 
@@ -563,22 +687,185 @@ function isSilenceRelatedLoudnormFailure(log: string): boolean {
 }
 
 function isMissingAfftdn(log: string): boolean {
-  return /no such filter:\s*'?afftdn'?/i.test(log)
+  return isMissingFilter(log, 'afftdn')
 }
 
 function isMissingAcompressor(log: string): boolean {
-  return /no such filter:\s*'?acompressor'?/i.test(log)
+  return isMissingFilter(log, 'acompressor')
 }
 
 function isUnavailableAlimiter(log: string): boolean {
   return (
-    /no such filter:\s*'?alimiter'?/i.test(log) ||
-    /(?:option|error applying option).*?(?:latency|level).*?alimiter/i.test(log)
+    isMissingFilter(log, 'alimiter') ||
+    log.split('\n').some(
+      (line) =>
+        lineMentionsExactFilter(line, 'alimiter') &&
+        /\b(?:latency|level)\b/i.test(line) &&
+        (/error applying option/i.test(line) ||
+          (/\boption\b/i.test(line) &&
+            /\b(?:not found|invalid|unsupported|unknown)\b/i.test(line))),
+    )
   )
 }
 
 function isMissingSubtitles(log: string): boolean {
-  return /no such filter:\s*'?subtitles'?/i.test(log)
+  return isMissingFilter(log, 'subtitles')
+}
+
+function errorDiagnostic(error: unknown): string {
+  if (typeof error === 'string') {
+    return error
+  }
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`
+  }
+  if (typeof error === 'object' && error !== null) {
+    const candidate = error as { name?: unknown; message?: unknown }
+    const name = typeof candidate.name === 'string' ? candidate.name : ''
+    const message =
+      typeof candidate.message === 'string' ? candidate.message : ''
+    return `${name}: ${message}`
+  }
+  return String(error)
+}
+
+function makeUserFacingError(
+  message: string,
+  cause: unknown,
+  log = '',
+): Error {
+  const diagnostic = log.trim().slice(-8_000)
+  const preservedCause =
+    diagnostic === ''
+      ? cause
+      : new Error(`FFmpeg diagnostics:\n${diagnostic}`, { cause })
+  return new Error(message, { cause: preservedCause })
+}
+
+function isAbortError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false
+  }
+  return (error as { name?: unknown }).name === 'AbortError'
+}
+
+function isEngineTerminated(error: unknown): boolean {
+  return /called FFmpeg\.terminate\(\)/i.test(errorDiagnostic(error))
+}
+
+function isOutOfMemoryFailure(log: string, error: unknown): boolean {
+  const diagnostic = `${log}\n${errorDiagnostic(error)}`
+  return (
+    /\b(?:out of memory|cannot allocate memory|could not allocate memory|failed to allocate memory|std::bad_alloc|bad_alloc|oom)\b/i.test(
+      diagnostic,
+    ) ||
+    /cannot enlarge memory arrays|webassembly\.memory\.grow\(\).*maximum memory size exceeded|array buffer allocation failed/i.test(
+      diagnostic,
+    )
+  )
+}
+
+function isUnsupportedChannelLayout(log: string): boolean {
+  return log.split('\n').some(
+    (line) =>
+      /\bchannel[_ ]layout\b/i.test(line) &&
+      /\b(?:unsupported|invalid|unknown|cannot|could not|not supported)\b/i.test(
+        line,
+      ),
+  )
+}
+
+function isMalformedSourceMedia(log: string): boolean {
+  return log.split('\n').some((line) =>
+    /(?:invalid data found when processing input|error while decoding stream|could not find codec parameters|moov atom not found|corrupt(?:ed)? (?:input|frame|packet))/i.test(
+      line,
+    ),
+  )
+}
+
+function isLoudnessProcessingFailure(log: string): boolean {
+  return log.split('\n').some(
+    (line) =>
+      lineMentionsExactFilter(line, 'loudnorm') &&
+      /\b(?:error|failed|invalid|out of range|numerical)\b/i.test(line),
+  )
+}
+
+function isAudioMappingFailure(log: string): boolean {
+  return log.split('\n').some((line) =>
+    /(?:output with label ['"]?outa['"]? does not exist|failed to set value ['"]?\[outa\]['"]? for option ['"]?map|invalid output link label:\s*['"]?outa['"]?|stream map.*\[outa\].*matches no streams)/i.test(
+      line,
+    ),
+  )
+}
+
+function isAudioCleanupProcessingFailure(log: string): boolean {
+  return log.split('\n').some(
+    (line) =>
+      (['afftdn', 'acompressor', 'alimiter'].some((filterName) =>
+        lineMentionsExactFilter(line, filterName),
+      ) ||
+        (lineMentionsExactFilter(line, 'afade') && /\bqsin\b/i.test(line))) &&
+      /\b(?:error|failed|invalid|cannot|could not)\b/i.test(line),
+  )
+}
+
+function classifyEarlyExportFailure(
+  log: string,
+  error: unknown,
+): Error | null {
+  if (isAbortError(error)) {
+    return makeUserFacingError(EXPORT_CANCELED_MESSAGE, error, log)
+  }
+  if (isEngineTerminated(error)) {
+    return makeUserFacingError(EXPORT_ENGINE_STOPPED_MESSAGE, error, log)
+  }
+  if (isOutOfMemoryFailure(log, error)) {
+    return makeUserFacingError(EXPORT_OUT_OF_MEMORY_MESSAGE, error, log)
+  }
+  return null
+}
+
+function classifyFinalExportFailure(
+  log: string,
+  error: unknown,
+  cleanupEnabled: boolean,
+): Error {
+  const early = classifyEarlyExportFailure(log, error)
+  if (early !== null) {
+    return early
+  }
+  if (isUnsupportedChannelLayout(log)) {
+    return makeUserFacingError(
+      UNSUPPORTED_CHANNEL_LAYOUT_MESSAGE,
+      error,
+      log,
+    )
+  }
+  if (isMalformedSourceMedia(log)) {
+    return makeUserFacingError(MALFORMED_SOURCE_MESSAGE, error, log)
+  }
+  if (isLoudnessProcessingFailure(log)) {
+    const message = cleanupEnabled
+      ? 'Audio cleanup failed during loudness normalization. The export was stopped. Try another source file or re-encode the source audio.'
+      : 'Export audio processing failed during loudness normalization. Try another source file or re-encode the source audio.'
+    return makeUserFacingError(message, error, log)
+  }
+  if (isAudioMappingFailure(log)) {
+    return makeUserFacingError(AUDIO_MAPPING_FAILURE_MESSAGE, error, log)
+  }
+  if (cleanupEnabled && isAudioCleanupProcessingFailure(log)) {
+    return makeUserFacingError(
+      'Audio cleanup failed while processing this source. The export was stopped; turn off Improve voice audio or try another source file.',
+      error,
+      log,
+    )
+  }
+  return makeUserFacingError(GENERIC_EXPORT_FAILURE_MESSAGE, error, log)
+}
+
+function classifyStageFailure(error: unknown, message: string): Error {
+  return classifyEarlyExportFailure('', error) ?? makeUserFacingError(message, error)
 }
 
 async function safeDelete(ffmpeg: FFmpeg, path: string): Promise<void> {

@@ -162,7 +162,7 @@ describe('ExportButton orchestration', () => {
       noiseReduction: 'strong',
     })
 
-    expect(harness.stateSetters[4]).toHaveBeenCalledWith({
+    expect(harness.stateSetters[5]).toHaveBeenCalledWith({
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
       noiseReduction: 'strong',
     })
@@ -256,5 +256,132 @@ describe('ExportButton orchestration', () => {
       'Export failed:',
       expect.objectContaining({ message: 'encode failed' }),
     )
+  })
+
+  it('shows a successful fallback as a notice rather than a fatal error', async () => {
+    const fake = createFfmpeg(true)
+    const anchor = {
+      href: '',
+      download: '',
+      click: vi.fn(),
+      remove: vi.fn(),
+    }
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
+    harness.runExport.mockImplementation(async (...args: unknown[]) => {
+      const onNote = args[4]
+      if (typeof onNote === 'function') {
+        const notify = onNote as (message: string) => void
+        notify(
+          'Noise reduction is unavailable in this browser export engine — exported without it.',
+        )
+      }
+      return new Blob([new Uint8Array([1])], { type: 'video/mp4' })
+    })
+    const view = renderExportButton()
+
+    findButton(view, 'Export MP4').props.onClick?.()
+
+    await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledOnce())
+    expect(harness.stateSetters[3].mock.calls.map(([value]) => value)).toEqual([
+      null,
+      'Noise reduction is unavailable in this browser export engine — exported without it.',
+    ])
+    expect(harness.stateSetters[2]).toHaveBeenCalledOnce()
+    expect(harness.stateSetters[2]).toHaveBeenCalledWith(null)
+  })
+
+  it('surfaces a friendly engine-load error without starting export', async () => {
+    const fake = createFfmpeg(false)
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
+    harness.loadFfmpeg.mockRejectedValue(
+      new Error('failed to import ffmpeg-core.js from raw CDN URL'),
+    )
+    const view = renderExportButton()
+
+    findButton(view, 'Export MP4').props.onClick?.()
+
+    await vi.waitFor(() =>
+      expect(harness.stateSetters[2]).toHaveBeenLastCalledWith(
+        'Could not load the export engine. Check your connection and try again.',
+      ),
+    )
+    expect(harness.runExport).not.toHaveBeenCalled()
+    expect(fake.ffmpeg.on).not.toHaveBeenCalled()
+    expect(harness.stateSetters[0].mock.calls.map(([value]) => value)).toEqual([
+      'loading',
+      'idle',
+    ])
+    expect(consoleError).toHaveBeenCalledWith(
+      'Export failed:',
+      expect.objectContaining({
+        message:
+          'Could not load the export engine. Check your connection and try again.',
+      }),
+    )
+  })
+
+  it('handles a synchronous engine-construction failure inside the UI boundary', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    harness.getFfmpeg.mockImplementation(() => {
+      throw new Error('Worker constructor exposed a raw browser exception')
+    })
+    const view = renderExportButton()
+
+    findButton(view, 'Export MP4').props.onClick?.()
+
+    await vi.waitFor(() =>
+      expect(harness.stateSetters[2]).toHaveBeenLastCalledWith(
+        'Could not start the export engine. Reload the page and try again.',
+      ),
+    )
+    expect(harness.loadFfmpeg).not.toHaveBeenCalled()
+    expect(harness.runExport).not.toHaveBeenCalled()
+    expect(harness.stateSetters[0]).toHaveBeenCalledOnce()
+    expect(harness.stateSetters[0]).toHaveBeenCalledWith('idle')
+    expect(consoleError).toHaveBeenCalledOnce()
+  })
+
+  it('clears a fallback notice if the completed encode cannot be downloaded', async () => {
+    const fake = createFfmpeg(true)
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
+    harness.runExport.mockImplementation(async (...args: unknown[]) => {
+      const onNote = args[4]
+      if (typeof onNote === 'function') {
+        const notify = onNote as (message: string) => void
+        notify('Noise reduction is unavailable — exported without it.')
+      }
+      return new Blob([new Uint8Array([1])], { type: 'video/mp4' })
+    })
+    vi.spyOn(URL, 'createObjectURL').mockImplementation(() => {
+      throw new Error('raw object URL failure')
+    })
+    const view = renderExportButton()
+
+    findButton(view, 'Export MP4').props.onClick?.()
+
+    await vi.waitFor(() =>
+      expect(harness.stateSetters[2]).toHaveBeenLastCalledWith(
+        'The video was exported, but the download could not start. Try again.',
+      ),
+    )
+    expect(harness.runExport).toHaveBeenCalledOnce()
+    expect(harness.stateSetters[3].mock.calls.map(([value]) => value)).toEqual([
+      null,
+      'Noise reduction is unavailable — exported without it.',
+      null,
+    ])
+    expect(fake.ffmpeg.off).toHaveBeenCalledWith(
+      'progress',
+      fake.getProgressListener(),
+    )
+    expect(consoleError).toHaveBeenCalledOnce()
   })
 })

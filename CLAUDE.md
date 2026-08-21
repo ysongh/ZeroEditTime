@@ -64,8 +64,8 @@ empty folders for future phases.
   tail into `[outa]`; a single segment chains the identical tail directly. The `aresample` is
   required (loudnorm internally upsamples to 192 kHz). `runExport` retries without loudnorm ONLY
   on a "No such filter: loudnorm" exec failure — fades + resample stay, never a silent
-  dynaudnorm substitute — and surfaces a note via `onNote` into the Export button's existing
-  error line. **Part B** — silence removal no longer deletes a gap wholly (machine-gun pacing):
+  dynaudnorm substitute — and surfaces a visible export notice via `onNote`. **Part B** — silence
+  removal no longer deletes a gap wholly (machine-gun pacing):
   `findSilences(transcript, threshold_ms, keep_gap_ms = 250)` emits a removal only when the gap
   exceeds BOTH the threshold and the keep (so it's always positive) and trims the MIDDLE of the
   gap, keeping `keep_gap_ms` split half/half — the earlier word's decay on one side, the next
@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–T (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–U (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -435,6 +435,26 @@ empty folders for future phases.
   preload, and zero FFmpeg access during ExportButton render/settings changes. The manual guide
   adds blank, optional startup and warm OFF/ON export timing records. No benchmark was performed;
   extra filters may increase browser export time, and no material slowdown is claimed or ruled out.
+  Part U makes failure handling explicit without broadening any fallback. Exact missing optional
+  filters, no-source-audio, and non-finite silent-loudness diagnostics retain their conservative
+  warned retries; each retry first removes a possible partial fixed-name MP4, and exact token
+  boundaries prevent lookalike filter names or `:audio` from silently disabling requested work.
+  Abort-shaped errors, engine termination, browser/Wasm memory exhaustion, malformed source media,
+  unsupported channel layouts, non-recoverable loudness/cleanup failures, processed-audio mapping,
+  and unrelated encode failures now become stable user-facing fatal messages. Catastrophic
+  abort/termination/memory errors outrank retry, while broader media/layout classifiers run only
+  after precise safe fallbacks so a harmless warning cannot preempt them. Source, image, caption
+  font/SRT, and output-read stages are wrapped with actionable messages; raw diagnostics survive
+  only as `Error.cause` for the console, never in visible UI text. Output is read successfully
+  before fallback notes are emitted. `ExportButton` catches synchronous engine construction,
+  loading, encode, and download failures, renders degraded successes in a separate amber status
+  line, renders fatal failures as crimson alerts, and clears any stale success notice on failure.
+  Automated tests cover classifier precedence/boundaries, one-attempt fatality, unchanged
+  capability state, staging/output cleanup, notice/error separation, and load/download recovery.
+  No Cancel control or AbortSignal was added: this FFmpeg wrapper's signal rejects only the caller
+  while Wasm may continue, and true termination would kill the single unserialized engine shared
+  with transcription. User-driven cancellation remains deferred until shared jobs have centralized
+  ownership and serialization. No browser or manual-media result is claimed.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -836,13 +856,19 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     fatal rather than silently removing cleanup. Part P adds two non-cached input fallbacks: the
     exact missing-source-audio diagnostic retries video-only, and a loudnorm-specific non-finite
     silence failure retries without that stage. Successful silent normalization is accepted;
-    malformed input remains fatal. Video-only success records no audio-filter support.
+    malformed input remains fatal. Video-only success records no audio-filter support. Part U
+    keeps those precise recovery branches but parses exact filter/specifier tokens, deletes partial
+    output before every retry, and normalizes every final encode failure into a stable public
+    message. Fatal classification covers cancellation-shaped errors, engine termination, memory,
+    malformed media, channel layout, loudness, audio cleanup, processed-audio mapping, and generic
+    encoding; raw logs are attached only as an `Error.cause`. Source/image/font/SRT VFS preparation
+    and final output reads have their own actionable wrappers, and `onNote` fires only after the MP4
+    has been read successfully. Broad diagnostics never cause a retry or capability downgrade.
     The engine instance + CDN loader live in `src/ffmpeg/engine.ts`.
   - `ExportButton.tsx` — the Export section: gets the shared engine via `getFfmpeg()`/`loadFfmpeg()`
     from `src/ffmpeg/engine.ts` (no longer holds its own instance), loads it if needed (distinct
     "Loading engine…" state), encodes with a progress bar, and downloads `zero-edit-time.mp4`.
-    Disabled while busy and when nothing is kept. Routes `runExport`'s non-fatal fallback notes
-    into its existing error line (no new UI). Phase 8: a render-time
+    Disabled while busy and when nothing is kept. Phase 8: a render-time
     `prepareCaptionsForExport(edl.captions, edl)` feeds both the burn and "Download SRT"
     (`buildSrt` → text/plain `zero-edit-time.srt` via the same download helper as the MP4;
     output-time, so it matches the exported file; disabled with a hint when every caption was
@@ -859,12 +885,18 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     handling, lazy engine loading, or download behavior. Part Q leaves settings in the same local
     mounted-editor state as the burn-caption export choice. No project persistence boundary exists
     to extend, so it adds neither an EDL field nor a parallel storage/migration format; a fresh
-    mount clones the recommended defaults.
+    mount clones the recommended defaults. Part U moves engine access inside the guarded click
+    path, wraps engine load and download-start failures, keeps raw causes in the console, and
+    separates resolved-export fallback notes (amber `role=status`) from fatal failures (crimson
+    `role=alert`). A fatal path clears any prior notice. It intentionally adds no misleading Cancel
+    control while the shared FFmpeg engine lacks serialized job ownership.
   - `ExportButton.test.tsx` — Part-R no-DOM orchestration harness. It invokes the real click handler
     with mocked hooks/engine/runtime to verify load-on-demand ordering, normalized default-plan
     handoff, progress clamping, listener removal on success/failure, download reachability, and
     visible error-state recovery without loading FFmpeg. Part T also proves rendering and changing
-    cleanup settings never accesses, loads, or runs the engine.
+    cleanup settings never accesses, loads, or runs the engine. Part U covers synchronous engine
+    construction and async load failures, fallback-notice routing, fatal-notice clearing, download
+    failure wording, listener cleanup, and return to idle.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off
@@ -912,7 +944,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     success, and malformed-stream one-attempt fatality coverage. Part R adds combined
     cleanup/caption/overlay staging and success, all-file cleanup after failed exec, caller progress
     continuity, a required-audio-stage fatal message with unchanged capabilities, and finite
-    near-silent/quiet/already-loud diagnostic paths. Every engine/runtime dependency remains mocked.
+    near-silent/quiet/already-loud diagnostic paths. Part U adds exact-boundary safe-fallback tests,
+    partial-output deletion, classifier precedence, abort/termination/Wasm-memory normalization,
+    channel/layout/loudness/cleanup/mapping/generic fatal matrices, friendly staging and output-read
+    failures, no fatal retry/note/cache mutation, and raw-diagnostic cause preservation. Every
+    engine/runtime dependency remains mocked.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,
@@ -922,8 +958,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   combined synchronization, channel/rate/container, silent/no-audio/short-media, and actual runtime
   filter-support results with explicit PASS/FAIL/BLOCKED/NOT RUN criteria. Part T adds optional
   blank startup and warm cleanup-OFF/ON export timing tables that separate core loading, fallback
-  retries, and the legacy processing baseline. All fields begin blank; the file documents how to
-  verify Phase 10 without claiming that anyone has run it.
+  retries, and the legacy processing baseline. Part U distinguishes amber degraded-success notices
+  from crimson fatal alerts, adds safe failure-recovery checks, and documents why user cancellation
+  remains unavailable. All fields begin blank; the file documents how to verify Phase 10 without
+  claiming that anyone has run it.
 - `netlify/functions/transcribe.ts` — Phase-2 proxy: POSTs the audio to Whisper, returns
   `{ words: Word[] }`, and hides the API key. The OpenAI upload is named from the request's
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in
