@@ -263,7 +263,7 @@ empty folders for future phases.
   cut-continuity, alpha, captions, audio/lip-sync, progress, recovery, and result-recording checks.
   The document provides instructions and blank result fields; its existence does not claim a
   human browser run has passed. Phase 9A implementation is complete.
-- **Phase 10, Parts A–U (done; stop here):** the typed export-time audio-cleanup settings model,
+- **Phase 10, Parts A–V (done; stop here):** the typed export-time audio-cleanup settings model,
   pure settings-to-plan boundary, disabled-path compatibility seam, and conservative noise
   reduction, voice leveling, configurable loudness normalization, peak protection, and smoother
   EDL joins, locked filter ordering, and a dedicated pure FFmpeg audio builder. Part A:
@@ -455,6 +455,22 @@ empty folders for future phases.
   while Wasm may continue, and true termination would kill the single unserialized engine shared
   with transcription. User-driven cancellation remains deferred until shared jobs have centralized
   ownership and serialization. No browser or manual-media result is claimed.
+  Part V adds regression protection only; production behavior is unchanged. A persistent no-DOM
+  `App` harness exercises video selection/object-URL replacement, lazy engine preload, metadata-to-
+  EDL initialization, reversed trim plus Undo, middle deletion plus source-time playback skipping,
+  transcript deletion, caption generation/editing/preview/export propagation, and caption Undo.
+  Focused Timeline and caption component tests lock full-source positioning, click-to-source
+  seeking, half-open active timing, seek controls, inline edit commit/cancel, and preview text.
+  `OverlayStage` rendering now verifies that the pure fade envelope reaches CSS opacity, inactive
+  layers stay absent, and images remain below captions. The `ExportButton` harness covers literal
+  sidecar SRT download, the default-on caption burn toggle and opt-out, absent/fully-cut caption
+  states, non-empty overlay-plan/assets/geometry/fade handoff, both progress clamp bounds, MP4
+  filename/click/object-URL cleanup, and unchanged lazy loading. Existing EDL, agent, caption,
+  overlay, pure export, mocked runtime, and engine-import suites continue to cover silence/filler/
+  stumble removal, `keep_gap_ms`, no-overlay/no-caption/no-audio exports, MP4 bytes, and Node-safe
+  imports without constructing FFmpeg at module load. Real browser decoding, native playback, and
+  playback/listening of generated MP4s remain in the existing manual guides; no manual result is
+  claimed.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -570,8 +586,14 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   while duplicate/layer/delete actions dispatch through the same atomic overlay reducer. Part I
   renders `OverlayTimelineTrack` on the full source scale; it selects/seeks ephemerally and sends
   one final timing patch through that callback per completed drag or trim.
+- `src/App.test.tsx` — Part-V persistent no-DOM controller harness covering file selection and
+  URL replacement, engine preload, metadata/EDL initialization, reversed trims and Undo, middle
+  deletion with playback gap skipping/final stop, transcript deletion safeguards, and the shared
+  caption generate/edit/preview/export/Undo path. Native decoding and playback remain manual.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
+- `src/Timeline.test.tsx` — Part-V source-time regression coverage for kept-range, selection, and
+  playhead geometry on the full original duration plus clamped pixel-to-source seeking.
 - `src/transcript/` — the transcript view, a second view onto the one EDL.
   - `types.ts` — `Word` (`text`, `start`, `end`) and `Transcript`.
   - `api.ts` — client call to the proxy: POSTs the extracted audio Blob with its `type` as the
@@ -640,6 +662,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     (`start <= playhead < end`) bottom-centered over the video (white bold, black text-shadow,
     fixed above Phase-9A images, and `pointerEvents: none` so the native controls stay clickable);
     returns null when no caption is active. Purely derived — no state, no canvas, no timers.
+  - `CaptionOverlay.test.tsx` — Part-V half-open source-boundary, edited-preview-text, and
+    non-interactive overlay coverage.
   - `CaptionList.tsx` — the Phase-8 editing surface (rendered near the transcript when
     `edl.captions` is non-empty): a scannable list in a transcript-style scrolling box, one
     row per caption (SOURCE mm:ss seek button + text), the playhead's row highlighted like
@@ -648,6 +672,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     `editCaptionText` → `updateCaptionText`) — Enter blurs the input, Escape cancels via a
     `cancelledRef` the close-triggered blur checks. Display-only `CaptionOverlay` stays
     untouched — this is the READ-and-fix surface.
+  - `CaptionList.test.tsx` — Part-V source-time seek/active-row coverage plus Enter/blur single
+    commit and Escape/cancel suppression through a persistent no-DOM hook harness.
 - `src/overlays/` — Phase 9A image-overlay work. Parts A–M exist. Domain/timing/state/preview
   derivation helpers remain pure and framework-free; React UI is isolated in `MediaPanel` and
   the preview/editor components.
@@ -701,6 +727,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     commits once on release. The selected editor layer above captions supplies four labeled
     corner handles with arrow-key resizing, Shift-unlocked free resizing, minimum on-screen
     size, Escape cancel/clear, and input-safe Delete/Backspace removal.
+  - `OverlayStage.test.tsx` — Part-V static-render coverage that fade-adjusted opacity reaches
+    CSS, inactive images stay absent, and the image stacking context remains below captions.
   - `transform.ts` — pure normalized move and four-corner resize math. It clamps full geometry
     inside the frame, preserves the fixed opposite corner and aspect ratio by default, supports
     independent dimensions when unlocked, enforces configurable minimums, and normalizes
@@ -897,6 +925,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     cleanup settings never accesses, loads, or runs the engine. Part U covers synchronous engine
     construction and async load failures, fallback-notice routing, fatal-notice clearing, download
     failure wording, listener cleanup, and return to idle.
+    Part V adds exact SRT content/download lifecycle, default caption burn and opt-out, absent and
+    fully-cut caption-control states, non-empty overlay render-plan/assets/frame handoff, lower and
+    upper progress clamps, and MP4 filename/object-URL lifecycle coverage.
   - `ffmpeg.test.ts` — Vitest unit tests for `buildExportArgs` (2-segment concat, 1-segment
     no-concat, exact float bounds and fade times, the tiny-segment fade clamp, the
     loudnorm→aresample tail on both paths, the video chain unchanged, and the loudnorm-off

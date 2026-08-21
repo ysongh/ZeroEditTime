@@ -7,6 +7,7 @@ import {
 } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EDL } from '../edl/types'
+import type { ImageOverlay, OverlayAsset } from '../overlays/types'
 import AudioCleanupControls from './AudioCleanupControls'
 import ExportButton from './ExportButton'
 import { buildAudioCleanupPlan } from './audioCleanupPlan'
@@ -18,6 +19,7 @@ const harness = vi.hoisted(() => ({
   runExport: vi.fn(),
   useState: vi.fn(),
   stateSetters: [] as Array<ReturnType<typeof vi.fn>>,
+  stateOverrides: new Map<number, unknown>(),
 }))
 
 vi.mock('react', async (importOriginal) => {
@@ -43,9 +45,55 @@ const EDL_FIXTURE: EDL = {
   captions: [],
 }
 
+const CAPTIONED_EDL_FIXTURE: EDL = {
+  ...EDL_FIXTURE,
+  captions: [
+    {
+      id: 'cap_0_25_1_25',
+      text: 'Keep this caption',
+      start: 0.25,
+      end: 1.25,
+    },
+  ],
+}
+
+const OVERLAY_ASSET_FIXTURE: OverlayAsset = {
+  id: 'asset_logo',
+  kind: 'image',
+  name: 'logo.png',
+  mimeType: 'image/png',
+  width: 400,
+  height: 200,
+  src: 'blob:logo',
+}
+
+const IMAGE_OVERLAY_FIXTURE: ImageOverlay = {
+  id: 'overlay_logo',
+  assetId: OVERLAY_ASSET_FIXTURE.id,
+  startSourceMs: 1_000,
+  endSourceMs: 3_000,
+  x: 0.1,
+  y: 0.2,
+  width: 0.3,
+  height: 0.25,
+  fit: 'contain',
+  opacity: 0.6,
+  zIndex: 2,
+  fadeInMs: 250,
+  fadeOutMs: 500,
+}
+
 type ButtonProps = {
   children?: ReactNode
+  disabled?: boolean
   onClick?: () => void
+}
+
+type CheckboxProps = {
+  checked?: boolean
+  children?: ReactNode
+  onChange?: (event: { target: { checked: boolean } }) => void
+  type?: string
 }
 
 function findButton(node: ReactNode, label: string): ReactElement<ButtonProps> {
@@ -95,13 +143,56 @@ function findAudioCleanupControls(
   throw new Error('Could not find AudioCleanupControls.')
 }
 
-function renderExportButton(): ReactElement {
+function findCheckbox(node: ReactNode): ReactElement<CheckboxProps> {
+  if (!isValidElement(node)) {
+    throw new Error('Could not find checkbox.')
+  }
+  const element = node as ReactElement<CheckboxProps>
+  if (element.type === 'input' && element.props.type === 'checkbox') {
+    return element
+  }
+  for (const child of Children.toArray(element.props.children)) {
+    if (!isValidElement(child)) {
+      continue
+    }
+    try {
+      return findCheckbox(child)
+    } catch {
+      // Keep walking sibling branches.
+    }
+  }
+  throw new Error('Could not find checkbox.')
+}
+
+function containsText(node: ReactNode, text: string): boolean {
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node).includes(text)
+  }
+  if (!isValidElement(node)) {
+    return false
+  }
+  const element = node as ReactElement<{ children?: ReactNode }>
+  return Children.toArray(element.props.children).some((child) =>
+    containsText(child, text),
+  )
+}
+
+function renderExportButton(
+  edl: EDL = EDL_FIXTURE,
+  stateOverrides: ReadonlyMap<number, unknown> = new Map(),
+  overlayAssets: readonly OverlayAsset[] = [],
+  imageOverlays: readonly ImageOverlay[] = [],
+): ReactElement {
   harness.stateSetters.length = 0
+  harness.stateOverrides.clear()
+  for (const [index, value] of stateOverrides) {
+    harness.stateOverrides.set(index, value)
+  }
   return ExportButton({
-    edl: EDL_FIXTURE,
+    edl,
     file: { name: 'source.mp4' } as File,
-    overlayAssets: [],
-    imageOverlays: [],
+    overlayAssets,
+    imageOverlays,
   })
 }
 
@@ -134,14 +225,17 @@ beforeEach(() => {
   harness.runExport.mockReset()
   harness.useState.mockReset()
   harness.useState.mockImplementation((initial: unknown) => {
-    const value =
-      typeof initial === 'function'
+    const index = harness.stateSetters.length
+    const value = harness.stateOverrides.has(index)
+      ? harness.stateOverrides.get(index)
+      : typeof initial === 'function'
         ? (initial as () => unknown)()
         : initial
     const setter = vi.fn()
     harness.stateSetters.push(setter)
     return [value, setter]
   })
+  harness.stateOverrides.clear()
 })
 
 afterEach(() => {
@@ -179,17 +273,23 @@ describe('ExportButton orchestration', () => {
       click: vi.fn(),
       remove: vi.fn(),
     }
+    const appendChild = vi.fn()
     vi.stubGlobal('document', {
       createElement: vi.fn(() => anchor),
-      body: { appendChild: vi.fn() },
+      body: { appendChild },
     })
-    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
-    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const createObjectUrl = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:download')
+    const revokeObjectUrl = vi
+      .spyOn(URL, 'revokeObjectURL')
+      .mockImplementation(() => {})
     harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
     harness.loadFfmpeg.mockImplementation(async () => {
       fake.ffmpeg.loaded = true
     })
     harness.runExport.mockImplementation(async () => {
+      fake.emitProgress(-0.4)
       fake.emitProgress(1.4)
       return new Blob([new Uint8Array([1])], { type: 'video/mp4' })
     })
@@ -218,15 +318,208 @@ describe('ExportButton orchestration', () => {
     ])
     expect(harness.stateSetters[1].mock.calls.map(([value]) => value)).toEqual([
       0,
+      0,
       1,
       0,
     ])
+    expect(createObjectUrl).toHaveBeenCalledOnce()
+    expect(createObjectUrl.mock.calls[0][0]).toEqual(
+      expect.objectContaining({ type: 'video/mp4' }),
+    )
+    expect(anchor.href).toBe('blob:download')
+    expect(anchor.download).toBe('zero-edit-time.mp4')
+    expect(appendChild).toHaveBeenCalledWith(anchor)
+    expect(anchor.click).toHaveBeenCalledOnce()
+    expect(anchor.remove).toHaveBeenCalledOnce()
+    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:download')
     const progressListener = fake.getProgressListener()
     expect(progressListener).toBeDefined()
     expect(fake.ffmpeg.off).toHaveBeenCalledWith(
       'progress',
       progressListener,
     )
+  })
+
+  it('downloads a prepared sidecar SRT without touching FFmpeg', async () => {
+    const anchor = {
+      href: '',
+      download: '',
+      click: vi.fn(),
+      remove: vi.fn(),
+    }
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    })
+    const createObjectUrl = vi
+      .spyOn(URL, 'createObjectURL')
+      .mockReturnValue('blob:srt-download')
+    const revokeObjectUrl = vi
+      .spyOn(URL, 'revokeObjectURL')
+      .mockImplementation(() => {})
+    const view = renderExportButton(CAPTIONED_EDL_FIXTURE)
+
+    findButton(view, 'Download SRT').props.onClick?.()
+
+    expect(createObjectUrl).toHaveBeenCalledOnce()
+    const blob = createObjectUrl.mock.calls[0][0]
+    expect(blob).toBeInstanceOf(Blob)
+    if (!(blob instanceof Blob)) {
+      throw new Error('Expected SRT download to use a Blob.')
+    }
+    expect(await blob.text()).toBe(
+      '1\n00:00:00,250 --> 00:00:01,250\nKeep this caption\n\n',
+    )
+    expect(blob.type).toBe('text/plain')
+    expect(anchor.href).toBe('blob:srt-download')
+    expect(anchor.download).toBe('zero-edit-time.srt')
+    expect(anchor.click).toHaveBeenCalledOnce()
+    expect(anchor.remove).toHaveBeenCalledOnce()
+    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:srt-download')
+    expect(harness.getFfmpeg).not.toHaveBeenCalled()
+    expect(harness.loadFfmpeg).not.toHaveBeenCalled()
+    expect(harness.runExport).not.toHaveBeenCalled()
+  })
+
+  it('burns prepared captions by default and exposes the opt-out', async () => {
+    const fake = createFfmpeg(true)
+    const anchor = {
+      href: '',
+      download: '',
+      click: vi.fn(),
+      remove: vi.fn(),
+    }
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
+    harness.runExport.mockResolvedValue(
+      new Blob([new Uint8Array([1])], { type: 'video/mp4' }),
+    )
+    const view = renderExportButton(CAPTIONED_EDL_FIXTURE)
+    const checkbox = findCheckbox(view)
+
+    expect(checkbox.props.checked).toBe(true)
+    checkbox.props.onChange?.({ target: { checked: false } })
+    expect(harness.stateSetters[4]).toHaveBeenCalledWith(false)
+
+    findButton(view, 'Export MP4').props.onClick?.()
+
+    await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledOnce())
+    expect(harness.runExport.mock.calls[0][3]).toEqual([
+      { text: 'Keep this caption', start: 0.25, end: 1.25 },
+    ])
+  })
+
+  it('passes no burn captions after the caption toggle is off', async () => {
+    const fake = createFfmpeg(true)
+    const anchor = {
+      href: '',
+      download: '',
+      click: vi.fn(),
+      remove: vi.fn(),
+    }
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
+    harness.runExport.mockResolvedValue(
+      new Blob([new Uint8Array([1])], { type: 'video/mp4' }),
+    )
+    const stateOverrides = new Map<number, unknown>([[4, false]])
+    const view = renderExportButton(CAPTIONED_EDL_FIXTURE, stateOverrides)
+
+    expect(findCheckbox(view).props.checked).toBe(false)
+    findButton(view, 'Export MP4').props.onClick?.()
+
+    await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledOnce())
+    expect(harness.runExport.mock.calls[0][3]).toEqual([])
+  })
+
+  it('hides caption controls when none are stored and disables SRT when all are cut', () => {
+    const noCaptionsView = renderExportButton()
+
+    expect(() => findCheckbox(noCaptionsView)).toThrow(
+      'Could not find checkbox.',
+    )
+    expect(() => findButton(noCaptionsView, 'Download SRT')).toThrow(
+      'Could not find button "Download SRT".',
+    )
+
+    const fullyCutCaptionEdl: EDL = {
+      ...CAPTIONED_EDL_FIXTURE,
+      segments: [{ id: 'seg_2_4', start: 2, end: 4 }],
+    }
+    const fullyCutView = renderExportButton(fullyCutCaptionEdl)
+
+    expect(findCheckbox(fullyCutView).props.checked).toBe(true)
+    expect(findButton(fullyCutView, 'Download SRT').props.disabled).toBe(true)
+    expect(
+      containsText(
+        fullyCutView,
+        "Every caption's speech has been cut — nothing to burn or download.",
+      ),
+    ).toBe(true)
+  })
+
+  it('passes the current overlay plan, asset, fades, and frame size to export', async () => {
+    const fake = createFfmpeg(true)
+    const anchor = {
+      href: '',
+      download: '',
+      click: vi.fn(),
+      remove: vi.fn(),
+    }
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
+    harness.runExport.mockResolvedValue(
+      new Blob([new Uint8Array([1])], { type: 'video/mp4' }),
+    )
+    const view = renderExportButton(
+      EDL_FIXTURE,
+      new Map(),
+      [OVERLAY_ASSET_FIXTURE],
+      [IMAGE_OVERLAY_FIXTURE],
+    )
+
+    findButton(view, 'Export MP4').props.onClick?.()
+
+    await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledOnce())
+    expect(harness.runExport.mock.calls[0][5]).toEqual({
+      renderPlan: [
+        {
+          overlayId: 'overlay_logo',
+          assetId: 'asset_logo',
+          sourceStartMs: 1_000,
+          sourceEndMs: 3_000,
+          outputStartMs: 1_000,
+          outputEndMs: 3_000,
+          x: 0.1,
+          y: 0.2,
+          width: 0.3,
+          height: 0.25,
+          fit: 'contain',
+          opacity: 0.6,
+          zIndex: 2,
+          fadeInMs: 250,
+          fadeOutMs: 500,
+        },
+      ],
+      assets: [OVERLAY_ASSET_FIXTURE],
+      frameWidth: 1280,
+      frameHeight: 720,
+    })
   })
 
   it('surfaces export errors and removes the progress listener in finally', async () => {
