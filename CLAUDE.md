@@ -485,7 +485,7 @@ empty folders for future phases.
   field whitelisting, deterministic identity, and immutability. Part A adds no candidate generation,
   AI request/prompt/schema, editor state, UI, seek integration, plural deduplication, EDL changes,
   or export behavior.
-- **Phase 11, Part B (done; stop here):** the pure structural retake-candidate layer in
+- **Phase 11, Part B (done):** the pure structural retake-candidate layer in
   `src/retakes/candidates.ts`. `ExistingAnalysisResults` reuses the agent detectors' source-second
   `Range` contract for supplied filler, full-long-pause, and stumble spans; thresholds and detector
   invocation deliberately remain Part C policy. `buildRetakeCandidates` reuses `groupSentences`,
@@ -500,6 +500,26 @@ empty folders for future phases.
   sentence boundaries, context, ordering/identity, malformed data, unavailable optional signals,
   and purity. Part B adds no trigger thresholds, semantic heuristics, clean-take suppression, AI or
   network calls, editor state, UI, EDL changes, or export behavior.
+- **Phase 11, Part C (done; stop here):** conservative local candidate policy in
+  `src/retakes/heuristics.ts`. `buildHeuristicRetakeCandidates` runs the existing pure
+  `findFillerSpans`, `findSilences`, and `findStumbleSpans` once, lets Part B bucket every signal by
+  sentence, then retains a candidate only when at least one named strong trigger qualifies:
+  filler count >= 3 AND occurrence density >= 0.30; a full internal pause strictly over 2,000 ms
+  in a sentence containing at least five valid timestamped words; or at least two stumble spans in
+  one sentence. Silence detection deliberately passes `keepGapMs = 0` only for measurement so
+  `longestPauseMs` describes the full gap; it does not change the natural-pacing removal tool.
+  Strong triggers are ORed, while weaker co-occurring signals remain as evidence and never add into
+  an undocumented score. One filler, two dense fillers, one cuttable stumble, exact-threshold or
+  short-fragment pauses, paragraph gaps between terminated sentences, and mixtures of weak signals
+  produce no candidate. Multiple/chained restart spans can surface a possible severe stumble or
+  repeated-failed-attempt candidate, but no final reason or `repeatedAttemptScore` is invented.
+  Punctuation alone does not label an incomplete thought; current Whisper data supplies no
+  confidence, and audio cleanup supplies settings rather than measurements, so no confidence or
+  audio-quality heuristic exists. Focused offline tests lock every threshold/non-trigger boundary,
+  full-gap source timing, sentence-local severity, repeated attempts, weak-evidence preservation,
+  missing optional signals, determinism, fresh outputs, and input purity. Part D still owns the
+  critical nearby-clean-take suppression; Part C adds no AI/network, editor state, UI, EDL, or
+  export integration.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -782,7 +802,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–B exist; it has no editor or network
+- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–C exist; it has no editor or network
   integration yet.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
@@ -798,6 +818,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `candidates.test.ts` — offline coverage for source-time construction, aggregation, half-open
     boundaries, adjacent context, deterministic ordering/ids, malformed data, unavailable optional
     signals, fresh outputs, and input immutability.
+  - `heuristics.ts` — pure Part-C policy over the existing filler/silence/stumble detectors and the
+    Part-B sentence bucketer. Named conservative thresholds select dense fillers, meaningful full
+    internal hesitations, and multiple stumble markers while retaining weaker co-signals as
+    evidence; unavailable semantic/confidence/audio signals are not fabricated.
+  - `heuristics.test.ts` — offline threshold-boundary, clean/non-trigger, source-time pause,
+    sentence-local stumble/repeated-attempt, mixed-signal, missing-data, determinism, and purity
+    coverage.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
