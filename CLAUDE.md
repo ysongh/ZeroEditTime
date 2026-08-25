@@ -471,6 +471,20 @@ empty folders for future phases.
   imports without constructing FFmpeg at module load. Real browser decoding, native playback, and
   playback/listening of generated MP4s remain in the existing manual guides; no manual result is
   claimed.
+- **Phase 11, Part A (done; stop here):** the pure retake-recommendation domain model and its
+  source-duration-aware runtime trust boundary. `src/retakes/recommendation.ts` defines the exact
+  reason, severity, status, evidence, and recommendation contracts. Recommendation ranges are
+  half-open ORIGINAL-SOURCE milliseconds, deliberately separate from the seconds-based EDL and
+  never projected into output time. `normalizeRetakeRecommendation(unknown, sourceDurationMs)`
+  reconstructs only known fields, requires finite required numbers and valid enum/text values,
+  clamps recoverable source bounds and confidence, rejects ranges that are empty after clamping,
+  sanitizes optional script/evidence metadata, and returns a fresh value without mutating input.
+  Derived ids follow the existing segment/caption convention and are stable from normalized bounds
+  plus reason; a model-supplied id and extra fields are never trusted. Focused offline Vitest
+  coverage locks every enum member, malformed shapes, source bounds, confidence, optional metadata,
+  field whitelisting, deterministic identity, and immutability. Part A adds no candidate generation,
+  AI request/prompt/schema, editor state, UI, seek integration, plural deduplication, EDL changes,
+  or export behavior.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -753,6 +767,15 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
+- `src/retakes/` — Phase 11 advisory retake analysis. Part A only exists; it has no editor or
+  network integration yet.
+  - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
+    normalization/validation boundary for a completed recommendation. It enforces half-open source
+    milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
+    deterministic local ids, optional-evidence sanitization, and explicit field whitelisting.
+  - `recommendation.test.ts` — offline Part-A coverage for valid and malformed unknown inputs,
+    every enum member, time/confidence normalization, deterministic identity, extra-field removal,
+    optional metadata, independent outputs, and input immutability.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
