@@ -12,7 +12,8 @@ export type Range = { start: number; end: number }
 
 // The filler words removed when the user doesn't name their own. Multi-word
 // phrases ("you know") match across consecutive transcript words. Matching is
-// case-insensitive and ignores surrounding punctuation (see `normalize`).
+// case-insensitive and ignores surrounding punctuation (see
+// `normalizeSpeechToken`).
 export const DEFAULT_FILLER_WORDS = [
   'um',
   'uh',
@@ -25,7 +26,7 @@ export const DEFAULT_FILLER_WORDS = [
 
 // Lowercase and strip everything that isn't a letter or digit, so a Whisper
 // token like " Um," compares equal to the filler "um".
-function normalize(text: string): string {
+export function normalizeSpeechToken(text: string): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
 
@@ -77,12 +78,17 @@ export function findFillerSpans(
   // Pre-tokenize each filler into normalized tokens, dropping empties, and try
   // longer phrases first so the greedy scan prefers the most specific match.
   const phrases = fillerWords
-    .map((filler) => filler.split(/\s+/).map(normalize).filter((t) => t !== ''))
+    .map((filler) =>
+      filler
+        .split(/\s+/)
+        .map(normalizeSpeechToken)
+        .filter((token) => token !== ''),
+    )
     .filter((tokens) => tokens.length > 0)
     .sort((a, b) => b.length - a.length)
 
   const words = transcript.words
-  const normalized = words.map((w) => normalize(w.text))
+  const normalized = words.map((word) => normalizeSpeechToken(word.text))
   const ranges: Range[] = []
 
   let i = 0
@@ -153,7 +159,7 @@ export const MIN_PREFIX_LEN = 3
  */
 export function findStumbleSpans(transcript: Transcript): Range[] {
   const words = transcript.words
-  const normalized = words.map((w) => normalize(w.text))
+  const normalized = words.map((word) => normalizeSpeechToken(word.text))
   const ranges: Range[] = []
 
   // Does the k-word take starting at `i` recur starting at `j`? Earlier words

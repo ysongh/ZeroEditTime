@@ -500,7 +500,7 @@ empty folders for future phases.
   sentence boundaries, context, ordering/identity, malformed data, unavailable optional signals,
   and purity. Part B adds no trigger thresholds, semantic heuristics, clean-take suppression, AI or
   network calls, editor state, UI, EDL changes, or export behavior.
-- **Phase 11, Part C (done; stop here):** conservative local candidate policy in
+- **Phase 11, Part C (done):** conservative local candidate policy in
   `src/retakes/heuristics.ts`. `buildHeuristicRetakeCandidates` runs the existing pure
   `findFillerSpans`, `findSilences`, and `findStumbleSpans` once, lets Part B bucket every signal by
   sentence, then retains a candidate only when at least one named strong trigger qualifies:
@@ -520,6 +520,29 @@ empty folders for future phases.
   missing optional signals, determinism, fresh outputs, and input purity. Part D still owns the
   critical nearby-clean-take suppression; Part C adds no AI/network, editor state, UI, EDL, or
   export integration.
+- **Phase 11, Part D (done; stop here):** pure, conservative nearby-clean-take discovery and
+  suppression in `src/retakes/nearbyTakes.ts`. `buildScreenedRetakeCandidates` composes the raw
+  Part-C policy with this filter; lower-level plural/singular finders expose fresh
+  ORIGINAL-SOURCE-millisecond alternate-take metadata for later context construction, and the
+  standalone suppression helper accepts prebuilt candidates. External search checks before and
+  after symmetrically, stays within the existing 3-second restart window, and inspects at most two
+  sentence positions so one tiny interjection can sit between takes. A hard local match requires
+  the same complete normalized wording after ordinary filler/stumble cleanup: generic shared
+  openings, extensions, fuzzy word prefixes, reordered wording, and semantic paraphrases never
+  suppress. A locally clean alternate has at least four non-filler words, clear terminal
+  punctuation other than an ellipsis/cutoff dash, at most one editing-fixable filler, no detected
+  stumble, and no pause over 2,000 ms. Candidate-internal suppression separately reuses the existing
+  stumble detector, but only for an opening-anchored, contiguous chain of actual four-word
+  restarts whose projected post-cut timestamps leave a locally clean final take; scattered word
+  repeats, intervening words, and incomplete final attempts cannot satisfy that proof. Detection is
+  deterministic, pure, browser/React/model-free, preserves original transcript text and half-open
+  source ranges, and ignores unsafe alternate timing. Focused offline tests cover clean takes
+  before/after and across one interjection, sentence/time bounds, chained clean and failed attempts,
+  multiple dirty takes, unrelated/paraphrased/generic/prefix-collision speech, every local-clean
+  rejection, deterministic ordering, source metadata, fresh results, invalid timing, empty input,
+  and input purity. Semantic completeness and the explicit model question remain for Parts E-G;
+  Part D adds no context payload, AI/network call or prompt, recommendation, editor state, UI, EDL
+  change, or export behavior.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -802,7 +825,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–C exist; it has no editor or network
+- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–D exist; it has no editor or network
   integration yet.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
@@ -825,6 +848,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `heuristics.test.ts` — offline threshold-boundary, clean/non-trigger, source-time pause,
     sentence-local stumble/repeated-attempt, mixed-signal, missing-data, determinism, and purity
     coverage.
+  - `nearbyTakes.ts` — pure Part-D nearby-alternate discovery and high-precision suppression. It
+    reuses detector timing/normalization policy, searches bounded neighboring sentences in both
+    directions, recognizes only exact cleaned wording for external hard suppression, and can prove
+    an internal clean final take only from a substantial opening restart chain.
+  - `nearbyTakes.test.ts` — offline clean-take direction/proximity/source-range, local-cleanliness,
+    internal restart-chain, false-match, determinism, malformed-timing, and purity coverage.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
