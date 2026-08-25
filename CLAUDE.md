@@ -471,7 +471,7 @@ empty folders for future phases.
   imports without constructing FFmpeg at module load. Real browser decoding, native playback, and
   playback/listening of generated MP4s remain in the existing manual guides; no manual result is
   claimed.
-- **Phase 11, Part A (done; stop here):** the pure retake-recommendation domain model and its
+- **Phase 11, Part A (done):** the pure retake-recommendation domain model and its
   source-duration-aware runtime trust boundary. `src/retakes/recommendation.ts` defines the exact
   reason, severity, status, evidence, and recommendation contracts. Recommendation ranges are
   half-open ORIGINAL-SOURCE milliseconds, deliberately separate from the seconds-based EDL and
@@ -485,6 +485,21 @@ empty folders for future phases.
   field whitelisting, deterministic identity, and immutability. Part A adds no candidate generation,
   AI request/prompt/schema, editor state, UI, seek integration, plural deduplication, EDL changes,
   or export behavior.
+- **Phase 11, Part B (done; stop here):** the pure structural retake-candidate layer in
+  `src/retakes/candidates.ts`. `ExistingAnalysisResults` reuses the agent detectors' source-second
+  `Range` contract for supplied filler, full-long-pause, and stumble spans; thresholds and detector
+  invocation deliberately remain Part C policy. `buildRetakeCandidates` reuses `groupSentences`,
+  buckets all half-open-overlapping signals into at most one candidate per sentence, converts the
+  full sentence envelope to ORIGINAL-SOURCE milliseconds, and adds only the immediately adjacent
+  sentence text as optional context. It deterministically aggregates filler occurrence count and
+  density, pause count and longest full-gap duration, and stumble count; repeated-attempt score and
+  transcript confidence stay absent because the repository exposes neither signal yet. Results use
+  bounds-derived ids and deterministic chronological sorting, malformed signal spans and unsafe
+  transcript timing cannot leak invalid candidates, and all inputs remain untouched. Focused
+  offline tests cover empty/clean inputs, exact source timing, multi-signal aggregation, half-open
+  sentence boundaries, context, ordering/identity, malformed data, unavailable optional signals,
+  and purity. Part B adds no trigger thresholds, semantic heuristics, clean-take suppression, AI or
+  network calls, editor state, UI, EDL changes, or export behavior.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -767,8 +782,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis. Part A only exists; it has no editor or
-  network integration yet.
+- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–B exist; it has no editor or network
+  integration yet.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -776,6 +791,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `recommendation.test.ts` — offline Part-A coverage for valid and malformed unknown inputs,
     every enum member, time/confidence normalization, deterministic identity, extra-field removal,
     optional metadata, independent outputs, and input immutability.
+  - `candidates.ts` — pure Part-B sentence bucketing over supplied detector-native source-second
+    spans. It emits deterministic, chronologically sorted source-millisecond candidates with
+    adjacent sentence text and aggregated filler/pause/stumble signals, without selecting detector
+    thresholds or touching browser, AI, EDL, or editor state.
+  - `candidates.test.ts` — offline coverage for source-time construction, aggregation, half-open
+    boundaries, adjacent context, deterministic ordering/ids, malformed data, unavailable optional
+    signals, fresh outputs, and input immutability.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
