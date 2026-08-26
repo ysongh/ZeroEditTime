@@ -540,10 +540,10 @@ empty folders for future phases.
   before/after and across one interjection, sentence/time bounds, chained clean and failed attempts,
   multiple dirty takes, unrelated/paraphrased/generic/prefix-collision speech, every local-clean
   rejection, deterministic ordering, source metadata, fresh results, invalid timing, empty input,
-  and input purity. Semantic completeness and the explicit model question remain for Parts F-G;
-  Part D adds no context payload, AI/network call or prompt, recommendation, editor state, UI, EDL
-  change, or export behavior.
-- **Phase 11, Part E (done; stop here):** pure, bounded model-context construction in
+  and input purity. Part F installs the explicit model clean-take question; Part G still owns the
+  complete decision/fairness policy. Part D adds no context payload, AI/network call or prompt,
+  recommendation, editor state, UI, EDL change, or export behavior.
+- **Phase 11, Part E (done):** pure, bounded model-context construction in
   `src/retakes/context.ts`. `buildRetakeAnalysisContext(transcript, candidate)` shapes one typed
   candidate into the exact candidate/before/after/nearby-alternates/signals envelope and returns
   `null` only for a non-finite, negative, empty/reversed source range or blank candidate text.
@@ -568,8 +568,35 @@ empty folders for future phases.
   long-alternate clipping, zero optional signals, malformed ranges/blank text, field whitelisting,
   determinism, deep freshness, and purity. Part E deliberately adds no prompt/system instruction,
   AI or network call, semantic alternate matching, batch/candidate limit, recommendation
-  normalization, editor state, UI, EDL change, or export behavior; Parts F-G still own the model
-  API and the explicit clean-take question.
+  normalization, editor state, UI, EDL change, or export behavior; Part F owns the model API and
+  explicit clean-take question, while Part G still owns the full instruction design.
+- **Phase 11, Part F (done; stop here):** the dedicated one-candidate AI analysis API, extending
+  the existing `/api/agent` Claude relay instead of adding a parallel proxy. The browser-side
+  `src/agent/api.ts` now owns the shared same-origin JSON transport and preserves the editing
+  agent's `{ messages }` request/response behavior; retake analysis adds the discriminated
+  `{ mode: "retake-analysis", context }` request. The relay revalidates and reconstructs only the
+  bounded Part-E context, ignores client-supplied model/prompt/tool/message fields, and selects its
+  existing Claude model/key integration with a dedicated server-owned structural prompt, one
+  retake-result tool/schema, and forced single-tool choice. No API key, model configuration, full
+  transcript, audio, video, or frames leave the intended boundary. The minimal Part-F instruction
+  asks whether a complete clean nearby version already exists and forces `needsRetake: false` when
+  it does; Part G still owns the broader editorial and speech-fairness policy.
+  `RetakeAnalysisResult` is a discriminated trusted union: a negative carries normalized
+  confidence plus an optional sanitized explanation while stripping all positive-only fields; a
+  positive requires a known reason/severity and nonblank explanation, with an optional sanitized
+  script.
+  Finite confidence clamps to 0..1 like Part A. Runtime validation reconstructs fresh whitelisted
+  context both before and inside the relay, then requires `stop_reason: "tool_use"`, exactly one
+  correctly named result tool, and valid unknown input at both server and browser boundaries;
+  malformed, missing, wrong, or ambiguous output fails instead of parsing prose. A false result is
+  returned explicitly and this part creates no recommendation at all. Offline tests cover legacy
+  agent regression, exact
+  request/tool/schema/key isolation, context caps and field stripping, proxy failures/redaction,
+  both result branches, every enum, clamping, adversarial shapes, single-tool extraction,
+  transport errors, determinism, freshness, and purity. Part F deliberately adds no detailed
+  Part-G editorial/fairness policy, suggested-script policy, batching/candidate cap,
+  recommendation assembly/deduplication, editor state, UI, playback, EDL, Undo, or export
+  behavior.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -712,6 +739,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     a stored flag. Deleting a span calls back into `App`'s `commitEdl` path.
 - `src/agent/` — the Phase-4 agent, a third view onto the one EDL. Detection and executors are
   framework-free and unit-tested; the loop is offline-testable via an injectable transport.
+  - `api.ts` — the shared browser transport for the existing stateless Claude relay. It posts an
+    arbitrary mode-owned JSON contract to same-origin `/api/agent`, sends no model credentials,
+    relays `{ content, stop_reason }`, and normalizes proxy/malformed-response errors. Both the
+    editing loop and Phase-11 Part-F one-shot analysis reuse it; `api.test.ts` runs fully offline.
   - `detect.ts` — pure range detection: `findSilences` (inter-word gaps over a threshold; since
     Phase 5.5B it trims only the MIDDLE of each qualifying gap, keeping `keep_gap_ms` — default
     `DEFAULT_KEEP_GAP_MS` = 250 — split half/half, and fires only when the gap exceeds both the
@@ -852,8 +883,8 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–E exist; it has no editor or network
-  integration yet.
+- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–F exist; Part F adds only the
+  one-candidate AI boundary and still has no editor integration, state, batching, or UI.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -882,12 +913,21 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     source windows (without a clean/semantic claim) for bounded later context.
   - `nearbyTakes.test.ts` — offline clean-take direction/proximity/source-range, local-cleanliness,
     internal restart-chain, false-match, determinism, malformed-timing, and purity coverage.
-  - `context.ts` — pure Part-E candidate-to-model-context shaping. It retains original-source
-    ranges, reuses adjacent sentence and bounded distance-two source-window metadata, whitelists
-    signals, caps every optional text window and alternate count, and explicitly labels
-    deterministic excerpts.
+  - `context.ts` — pure Part-E candidate-to-model-context shaping plus Part-F runtime request
+    validation. It retains original-source ranges, reuses adjacent sentence and bounded
+    distance-two source-window metadata, whitelists signals, caps every optional text window and
+    alternate count, and explicitly labels deterministic excerpts. The unknown-input validator
+    reapplies those caps and reconstructs only the exact context contract before model transport.
   - `context.test.ts` — offline payload/source-time, context-direction, text/alternate-bound,
     malformed-input, field-whitelisting, determinism, deep-freshness, and purity coverage.
+  - `contextValidation.test.ts` — offline Part-F request-boundary coverage for exact caps, ranges,
+    required/optional signals, inherited/unknown fields, normalization, freshness, and purity.
+  - `analysis.ts` — pure Part-F discriminated result contract, unknown-input normalization, shared
+    mode/tool constants, and exact-single-tool extraction. Negative results cannot retain fields
+    that could later masquerade as a recommendation.
+  - `analysisApi.ts` — one-candidate browser call through the shared `/api/agent` transport. It
+    validates/whitelists context before sending and validates the structured tool result again on
+    return; `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries offline.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
@@ -1133,12 +1173,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   Content-Type via the pure, exported `extensionForContentType` (Phase 2.5) — unit-tested in
   `netlify/transcribe.test.ts`, which sits ABOVE `functions/` so Netlify doesn't bundle the test
   as a stray function. Run `netlify dev` for local transcription.
-- `netlify/functions/agent.ts` — Phase-4 stateless relay: injects the system prompt + the 6
-  tool schemas and forwards `{ messages }` to the Claude Messages API (`claude-sonnet-4-6`),
+- `netlify/functions/agent.ts` — shared stateless Claude relay: the Phase-4 branch injects its
+  system prompt + 6 tool schemas and forwards `{ messages }` to the Claude Messages API
+  (`claude-sonnet-4-6`),
   returning `{ content, stop_reason }` unchanged. Executes no tools, holds no EDL; reads
   `ANTHROPIC_API_KEY` from env only. Reachable at `/api/agent` via the `/api/*` redirect.
   Phase 8 adds one prompt line (regeneration replaces hand-edited caption text) — schema and
-  relay behavior otherwise unchanged.
+  relay behavior otherwise unchanged. Phase 11 Part F adds the discriminated retake-analysis
+  branch, bounded context revalidation, and a dedicated forced result tool without changing the
+  legacy editing request. `netlify/agent.test.ts` sits above `functions/` and covers both modes,
+  server-owned configuration, key isolation/redaction, and failure paths offline.
 - `src/main.tsx` — React entry (`StrictMode`).
 - `src/index.css` — Vite template styles (`#root` is a centered 1126px column).
 - `public/fonts/` — `Roboto-Bold.ttf` (static, v3.005) + its Apache-2.0 `LICENSE.txt`, pulled

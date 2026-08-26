@@ -47,8 +47,124 @@ export interface RetakeAnalysisContext {
 
 type ExcerptDirection = 'prefix' | 'suffix' | 'head-tail'
 
+type UnknownRecord = Record<string, unknown>
+
 function normalizeWhitespace(text: string): string {
   return text.trim().replace(/\s+/gu, ' ')
+}
+
+function isRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasOwn(value: UnknownRecord, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key)
+}
+
+function finiteNonNegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function finiteNonNegativeInteger(value: unknown): value is number {
+  return finiteNonNegativeNumber(value) && Number.isInteger(value)
+}
+
+function normalizeBoundedTextContext(
+  value: unknown,
+  maxWords: number,
+  maxCharacters: number,
+): RetakeAnalysisTextContext | null {
+  if (!isRecord(value) || !hasOwn(value, 'text')) return null
+  if (typeof value.text !== 'string') return null
+
+  const text = normalizeWhitespace(value.text)
+  if (
+    text === '' ||
+    text.length > maxCharacters ||
+    text.split(' ').length > maxWords
+  ) {
+    return null
+  }
+
+  const context: RetakeAnalysisTextContext = { text }
+  if (hasOwn(value, 'truncated')) {
+    if (value.truncated !== true) return null
+    context.truncated = true
+  }
+  return context
+}
+
+function normalizeBoundedSourceContext(
+  value: unknown,
+  maxWords: number,
+  maxCharacters: number,
+): RetakeAnalysisSourceContext | null {
+  if (
+    !isRecord(value) ||
+    !hasOwn(value, 'startSourceMs') ||
+    !hasOwn(value, 'endSourceMs') ||
+    !finiteNonNegativeNumber(value.startSourceMs) ||
+    !finiteNonNegativeNumber(value.endSourceMs) ||
+    value.endSourceMs <= value.startSourceMs
+  ) {
+    return null
+  }
+
+  const text = normalizeBoundedTextContext(
+    value,
+    maxWords,
+    maxCharacters,
+  )
+  if (text === null) return null
+
+  return {
+    startSourceMs: value.startSourceMs,
+    endSourceMs: value.endSourceMs,
+    ...text,
+  }
+}
+
+function normalizeSignals(value: unknown): RetakeCandidateSignals | null {
+  if (
+    !isRecord(value) ||
+    !hasOwn(value, 'fillerCount') ||
+    !hasOwn(value, 'fillerDensity') ||
+    !hasOwn(value, 'longPauseCount') ||
+    !hasOwn(value, 'longestPauseMs') ||
+    !hasOwn(value, 'stumbleCount') ||
+    !finiteNonNegativeInteger(value.fillerCount) ||
+    !finiteNonNegativeNumber(value.fillerDensity) ||
+    value.fillerDensity > 1 ||
+    !finiteNonNegativeInteger(value.longPauseCount) ||
+    !finiteNonNegativeNumber(value.longestPauseMs) ||
+    !finiteNonNegativeInteger(value.stumbleCount)
+  ) {
+    return null
+  }
+
+  const signals: RetakeCandidateSignals = {
+    fillerCount: value.fillerCount,
+    fillerDensity: value.fillerDensity,
+    longPauseCount: value.longPauseCount,
+    longestPauseMs: value.longestPauseMs,
+    stumbleCount: value.stumbleCount,
+  }
+
+  if (hasOwn(value, 'repeatedAttemptScore')) {
+    if (!finiteNonNegativeNumber(value.repeatedAttemptScore)) return null
+    signals.repeatedAttemptScore = value.repeatedAttemptScore
+  }
+  if (hasOwn(value, 'transcriptConfidence')) {
+    if (
+      !finiteNonNegativeNumber(value.transcriptConfidence) ||
+      value.transcriptConfidence > 1
+    ) {
+      return null
+    }
+    signals.transcriptConfidence = value.transcriptConfidence
+  }
+
+  return signals
 }
 
 function isHighSurrogate(codeUnit: number): boolean {
@@ -219,6 +335,78 @@ function hasValidCandidateRange(candidate: RetakeCandidate): boolean {
     candidate.startSourceMs >= 0 &&
     candidate.endSourceMs > candidate.startSourceMs
   )
+}
+
+/**
+ * Validate one untrusted retake-analysis request payload before it reaches the
+ * model proxy. The returned value is rebuilt from the small context contract;
+ * unknown metadata and inherited properties never cross the boundary.
+ */
+export function normalizeRetakeAnalysisContext(
+  value: unknown,
+): RetakeAnalysisContext | null {
+  if (
+    !isRecord(value) ||
+    !hasOwn(value, 'candidate') ||
+    !hasOwn(value, 'signals')
+  ) {
+    return null
+  }
+
+  const candidate = normalizeBoundedSourceContext(
+    value.candidate,
+    MAX_CANDIDATE_CONTEXT_WORDS,
+    MAX_CANDIDATE_CONTEXT_CHARACTERS,
+  )
+  const signals = normalizeSignals(value.signals)
+  if (candidate === null || signals === null) return null
+
+  const context: Omit<RetakeAnalysisContext, 'signals'> = { candidate }
+
+  if (hasOwn(value, 'before')) {
+    const before = normalizeBoundedTextContext(
+      value.before,
+      MAX_SURROUNDING_CONTEXT_WORDS,
+      MAX_SURROUNDING_CONTEXT_CHARACTERS,
+    )
+    if (before === null) return null
+    context.before = before
+  }
+
+  if (hasOwn(value, 'after')) {
+    const after = normalizeBoundedTextContext(
+      value.after,
+      MAX_SURROUNDING_CONTEXT_WORDS,
+      MAX_SURROUNDING_CONTEXT_CHARACTERS,
+    )
+    if (after === null) return null
+    context.after = after
+  }
+
+  if (hasOwn(value, 'nearbyAlternateTakes')) {
+    if (
+      !Array.isArray(value.nearbyAlternateTakes) ||
+      value.nearbyAlternateTakes.length > MAX_CONTEXT_ALTERNATE_TAKES
+    ) {
+      return null
+    }
+
+    const nearbyAlternateTakes: RetakeAnalysisSourceContext[] = []
+    for (const alternate of value.nearbyAlternateTakes) {
+      const normalized = normalizeBoundedSourceContext(
+        alternate,
+        MAX_ALTERNATE_CONTEXT_WORDS,
+        MAX_ALTERNATE_CONTEXT_CHARACTERS,
+      )
+      if (normalized === null) return null
+      nearbyAlternateTakes.push(normalized)
+    }
+    if (nearbyAlternateTakes.length > 0) {
+      context.nearbyAlternateTakes = nearbyAlternateTakes
+    }
+  }
+
+  return { ...context, signals }
 }
 
 /**

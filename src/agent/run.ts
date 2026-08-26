@@ -13,6 +13,7 @@
 import type { EDL } from '../edl/types'
 import type { Transcript } from '../transcript/types'
 import { totalKeptDuration } from '../edl/edl'
+import { postAgentRequest, type AgentReply } from './api'
 import {
   DEFAULT_SILENCE_MS,
   cutSegment,
@@ -24,8 +25,9 @@ import {
   type ToolResult,
 } from './tools'
 
-// What the proxy relays back: Claude's raw content blocks + the stop reason.
-export type AgentReply = { content: unknown; stop_reason: unknown }
+// Keep the established public type available from this module while the
+// browser relay implementation lives in the shared API transport.
+export type { AgentReply } from './api'
 
 // A transport from `messages` to a relayed reply. Injectable so the loop can be
 // driven offline in tests; defaults to the real `/api/agent` POST.
@@ -169,38 +171,8 @@ function runTool(
   }
 }
 
-async function postAgent(messages: unknown[]): Promise<AgentReply> {
-  const res = await fetch('/api/agent', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages }),
-  })
-  if (!res.ok) {
-    let detail = `The agent request failed (HTTP ${res.status}).`
-    try {
-      const data: unknown = await res.json()
-      if (
-        typeof data === 'object' &&
-        data !== null &&
-        typeof (data as { error?: unknown }).error === 'string'
-      ) {
-        detail = (data as { error: string }).error
-      }
-    } catch {
-      // Body was not JSON; keep the generic message.
-    }
-    throw new Error(detail)
-  }
-  const data: unknown = await res.json()
-  if (typeof data !== 'object' || data === null) {
-    throw new Error('Received a malformed response from the agent.')
-  }
-  const { content, stop_reason } = data as {
-    content: unknown
-    stop_reason: unknown
-  }
-  return { content, stop_reason }
-}
+const postAgent: AgentTransport = (messages) =>
+  postAgentRequest({ messages })
 
 /**
  * Run one natural-language command. Threads a working EDL through the model's
