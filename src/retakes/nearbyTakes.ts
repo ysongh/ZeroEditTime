@@ -39,20 +39,27 @@ export const MAX_CLEAN_TAKE_FILLER_COUNT = 1
 /** A detector-linked restart must repeat this much of the take to prove repairability. */
 export const MIN_REPAIRABLE_RESTART_WORD_COUNT = 4
 
-export interface NearbyCleanTake {
+export interface NearbyTakeMetadata {
   /** Half-open range in original-source milliseconds. */
   startSourceMs: number
   endSourceMs: number
   text: string
 }
 
-interface SentenceView extends NearbyCleanTake {
+export type NearbyCleanTake = NearbyTakeMetadata
+
+/** Bounded neighboring speech for context only; it is not claimed to be clean. */
+export interface NearbyTakeWindow extends NearbyTakeMetadata {
+  sentenceDistance: number
+}
+
+interface SentenceView extends NearbyTakeMetadata {
   sentenceIndex: number
   words: Word[]
 }
 
-interface RankedCleanTake {
-  take: NearbyCleanTake
+interface RankedNearbySentence {
+  sentence: SentenceView
   gapMs: number
   sentenceDistance: number
 }
@@ -249,15 +256,10 @@ function nearbyTakeValue(sentence: SentenceView): NearbyCleanTake {
   }
 }
 
-/**
- * Find high-confidence clean versions of a candidate in nearby sentences.
- * Results are nearest-first, then earlier-first for a stable tie-break. Source
- * text and ranges are preserved for Part E context construction.
- */
-export function findNearbyCleanTakes(
+function rankedNearbySentences(
   transcript: Transcript,
   candidate: RetakeCandidate,
-): NearbyCleanTake[] {
+): RankedNearbySentence[] {
   const sentences = buildSentenceViews(transcript)
   const candidateSentence = sentences.find(
     (sentence) =>
@@ -266,12 +268,7 @@ export function findNearbyCleanTakes(
   )
   if (candidateSentence === undefined) return []
 
-  const coreWords = candidateCoreWords(transcript, candidate)
-  if (normalizedTokens(coreWords).length < MIN_RELATED_OPENING_WORD_COUNT) {
-    return []
-  }
-
-  const matches: RankedCleanTake[] = []
+  const nearby: RankedNearbySentence[] = []
   for (const sentence of sentences) {
     const sentenceDistance = Math.abs(
       sentence.sentenceIndex - candidateSentence.sentenceIndex,
@@ -284,31 +281,57 @@ export function findNearbyCleanTakes(
     }
 
     const gapMs = sourceGapMs(candidate, sentence)
-    if (
-      gapMs === null ||
-      gapMs > MAX_NEARBY_TAKE_GAP_MS ||
-      !isLocallyCleanTake(sentence.words) ||
-      !isClearlyRelatedTake(coreWords, sentence.words)
-    ) {
-      continue
-    }
-
-    matches.push({
-      take: nearbyTakeValue(sentence),
-      gapMs,
-      sentenceDistance,
-    })
+    if (gapMs === null || gapMs > MAX_NEARBY_TAKE_GAP_MS) continue
+    nearby.push({ sentence, gapMs, sentenceDistance })
   }
 
-  return matches
-    .sort(
-      (left, right) =>
-        left.gapMs - right.gapMs ||
-        left.sentenceDistance - right.sentenceDistance ||
-        left.take.startSourceMs - right.take.startSourceMs ||
-        left.take.endSourceMs - right.take.endSourceMs,
+  return nearby.sort(
+    (left, right) =>
+      left.gapMs - right.gapMs ||
+      left.sentenceDistance - right.sentenceDistance ||
+      left.sentence.startSourceMs - right.sentence.startSourceMs ||
+      left.sentence.endSourceMs - right.sentence.endSourceMs,
+  )
+}
+
+/**
+ * Return bounded neighboring sentence windows for later context selection.
+ * These are possible alternate takes only: no cleanliness, wording, or semantic
+ * claim is made here.
+ */
+export function findNearbyTakeWindows(
+  transcript: Transcript,
+  candidate: RetakeCandidate,
+): NearbyTakeWindow[] {
+  return rankedNearbySentences(transcript, candidate).map(
+    ({ sentence, sentenceDistance }) => ({
+      ...nearbyTakeValue(sentence),
+      sentenceDistance,
+    }),
+  )
+}
+
+/**
+ * Find high-confidence clean versions of a candidate in nearby sentences.
+ * Results are nearest-first, then earlier-first for a stable tie-break. Source
+ * text and ranges are preserved for later context or diagnostics.
+ */
+export function findNearbyCleanTakes(
+  transcript: Transcript,
+  candidate: RetakeCandidate,
+): NearbyCleanTake[] {
+  const coreWords = candidateCoreWords(transcript, candidate)
+  if (normalizedTokens(coreWords).length < MIN_RELATED_OPENING_WORD_COUNT) {
+    return []
+  }
+
+  return rankedNearbySentences(transcript, candidate)
+    .filter(
+      ({ sentence }) =>
+        isLocallyCleanTake(sentence.words) &&
+        isClearlyRelatedTake(coreWords, sentence.words),
     )
-    .map(({ take }) => ({ ...take }))
+    .map(({ sentence }) => nearbyTakeValue(sentence))
 }
 
 /** Return the single nearest obvious external clean take, when one exists. */

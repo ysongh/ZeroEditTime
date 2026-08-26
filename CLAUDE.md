@@ -520,7 +520,7 @@ empty folders for future phases.
   missing optional signals, determinism, fresh outputs, and input purity. Part D still owns the
   critical nearby-clean-take suppression; Part C adds no AI/network, editor state, UI, EDL, or
   export integration.
-- **Phase 11, Part D (done; stop here):** pure, conservative nearby-clean-take discovery and
+- **Phase 11, Part D (done):** pure, conservative nearby-clean-take discovery and
   suppression in `src/retakes/nearbyTakes.ts`. `buildScreenedRetakeCandidates` composes the raw
   Part-C policy with this filter; lower-level plural/singular finders expose fresh
   ORIGINAL-SOURCE-millisecond alternate-take metadata for later context construction, and the
@@ -540,9 +540,36 @@ empty folders for future phases.
   before/after and across one interjection, sentence/time bounds, chained clean and failed attempts,
   multiple dirty takes, unrelated/paraphrased/generic/prefix-collision speech, every local-clean
   rejection, deterministic ordering, source metadata, fresh results, invalid timing, empty input,
-  and input purity. Semantic completeness and the explicit model question remain for Parts E-G;
+  and input purity. Semantic completeness and the explicit model question remain for Parts F-G;
   Part D adds no context payload, AI/network call or prompt, recommendation, editor state, UI, EDL
   change, or export behavior.
+- **Phase 11, Part E (done; stop here):** pure, bounded model-context construction in
+  `src/retakes/context.ts`. `buildRetakeAnalysisContext(transcript, candidate)` shapes one typed
+  candidate into the exact candidate/before/after/nearby-alternates/signals envelope and returns
+  `null` only for a non-finite, negative, empty/reversed source range or blank candidate text.
+  Candidate and alternate bounds remain half-open ORIGINAL-SOURCE milliseconds; no EDL/output-time
+  projection occurs. The builder reuses Part B's already-created immediate `previousContext` and
+  `nextContext` instead of regrouping the transcript. For possible alternates across one
+  intervening sentence, it reuses Part D's generic nearest-first, 3-second/two-sentence source
+  windows; those windows deliberately make no cleanliness, wording, or semantic claim. Immediate
+  sentences are not duplicated in the alternate array, and at most two distance-two windows are
+  included. Text cost is explicitly bounded by both transcript-word and character
+  limits: candidate 120/1,200; each adjacent sentence 40/400; and each alternate 80/800. Oversized
+  before-context keeps the suffix nearest the candidate, after-context keeps the prefix, and
+  candidate/alternate excerpts keep both ends; every clipped value contains the fixed
+  `[content omitted]` non-transcript marker and `truncated: true`, so omission cannot masquerade as
+  verbatim speech; clipping also preserves valid Unicode surrogate pairs. Whitespace is
+  normalized, empty optional fields/alternate arrays are omitted, required and available optional
+  signals are explicitly copied, unknown input metadata cannot leak, and all nested results are
+  fresh without mutating transcript/candidate inputs. Focused offline tests lock the exact payload
+  and fractional source-ms ranges, an integrated Part-D-screened candidate with a possible take
+  across an interjection, two-sided alternate order and cap, absent-field omission, exclusion of
+  distant transcript, directional word/character bounds, huge ASCII/Unicode single-token and
+  long-alternate clipping, zero optional signals, malformed ranges/blank text, field whitelisting,
+  determinism, deep freshness, and purity. Part E deliberately adds no prompt/system instruction,
+  AI or network call, semantic alternate matching, batch/candidate limit, recommendation
+  normalization, editor state, UI, EDL change, or export behavior; Parts F-G still own the model
+  API and the explicit clean-take question.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -825,7 +852,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–D exist; it has no editor or network
+- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–E exist; it has no editor or network
   integration yet.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
@@ -850,10 +877,17 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     coverage.
   - `nearbyTakes.ts` — pure Part-D nearby-alternate discovery and high-precision suppression. It
     reuses detector timing/normalization policy, searches bounded neighboring sentences in both
-    directions, recognizes only exact cleaned wording for external hard suppression, and can prove
-    an internal clean final take only from a substantial opening restart chain.
+    directions, recognizes only exact cleaned wording for external hard suppression, can prove an
+    internal clean final take only from a substantial opening restart chain, and exposes generic
+    source windows (without a clean/semantic claim) for bounded later context.
   - `nearbyTakes.test.ts` — offline clean-take direction/proximity/source-range, local-cleanliness,
     internal restart-chain, false-match, determinism, malformed-timing, and purity coverage.
+  - `context.ts` — pure Part-E candidate-to-model-context shaping. It retains original-source
+    ranges, reuses adjacent sentence and bounded distance-two source-window metadata, whitelists
+    signals, caps every optional text window and alternate count, and explicitly labels
+    deterministic excerpts.
+  - `context.test.ts` — offline payload/source-time, context-direction, text/alternate-bound,
+    malformed-input, field-whitelisting, determinism, deep-freshness, and purity coverage.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
