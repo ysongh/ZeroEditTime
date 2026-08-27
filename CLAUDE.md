@@ -540,7 +540,7 @@ empty folders for future phases.
   before/after and across one interjection, sentence/time bounds, chained clean and failed attempts,
   multiple dirty takes, unrelated/paraphrased/generic/prefix-collision speech, every local-clean
   rejection, deterministic ordering, source metadata, fresh results, invalid timing, empty input,
-  and input purity. Part F installs the explicit model clean-take question; Part G still owns the
+  and input purity. Part F installs the explicit model clean-take question; Part G owns the
   complete decision/fairness policy. Part D adds no context payload, AI/network call or prompt,
   recommendation, editor state, UI, EDL change, or export behavior.
 - **Phase 11, Part E (done):** pure, bounded model-context construction in
@@ -569,8 +569,8 @@ empty folders for future phases.
   determinism, deep freshness, and purity. Part E deliberately adds no prompt/system instruction,
   AI or network call, semantic alternate matching, batch/candidate limit, recommendation
   normalization, editor state, UI, EDL change, or export behavior; Part F owns the model API and
-  explicit clean-take question, while Part G still owns the full instruction design.
-- **Phase 11, Part F (done; stop here):** the dedicated one-candidate AI analysis API, extending
+  explicit clean-take question, while Part G owns the full instruction design.
+- **Phase 11, Part F (done):** the dedicated one-candidate AI analysis API, extending
   the existing `/api/agent` Claude relay instead of adding a parallel proxy. The browser-side
   `src/agent/api.ts` now owns the shared same-origin JSON transport and preserves the editing
   agent's `{ messages }` request/response behavior; retake analysis adds the discriminated
@@ -580,7 +580,7 @@ empty folders for future phases.
   retake-result tool/schema, and forced single-tool choice. No API key, model configuration, full
   transcript, audio, video, or frames leave the intended boundary. The minimal Part-F instruction
   asks whether a complete clean nearby version already exists and forces `needsRetake: false` when
-  it does; Part G still owns the broader editorial and speech-fairness policy.
+  it does; Part G adds the broader editorial and speech-fairness policy.
   `RetakeAnalysisResult` is a discriminated trusted union: a negative carries normalized
   confidence plus an optional sanitized explanation while stripping all positive-only fields; a
   positive requires a known reason/severity and nonblank explanation, with an optional sanitized
@@ -597,6 +597,29 @@ empty folders for future phases.
   Part-G editorial/fairness policy, suggested-script policy, batching/candidate cap,
   recommendation assembly/deduplication, editor state, UI, playback, EDL, Undo, or export
   behavior.
+- **Phase 11, Part G (done; stop here):** the server-owned retake-analysis instruction now applies
+  the full conservative editing-first and speech-fairness policy. It decides only whether normal
+  editing can produce a clean section or re-recording would materially improve it; it does not
+  criticize or grade the speaker. A complete clean version anywhere in the bounded candidate,
+  before/after context, or nearby alternates still forces `needsRetake: false`, and heuristic
+  signals are screening evidence rather than automatic proof. One filler, ordinary silence, a
+  removable pause, a clean stumble with a usable take, mild volume/noise differences, caption
+  trouble, informal or conversational language, an accent, and non-professional presentation style
+  do not justify a retake. A positive decision requires evidence that editing cannot produce a
+  clean result: no usable complete take, an incomplete thought, unusable repeated attempts, a
+  severe uncuttable stumble, an explanation cutting cannot clarify, or genuinely severe audio
+  trouble. Dense
+  fillers and long in-sentence hesitations qualify only when cutting still leaves an awkward,
+  incomplete, or unnatural thought. Audio-quality and low-transcription-confidence reasons require
+  a corresponding reliable supplied signal and may never be inferred from wording; transcription
+  uncertainty is not treated as an accent flaw. The prompt explicitly protects accents, dialects,
+  speech differences, voice characteristics, appearance, and personal speaking style, and forbids
+  "more native" guidance. Explanations stay concise and actionable. Focused offline proxy tests
+  inspect the actual server-owned instruction sent in the mocked Claude request, lock every
+  allow/deny criterion and the editability gate, preserve the Part-F prompt-injection/forced-tool
+  contract, and leave Part-H script policy deferred. Part G changes no context/API/tool schema,
+  result normalization, recommendation, editor state, UI, batching, playback, EDL, Undo, or export
+  behavior; Part H still owns suggested replacement-script guidance.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -883,8 +906,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis. Parts A–F exist; Part F adds only the
-  one-candidate AI boundary and still has no editor integration, state, batching, or UI.
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part G. This folder
+  contains the Parts A–F pure/client boundaries; Part G's conservative server prompt lives in the
+  existing relay. There is still no editor integration, state, batching, or UI.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1181,8 +1205,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   Phase 8 adds one prompt line (regeneration replaces hand-edited caption text) — schema and
   relay behavior otherwise unchanged. Phase 11 Part F adds the discriminated retake-analysis
   branch, bounded context revalidation, and a dedicated forced result tool without changing the
-  legacy editing request. `netlify/agent.test.ts` sits above `functions/` and covers both modes,
-  server-owned configuration, key isolation/redaction, and failure paths offline.
+  legacy editing request. Part G expands only that branch's server-owned decision instruction with
+  editing-first thresholds and explicit speech-fairness protections; the request and output
+  contracts stay unchanged. `netlify/agent.test.ts` sits above `functions/` and covers both modes,
+  server-owned configuration/policy, key isolation/redaction, and failure paths offline.
 - `src/main.tsx` — React entry (`StrictMode`).
 - `src/index.css` — Vite template styles (`#root` is a centered 1126px column).
 - `public/fonts/` — `Roboto-Bold.ttf` (static, v3.005) + its Apache-2.0 `LICENSE.txt`, pulled

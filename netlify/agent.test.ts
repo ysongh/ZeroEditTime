@@ -205,6 +205,110 @@ describe('Claude agent proxy', () => {
     expect(response.body).not.toContain(API_KEY)
   })
 
+  it('installs the conservative Part-G editing and speech-fairness policy', async () => {
+    const recorder = recordingFetch()
+
+    const response = await handleAgent(
+      {
+        httpMethod: 'POST',
+        body: JSON.stringify({ mode: RETAKE_ANALYSIS_MODE, context: CONTEXT }),
+      },
+      { apiKey: API_KEY, fetch: recorder.fetch },
+    )
+
+    expect(response.statusCode).toBe(200)
+    expect(recorder.calls).toHaveLength(1)
+    const prompt = requestBody(recorder.calls[0]).system
+    expect(prompt).toEqual(expect.any(String))
+    const instruction = (prompt as string).replace(/\s+/gu, ' ').trim()
+
+    for (const required of [
+      'NOT to criticize the speaker',
+      'repaired cleanly through editing',
+      're-recording it would materially improve the final video',
+      'Prefer editing over re-recording whenever editing can already produce a clean result',
+      'editing cannot produce a clean result',
+      'heuristic signals as screening evidence, not as automatic proof',
+      'If the evidence does not meet the retake threshold, set needsRetake to false',
+      'Keep the explanation concise and actionable',
+    ]) {
+      expect(instruction).toContain(required)
+    }
+
+    const ordinaryStart = instruction.indexOf(
+      'Do not recommend a retake merely because:',
+    )
+    const thresholdStart = instruction.indexOf(
+      'Recommend a retake only when',
+    )
+    const fairnessStart = instruction.indexOf('Do not grade or penalize')
+    expect(ordinaryStart).toBeGreaterThan(-1)
+    expect(thresholdStart).toBeGreaterThan(ordinaryStart)
+    expect(fairnessStart).toBeGreaterThan(thresholdStart)
+
+    const ordinaryImperfectionSection = instruction.slice(
+      ordinaryStart,
+      thresholdStart,
+    )
+    for (const ordinaryImperfection of [
+      'there is one filler word',
+      'there is ordinary silence',
+      'there is a removable pause',
+      'there is a clean stumble with a usable final take',
+      'there are minor volume differences or mild constant background noise',
+      'there is a caption problem',
+      'the wording is informal',
+      'the speaker has an accent',
+      'the grammar is conversational',
+      'the speaker does not sound like a professional presenter',
+    ]) {
+      expect(ordinaryImperfectionSection).toContain(ordinaryImperfection)
+    }
+    expect(ordinaryImperfectionSection).toContain(
+      'An unusually dense filler cluster in an important sentence or an unusually long in-sentence hesitation supports a retake only when cutting it would still leave the thought awkward, incomplete, or unnatural',
+    )
+
+    const retakeThresholdSection = instruction.slice(
+      thresholdStart,
+      fairnessStart,
+    )
+    expect(retakeThresholdSection).toContain(
+      'supplied evidence shows that editing cannot produce a clean result',
+    )
+    for (const retakeThreshold of [
+      'no clean complete take of the thought exists',
+      'the thought is incomplete',
+      'repeated attempts remain unusable',
+      'severe stumbling prevents a natural edit',
+      'the explanation itself is confusing enough that cutting cannot fix it',
+      'an unusually dense filler cluster in an important sentence, or an unusually long in-sentence hesitation, cannot be cut into a natural, complete thought',
+      'audio quality is severe enough that existing cleanup is unlikely to repair it',
+    ]) {
+      expect(retakeThresholdSection).toContain(retakeThreshold)
+    }
+
+    expect(instruction).toContain(
+      'Do not grade or penalize accents, dialects, speech differences, voice characteristics, or appearance',
+    )
+    expect(instruction).toContain(
+      'Never instruct the speaker to sound more native',
+    )
+    expect(instruction).toContain('never present "more native" speech as better')
+    expect(instruction).toContain(
+      'Base the decision on editability, not personal speaking style',
+    )
+    expect(instruction).toContain(
+      'Use audio-quality or low-transcription-confidence only when the corresponding reliable signal is actually supplied',
+    )
+    expect(instruction).toContain(
+      'Never infer audio quality or transcription confidence from transcript wording',
+    )
+    expect(instruction).toContain(
+      'Low transcription confidence is transcript uncertainty, not evidence that an accent or speech difference is a flaw',
+    )
+
+  })
+
   it('canonicalizes a valid model result before relaying it to the browser', async () => {
     const rawReply = {
       content: [
