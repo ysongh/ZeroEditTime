@@ -3,9 +3,11 @@ import type { Transcript } from '../transcript/types'
 import type { RetakeAnalysisResult } from './analysis'
 import {
   analyzeRetakes,
+  clearRetakeAnalysisSessionCaches,
   type RetakeBatchProgress,
 } from './batchAnalysis'
 import type { RetakeAnalysisContext } from './context'
+import { MAX_RETAKE_ANALYSIS_CANDIDATES } from './costControls'
 
 const FAILED_DASHBOARD = [
   'The',
@@ -38,6 +40,14 @@ function sequential(...texts: readonly string[]): Transcript {
       end: index * 0.4 + 0.3,
     })),
   }
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
 }
 
 const POSITIVE_RESULT: RetakeAnalysisResult = {
@@ -89,7 +99,7 @@ describe('analyzeRetakes', () => {
     expect(calls).toBe(0)
   })
 
-  it('analyzes bounded contexts serially, reports progress, and keeps only positives', async () => {
+  it('uses bounded concurrency, reports progress, and keeps source-ordered positives', async () => {
     const transcript = sequential(
       ...FAILED_DASHBOARD,
       ...FAILED_DASHBOARD,
@@ -124,7 +134,7 @@ describe('analyzeRetakes', () => {
       onProgress: (event) => progress.push(event),
     })
 
-    expect(maximumActive).toBe(1)
+    expect(maximumActive).toBe(2)
     expect(contexts).toHaveLength(2)
     expect(contexts.map((context) => context.candidate)).toEqual([
       {
@@ -232,6 +242,226 @@ describe('analyzeRetakes', () => {
     expect(result.recommendations[0]).not.toHaveProperty('suggestedScript')
   })
 
+  it('enforces the selected-candidate cap before making analyzer calls', async () => {
+    const transcript = sequential(
+      ...Array.from(
+        { length: MAX_RETAKE_ANALYSIS_CANDIDATES + 2 },
+        () => FAILED_DASHBOARD,
+      ).flat(),
+    )
+    const progress: RetakeBatchProgress[] = []
+    let calls = 0
+    let active = 0
+    let maximumActive = 0
+
+    const result = await analyzeRetakes(transcript, 100_000, {
+      analyzeContext: async () => {
+        calls++
+        active++
+        maximumActive = Math.max(maximumActive, active)
+        await Promise.resolve()
+        active--
+        return NEGATIVE_RESULT
+      },
+      onProgress: (event) => progress.push(event),
+    })
+
+    expect(calls).toBe(MAX_RETAKE_ANALYSIS_CANDIDATES)
+    expect(maximumActive).toBe(2)
+    expect(result).toEqual({
+      candidateCount: MAX_RETAKE_ANALYSIS_CANDIDATES,
+      analyzedCount: MAX_RETAKE_ANALYSIS_CANDIDATES,
+      recommendations: [],
+    })
+    expect(progress[0]).toEqual({
+      completed: 0,
+      total: MAX_RETAKE_ANALYSIS_CANDIDATES,
+    })
+    expect(progress.at(-1)).toEqual({
+      completed: MAX_RETAKE_ANALYSIS_CANDIDATES,
+      total: MAX_RETAKE_ANALYSIS_CANDIDATES,
+    })
+  })
+
+  it('keeps recommendations chronological when concurrent requests finish out of order', async () => {
+    const transcript = sequential(
+      ...FAILED_DASHBOARD,
+      ...FAILED_DASHBOARD,
+      ...FAILED_DASHBOARD,
+    )
+    const firstRequest = deferred()
+    const starts: number[] = []
+    const reasons = [
+      'incomplete-thought',
+      'severe-stumble',
+      'long-hesitation',
+    ] as const
+
+    const analysis = analyzeRetakes(transcript, 20_000, {
+      analyzeContext: async (context) => {
+        const index = Math.round(context.candidate.startSourceMs / 4_000)
+        starts.push(context.candidate.startSourceMs)
+        if (index === 0) await firstRequest.promise
+        return {
+          needsRetake: true,
+          reason: reasons[index],
+          severity: 'recommended',
+          explanation: `Explanation ${index}.`,
+          confidence: 0.8,
+        }
+      },
+    })
+
+    for (let turn = 0; turn < 10 && starts.length < 3; turn++) {
+      await Promise.resolve()
+    }
+    expect(starts).toEqual([0, 4_000, 8_000])
+    firstRequest.resolve()
+
+    const result = await analysis
+    expect(result.recommendations.map(({ startSourceMs }) => startSourceMs)).toEqual([
+      0,
+      4_000,
+      8_000,
+    ])
+    expect(result.recommendations.map(({ reason }) => reason)).toEqual(
+      reasons,
+    )
+  })
+
+  it('stops new work and drains in-flight work before rejecting', async () => {
+    const transcript = sequential(
+      ...FAILED_DASHBOARD,
+      ...FAILED_DASHBOARD,
+      ...FAILED_DASHBOARD,
+    )
+    const secondRequest = deferred()
+    const starts: number[] = []
+    const progress: RetakeBatchProgress[] = []
+    let settled = false
+
+    const analysis = analyzeRetakes(transcript, 20_000, {
+      analyzeContext: async (context) => {
+        starts.push(context.candidate.startSourceMs)
+        if (context.candidate.startSourceMs === 0) {
+          throw new Error('first request failed')
+        }
+        await secondRequest.promise
+        return NEGATIVE_RESULT
+      },
+      onProgress: (event) => progress.push(event),
+    })
+    void analysis.then(
+      () => {
+        settled = true
+      },
+      () => {
+        settled = true
+      },
+    )
+
+    for (let turn = 0; turn < 10 && starts.length < 2; turn++) {
+      await Promise.resolve()
+    }
+    expect(starts).toEqual([0, 4_000])
+    expect(settled).toBe(false)
+
+    secondRequest.resolve()
+    await expect(analysis).rejects.toThrow('first request failed')
+    expect(starts).toEqual([0, 4_000])
+    const finalProgressCount = progress.length
+    await Promise.resolve()
+    expect(progress).toHaveLength(finalProgressCount)
+  })
+
+  it('reuses unchanged positive and negative decisions during the session', async () => {
+    const transcript = sequential(...FAILED_DASHBOARD)
+    const positiveProgress: RetakeBatchProgress[] = []
+    let positiveCalls = 0
+    const positiveAnalyzer = async (): Promise<RetakeAnalysisResult> => {
+      positiveCalls++
+      return POSITIVE_RESULT
+    }
+
+    const first = await analyzeRetakes(transcript, 10_000, {
+      analyzeContext: positiveAnalyzer,
+    })
+    const second = await analyzeRetakes(transcript, 10_000, {
+      analyzeContext: positiveAnalyzer,
+      onProgress: (event) => positiveProgress.push(event),
+    })
+
+    expect(positiveCalls).toBe(1)
+    expect(second).toEqual(first)
+    expect(second.recommendations).not.toBe(first.recommendations)
+    expect(second.recommendations[0]).not.toBe(first.recommendations[0])
+    expect(positiveProgress).toEqual([
+      { completed: 0, total: 1 },
+      { completed: 1, total: 1 },
+    ])
+    clearRetakeAnalysisSessionCaches()
+    await analyzeRetakes(transcript, 10_000, {
+      analyzeContext: positiveAnalyzer,
+    })
+    expect(positiveCalls).toBe(2)
+
+    let negativeCalls = 0
+    const negativeAnalyzer = async (): Promise<RetakeAnalysisResult> => {
+      negativeCalls++
+      return NEGATIVE_RESULT
+    }
+    await analyzeRetakes(transcript, 10_000, {
+      analyzeContext: negativeAnalyzer,
+    })
+    const cachedNegative = await analyzeRetakes(transcript, 10_000, {
+      analyzeContext: negativeAnalyzer,
+    })
+
+    expect(negativeCalls).toBe(1)
+    expect(cachedNegative.recommendations).toEqual([])
+  })
+
+  it('misses the cache when relevant transcript evidence changes', async () => {
+    let calls = 0
+    const analyzeContext = async (): Promise<RetakeAnalysisResult> => {
+      calls++
+      return NEGATIVE_RESULT
+    }
+
+    await analyzeRetakes(sequential(...FAILED_DASHBOARD), 10_000, {
+      analyzeContext,
+    })
+    await analyzeRetakes(
+      sequential(
+        ...FAILED_DASHBOARD.map((word) =>
+          word === 'dashboard' ? 'workspace' : word,
+        ),
+      ),
+      10_000,
+      { analyzeContext },
+    )
+
+    expect(calls).toBe(2)
+  })
+
+  it('does not cache rejected analyzer work', async () => {
+    let calls = 0
+    const analyzeContext = async (): Promise<RetakeAnalysisResult> => {
+      calls++
+      if (calls === 1) throw new Error('temporary failure')
+      return NEGATIVE_RESULT
+    }
+
+    await analyzeRetakes(sequential(...FAILED_DASHBOARD), 10_000, {
+      analyzeContext,
+    }).catch(() => undefined)
+    await analyzeRetakes(sequential(...FAILED_DASHBOARD), 10_000, {
+      analyzeContext,
+    })
+
+    expect(calls).toBe(2)
+  })
+
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     'fails before candidate analysis when source duration is %s',
     async (sourceDurationMs) => {
@@ -255,8 +485,11 @@ describe('analyzeRetakes', () => {
   it('returns fresh deterministic recommendations without mutating inputs', async () => {
     const transcript = sequential(...FAILED_DASHBOARD)
     const before = structuredClone(transcript)
-    const analyzeContext = async (): Promise<RetakeAnalysisResult> =>
-      POSITIVE_RESULT
+    let calls = 0
+    const analyzeContext = async (): Promise<RetakeAnalysisResult> => {
+      calls++
+      return POSITIVE_RESULT
+    }
 
     const first = await analyzeRetakes(transcript, 10_000, {
       analyzeContext,
@@ -271,6 +504,7 @@ describe('analyzeRetakes', () => {
     expect(first.recommendations[0].evidence).not.toBe(
       second.recommendations[0].evidence,
     )
+    expect(calls).toBe(1)
     expect(transcript).toEqual(before)
   })
 })

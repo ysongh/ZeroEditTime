@@ -13,6 +13,12 @@ import {
   buildRetakeAnalysisContext,
   type RetakeAnalysisContext,
 } from './context'
+import {
+  MAX_RETAKE_ANALYSIS_CONCURRENCY,
+  createRetakeAnalysisSessionCache,
+  selectRetakeCandidatesForAnalysis,
+  type RetakeAnalysisSessionCache,
+} from './costControls'
 import { buildScreenedRetakeCandidates } from './nearbyTakes'
 import {
   normalizeRetakeRecommendation,
@@ -51,6 +57,27 @@ export type RetakeContextAnalyzer = (
 export interface RetakeBatchOptions {
   analyzeContext?: RetakeContextAnalyzer
   onProgress?: (progress: RetakeBatchProgress) => void
+}
+
+let sessionCaches = new WeakMap<
+  RetakeContextAnalyzer,
+  RetakeAnalysisSessionCache
+>()
+
+function sessionCacheFor(
+  analyzeContext: RetakeContextAnalyzer,
+): RetakeAnalysisSessionCache {
+  const existing = sessionCaches.get(analyzeContext)
+  if (existing !== undefined) return existing
+
+  const created = createRetakeAnalysisSessionCache()
+  sessionCaches.set(analyzeContext, created)
+  return created
+}
+
+/** Clear transient inference reuse, primarily when a caller ends a session. */
+export function clearRetakeAnalysisSessionCaches(): void {
+  sessionCaches = new WeakMap()
 }
 
 function candidateEvidence(
@@ -101,12 +128,11 @@ function recommendationFromResult(
  * Analyze every locally screened candidate after an explicit caller action.
  *
  * The existing relay accepts exactly one bounded context per request and the
- * repository has no multi-request concurrency primitive, so Part I processes
- * candidates serially. Part J owns later caps, prioritization, caching, and any
- * wider bounded-concurrency policy. Screened candidates currently use distinct
- * sentence envelopes and model results own no timestamps, so this path cannot
- * produce overlaps; Part L owns general merging. Parts M and T own storage and
- * partial-failure recovery respectively.
+ * server-owned schema returns exactly one result, so Part J keeps one candidate
+ * per request and uses a fixed small worker pool. Local selection deduplicates,
+ * prioritizes, and caps requests before this point; successful decisions are
+ * cached only by their complete bounded context. Part L owns recommendation
+ * merging, while Parts M and T own storage and partial-failure recovery.
  */
 export async function analyzeRetakes(
   transcript: Transcript,
@@ -117,36 +143,68 @@ export async function analyzeRetakes(
     throw new Error('Cannot analyze retakes without a valid source duration.')
   }
 
-  const candidates = buildScreenedRetakeCandidates(transcript)
+  const candidates = selectRetakeCandidatesForAnalysis(
+    buildScreenedRetakeCandidates(transcript),
+  )
   const total = candidates.length
   const analyzeContext = options.analyzeContext ?? analyzeRetakeContext
-  const recommendations: RetakeRecommendation[] = []
+  const cache = sessionCacheFor(analyzeContext)
+  const recommendations: Array<RetakeRecommendation | null> = Array.from(
+    { length: total },
+    () => null,
+  )
+  let nextCandidateIndex = 0
   let analyzedCount = 0
+  let hasFailure = false
+  let firstFailure: unknown
 
   options.onProgress?.({ completed: 0, total })
 
-  for (const candidate of candidates) {
-    const context = buildRetakeAnalysisContext(transcript, candidate)
-    if (context === null) {
-      throw new Error('Could not build a valid retake-analysis context.')
+  async function runWorker(): Promise<void> {
+    while (!hasFailure && nextCandidateIndex < total) {
+      const candidateIndex = nextCandidateIndex
+      nextCandidateIndex++
+      const candidate = candidates[candidateIndex]
+      try {
+        const context = buildRetakeAnalysisContext(transcript, candidate)
+        if (context === null) {
+          throw new Error('Could not build a valid retake-analysis context.')
+        }
+
+        let result = cache?.get(context)
+        if (result === undefined) {
+          result = await analyzeContext(context)
+          cache?.set(context, result)
+        }
+
+        recommendations[candidateIndex] = recommendationFromResult(
+          candidate,
+          result,
+          sourceDurationMs,
+        )
+        analyzedCount++
+        options.onProgress?.({ completed: analyzedCount, total })
+      } catch (error) {
+        if (!hasFailure) {
+          hasFailure = true
+          firstFailure = error
+        }
+      }
     }
-
-    const result = await analyzeContext(context)
-    analyzedCount++
-
-    const recommendation = recommendationFromResult(
-      candidate,
-      result,
-      sourceDurationMs,
-    )
-    if (recommendation !== null) recommendations.push(recommendation)
-
-    options.onProgress?.({ completed: analyzedCount, total })
   }
+
+  const workerCount = Math.min(MAX_RETAKE_ANALYSIS_CONCURRENCY, total)
+  await Promise.all(
+    Array.from({ length: workerCount }, () => runWorker()),
+  )
+  if (hasFailure) throw firstFailure
 
   return {
     candidateCount: total,
     analyzedCount,
-    recommendations,
+    recommendations: recommendations.filter(
+      (recommendation): recommendation is RetakeRecommendation =>
+        recommendation !== null,
+    ),
   }
 }

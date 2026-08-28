@@ -641,17 +641,17 @@ empty folders for future phases.
   requirements assign clipboard behavior to later UI work after batching, recommendation assembly,
   and state exist. It also adds no API shape, client normalizer, recommendation, batching, caching,
   editor state, playback, EDL, Undo, or export behavior.
-- **Phase 11, Part I (done; stop here):** explicit, framework-free batch orchestration now lives in
+- **Phase 11, Part I (done):** explicit, framework-free batch orchestration now lives in
   `src/retakes/batchAnalysis.ts`. `analyzeRetakes(transcript, sourceDurationMs, options)` is inert
   until a caller invokes it: it validates source duration, runs the existing screened candidate
   generator locally, emits initial `{ completed: 0, total }` progress, and returns an exact empty
   success without an analyzer/model call when screening finds nothing (including a locally proven
   nearby clean take). For each remaining candidate it builds the bounded Part-E context and uses
-  the existing Part-F one-candidate analyzer serially in deterministic source order. Serial
-  processing is the current request-concurrency bound because the repository has no multi-request
-  pool and the relay deliberately accepts one context/result; Part J owns any wider bounded pool,
-  candidate cap/prioritization, pre-request deduplication, and caching. Every completed positive or
-  negative decision advances progress, while negatives create no recommendation. Positive results
+  the existing Part-F one-candidate analyzer. At the Part-I boundary, requests were serial because
+  the repository had no multi-request pool and the relay deliberately accepts one context/result;
+  Part J adds the bounded pool, candidate cap/prioritization, pre-request deduplication, and caching.
+  Every completed positive or negative decision advances progress, while negatives create no
+  recommendation. Positive results
   inherit only the local candidate's ORIGINAL-SOURCE-millisecond range, receive a deterministic
   neutral title and `open` status, copy the available local filler/pause/stumble/confidence
   evidence, and pass through the existing source-duration-aware recommendation normalizer before
@@ -667,6 +667,34 @@ empty folders for future phases.
   partial-failure recovery/error presentation, and Part U owns cancellation/stale-request
   protection. Part I adds no automatic invocation, React/editor state, UI,
   API/proxy/prompt/schema change, fingerprint, EDL change, playback, Undo, or export behavior.
+- **Phase 11, Part J (done; stop here):** local request-cost policy now wraps Part I without
+  changing the one-context/one-result relay contract. Pure `costControls.ts` discards malformed
+  candidate ranges, deep-copies inputs, and greedily removes candidates whose intersection covers
+  at least 80% of the shorter range, retaining the stronger candidate without merging ranges.
+  Priority uses only already-qualified Part-C signal families: filler strength is the lower of its
+  count/density threshold ratios, hesitation strength is duration over 2,000 ms, and stumble
+  strength is count over two. The deterministic tuple compares strongest qualifying signal,
+  qualifying-family count, then total qualifying strength; weak co-signals remain zero and cannot
+  raise selection priority. The strongest ten survive and are restored to chronological source
+  order before any request. The existing single-candidate schema cannot reliably batch multiple
+  results, so `analyzeRetakes` instead uses a fixed cap of two workers. Indexed result slots keep
+  recommendations chronological even when requests finish out of order; progress/candidate counts
+  describe only the selected work set. Successful positive and negative decisions are copied into
+  and out of a page-session cache partitioned by analyzer identity. A versioned canonical key
+  includes the exact bounded candidate range/text, before/after text, nearby alternate ranges/text,
+  truncation flags, and supplied signals, but no EDL state. Relevant context changes therefore miss
+  while EDL-only changes do not. Each least-recently-used cache is capped at 50 entries, exposes an
+  explicit session-clear function, never stores rejected work, and returns fresh values; the policy
+  key must be bumped when inference policy semantics change. Focused offline tests lock constants,
+  exact/below-threshold overlap, containment versus touching, stronger-survivor selection, the
+  strongest-ten cap, chronological restoration, weak-signal exclusion, malformed-range filtering,
+  determinism/deep freshness/purity, full context-key sensitivity, EDL exclusion, bounded LRU
+  behavior, a maximum of two active calls, out-of-order completion, cached positive/negative reuse,
+  progress on cache hits, changed-transcript misses, and rejection retry. Part J adds no model-batch
+  schema or proxy change. Its transient inference key is not recommendation-staleness state (Part
+  K); it does not merge returned recommendations or arbitrate severity/copy (Part L), catch partial
+  failures (Part T), coalesce/abort requests or guard state writes (Part U), or add React state/UI,
+  EDL, playback, Undo, or export behavior.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -953,10 +981,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part I. This folder
-  contains the Parts A–F pure/client boundaries and Part-I explicit batch runner; Parts G-H's
-  conservative decision and replacement-script policies live in the existing server relay. There
-  is still no editor integration, state, or UI.
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part J. This folder
+  contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, and Part-J request
+  cost controls; Parts G-H's conservative decision and replacement-script policies live in the
+  existing server relay. There is still no editor integration, state, or UI.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1000,11 +1028,15 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `analysisApi.ts` — one-candidate browser call through the shared `/api/agent` transport. It
     validates/whitelists context before sending and validates the structured tool result again on
     return; `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries offline.
-  - `batchAnalysis.ts` — explicitly invoked Part-I client orchestration from local screened
-    candidates through bounded context and the serial one-candidate analyzer into validated open
-    recommendations. It reports progress, returns empty success without a request, filters negative
-    decisions, and remains independent of React/editor state; `batchAnalysis.test.ts` covers that
-    complete boundary offline.
+  - `batchAnalysis.ts` — explicitly invoked Parts I-J client orchestration from local screened and
+    cost-selected candidates through bounded context and a two-worker one-candidate analyzer into
+    validated open recommendations. It reports progress, returns empty success without a request,
+    filters negative decisions, reuses unchanged bounded decisions within the page session, and
+    remains independent of React/editor state; `batchAnalysis.test.ts` covers that boundary offline.
+  - `costControls.ts` — pure Part-J pre-request validation, heavy-overlap deduplication,
+    qualifying-signal priority, and strongest-ten selection plus versioned bounded-context keys and
+    a copied 50-entry LRU result cache. `costControls.test.ts` locks the complete selection/cache
+    policy without AI, browser, React, EDL, or editor state.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
