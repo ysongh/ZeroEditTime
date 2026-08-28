@@ -620,7 +620,7 @@ empty folders for future phases.
   contract, and, at the Part-G boundary, left Part-H script policy deferred. Part G changes no
   context/API/tool schema, result normalization, recommendation, editor state, UI, batching,
   playback, EDL, Undo, or export behavior; Part H owns suggested replacement-script guidance.
-- **Phase 11, Part H (done; stop here):** the existing optional `suggestedScript` result field now
+- **Phase 11, Part H (done):** the existing optional `suggestedScript` result field now
   has a complete server-owned content policy without changing its type or JSON-schema shape. It is
   emitted only for `needsRetake: true` when the bounded candidate plus surrounding context supports
   a useful, faithful replacement. Wording must preserve intended meaning, introduce no unsupported
@@ -641,6 +641,32 @@ empty folders for future phases.
   requirements assign clipboard behavior to later UI work after batching, recommendation assembly,
   and state exist. It also adds no API shape, client normalizer, recommendation, batching, caching,
   editor state, playback, EDL, Undo, or export behavior.
+- **Phase 11, Part I (done; stop here):** explicit, framework-free batch orchestration now lives in
+  `src/retakes/batchAnalysis.ts`. `analyzeRetakes(transcript, sourceDurationMs, options)` is inert
+  until a caller invokes it: it validates source duration, runs the existing screened candidate
+  generator locally, emits initial `{ completed: 0, total }` progress, and returns an exact empty
+  success without an analyzer/model call when screening finds nothing (including a locally proven
+  nearby clean take). For each remaining candidate it builds the bounded Part-E context and uses
+  the existing Part-F one-candidate analyzer serially in deterministic source order. Serial
+  processing is the current request-concurrency bound because the repository has no multi-request
+  pool and the relay deliberately accepts one context/result; Part J owns any wider bounded pool,
+  candidate cap/prioritization, pre-request deduplication, and caching. Every completed positive or
+  negative decision advances progress, while negatives create no recommendation. Positive results
+  inherit only the local candidate's ORIGINAL-SOURCE-millisecond range, receive a deterministic
+  neutral title and `open` status, copy the available local filler/pause/stumble/confidence
+  evidence, and pass through the existing source-duration-aware recommendation normalizer before
+  entering the returned fresh array. Model-supplied extra timing cannot affect that range, and an
+  invalid assembled recommendation is omitted. Focused offline tests cover clean and locally
+  suppressed zero-call success, bounded per-candidate context, serial source order, progress,
+  positive/negative assembly, local timing and evidence ownership, final source-bound validation,
+  invalid duration, determinism, freshness, and input purity. The returned result is the seam for
+  later state. Part-B/D screening currently yields one distinct non-overlapping sentence envelope
+  per candidate and the model owns no timestamps, so overlap cannot arise on this path; Part L
+  still owns general overlap merging. Parts M-N own storage and the actual user-triggered
+  button/panel, Part S owns visible empty-state copy, Part T owns the currently deferred
+  partial-failure recovery/error presentation, and Part U owns cancellation/stale-request
+  protection. Part I adds no automatic invocation, React/editor state, UI,
+  API/proxy/prompt/schema change, fingerprint, EDL change, playback, Undo, or export behavior.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -927,10 +953,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part H. This folder
-  contains the Parts A–F pure/client boundaries; Parts G-H's conservative decision and
-  replacement-script policies live in the existing server relay. There is still no editor
-  integration, state, batching, or UI.
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part I. This folder
+  contains the Parts A–F pure/client boundaries and Part-I explicit batch runner; Parts G-H's
+  conservative decision and replacement-script policies live in the existing server relay. There
+  is still no editor integration, state, or UI.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -974,6 +1000,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `analysisApi.ts` — one-candidate browser call through the shared `/api/agent` transport. It
     validates/whitelists context before sending and validates the structured tool result again on
     return; `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries offline.
+  - `batchAnalysis.ts` — explicitly invoked Part-I client orchestration from local screened
+    candidates through bounded context and the serial one-candidate analyzer into validated open
+    recommendations. It reports progress, returns empty success without a request, filters negative
+    decisions, and remains independent of React/editor state; `batchAnalysis.test.ts` covers that
+    complete boundary offline.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
