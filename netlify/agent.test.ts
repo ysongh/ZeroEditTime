@@ -186,6 +186,17 @@ describe('Claude agent proxy', () => {
       minimum: 0,
       maximum: 1,
     })
+    expect(properties.suggestedScript).toMatchObject({
+      type: 'string',
+      description: expect.any(String),
+    })
+    const suggestedScriptDescription = properties.suggestedScript
+      .description as string
+    expect(suggestedScriptDescription).toContain('Optional')
+    expect(suggestedScriptDescription).toContain('copy-ready')
+    expect(suggestedScriptDescription).toContain(
+      'supported by supplied evidence',
+    )
 
     const messages = upstreamBody.messages as Array<{
       role: string
@@ -307,6 +318,68 @@ describe('Claude agent proxy', () => {
       'Low transcription confidence is transcript uncertainty, not evidence that an accent or speech difference is a flaw',
     )
 
+  })
+
+  it('installs the faithful, copy-ready Part-H suggested-script policy', async () => {
+    const recorder = recordingFetch()
+
+    const response = await handleAgent(
+      {
+        httpMethod: 'POST',
+        body: JSON.stringify({ mode: RETAKE_ANALYSIS_MODE, context: CONTEXT }),
+      },
+      { apiKey: API_KEY, fetch: recorder.fetch },
+    )
+
+    expect(response.statusCode).toBe(200)
+    expect(recorder.calls).toHaveLength(1)
+    const prompt = requestBody(recorder.calls[0]).system
+    expect(prompt).toEqual(expect.any(String))
+    const instruction = (prompt as string).replace(/\s+/gu, ' ').trim()
+    const scriptPolicyStart = instruction.indexOf(
+      'When needsRetake is true, suggestedScript remains optional',
+    )
+    const structuredOutputStart = instruction.indexOf(
+      'Return no free-form answer',
+    )
+    expect(scriptPolicyStart).toBeGreaterThan(-1)
+    expect(structuredOutputStart).toBeGreaterThan(scriptPolicyStart)
+    const scriptPolicy = instruction.slice(
+      scriptPolicyStart,
+      structuredOutputStart,
+    )
+    const structuredOutput = instruction.slice(structuredOutputStart)
+
+    for (const requirement of [
+      'supplied candidate and surrounding before, after, or nearbyAlternateTakes evidence',
+      'useful, faithful replacement',
+      'preserve the speaker\'s intended meaning',
+      'introduce no unsupported factual claims, capabilities, steps, or details',
+      'stay short, natural, and easy to read aloud',
+      'preserve product names and code terms accurately',
+      'spelling or casing is supplied',
+      'use the surrounding context',
+      'change only what is needed to repair the problem',
+      'personal or conversational style',
+      'more formal, professional, or "more native"',
+      'typically be no more than one or two sentences',
+      'replacement wording would not be useful',
+      'intended meaning or a required term is uncertain',
+      'faithful version would require guessing',
+      'missing conclusion of an incomplete thought',
+      'unsupported product behavior',
+      'only the final copy-ready words to speak',
+      'no label, wrapping quotation marks, Markdown, explanation, alternatives, placeholders, or stage directions',
+      'advisory text the user may choose to copy and record',
+      'never claim it was applied',
+      'never insert, replace, or alter audio or recorded media automatically',
+    ]) {
+      expect(scriptPolicy).toContain(requirement)
+    }
+
+    expect(structuredOutput).toContain(
+      'When needsRetake is false, omit reason, severity, and suggestedScript',
+    )
   })
 
   it('canonicalizes a valid model result before relaying it to the browser', async () => {

@@ -597,7 +597,7 @@ empty folders for future phases.
   Part-G editorial/fairness policy, suggested-script policy, batching/candidate cap,
   recommendation assembly/deduplication, editor state, UI, playback, EDL, Undo, or export
   behavior.
-- **Phase 11, Part G (done; stop here):** the server-owned retake-analysis instruction now applies
+- **Phase 11, Part G (done):** the server-owned retake-analysis instruction now applies
   the full conservative editing-first and speech-fairness policy. It decides only whether normal
   editing can produce a clean section or re-recording would materially improve it; it does not
   criticize or grade the speaker. A complete clean version anywhere in the bounded candidate,
@@ -617,9 +617,30 @@ empty folders for future phases.
   "more native" guidance. Explanations stay concise and actionable. Focused offline proxy tests
   inspect the actual server-owned instruction sent in the mocked Claude request, lock every
   allow/deny criterion and the editability gate, preserve the Part-F prompt-injection/forced-tool
-  contract, and leave Part-H script policy deferred. Part G changes no context/API/tool schema,
-  result normalization, recommendation, editor state, UI, batching, playback, EDL, Undo, or export
-  behavior; Part H still owns suggested replacement-script guidance.
+  contract, and, at the Part-G boundary, left Part-H script policy deferred. Part G changes no
+  context/API/tool schema, result normalization, recommendation, editor state, UI, batching,
+  playback, EDL, Undo, or export behavior; Part H owns suggested replacement-script guidance.
+- **Phase 11, Part H (done; stop here):** the existing optional `suggestedScript` result field now
+  has a complete server-owned content policy without changing its type or JSON-schema shape. It is
+  emitted only for `needsRetake: true` when the bounded candidate plus surrounding context supports
+  a useful, faithful replacement. Wording must preserve intended meaning, introduce no unsupported
+  facts/capabilities/steps/details, stay short and natural to read aloud, retain supplied product
+  names and code-term spelling/casing, fit the surrounding thought, and change only what is needed
+  without formalizing, professionalizing, or making the speaker sound "more native." It is
+  typically at most one or two sentences. Unhelpful or uncertain scripts are omitted rather than
+  guessed; the policy specifically forbids inventing a missing conclusion or unsupported product
+  behavior. When present, the field contains only final copy-ready words to speak—no label,
+  wrapping quotes, Markdown, explanation, alternatives, placeholders, or stage directions. The
+  tool field description reinforces that supported/useful gate. A script remains advisory text the
+  user may choose to copy and record; the model must never claim it was applied or that audio/media
+  was inserted, replaced, or altered automatically. The existing negative branch still strips any
+  `suggestedScript`. Focused offline proxy tests inspect the actual server-owned prompt/schema
+  description and lock every Part-H rule while preserving the Part-F structured-output and Part-G
+  decision/fairness contracts. These tests prove the instruction and data boundary, not live-model
+  semantic compliance. Part H adds no Copy UI yet: the implementation sequence and Retakes-panel
+  requirements assign clipboard behavior to later UI work after batching, recommendation assembly,
+  and state exist. It also adds no API shape, client normalizer, recommendation, batching, caching,
+  editor state, playback, EDL, Undo, or export behavior.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -906,9 +927,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part G. This folder
-  contains the Parts A–F pure/client boundaries; Part G's conservative server prompt lives in the
-  existing relay. There is still no editor integration, state, batching, or UI.
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part H. This folder
+  contains the Parts A–F pure/client boundaries; Parts G-H's conservative decision and
+  replacement-script policies live in the existing server relay. There is still no editor
+  integration, state, batching, or UI.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1205,9 +1227,10 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   Phase 8 adds one prompt line (regeneration replaces hand-edited caption text) — schema and
   relay behavior otherwise unchanged. Phase 11 Part F adds the discriminated retake-analysis
   branch, bounded context revalidation, and a dedicated forced result tool without changing the
-  legacy editing request. Part G expands only that branch's server-owned decision instruction with
-  editing-first thresholds and explicit speech-fairness protections; the request and output
-  contracts stay unchanged. `netlify/agent.test.ts` sits above `functions/` and covers both modes,
+  legacy editing request. Parts G-H expand only that branch's server-owned instruction with
+  editing-first/speech-fairness thresholds and faithful copy-ready replacement-script guidance;
+  Part H also clarifies the existing optional tool-field description without changing the request
+  or output shape. `netlify/agent.test.ts` sits above `functions/` and covers both modes,
   server-owned configuration/policy, key isolation/redaction, and failure paths offline.
 - `src/main.tsx` — React entry (`StrictMode`).
 - `src/index.css` — Vite template styles (`#root` is a centered 1126px column).
