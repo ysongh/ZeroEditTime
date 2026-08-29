@@ -21,10 +21,15 @@ import {
 } from './costControls'
 import { buildScreenedRetakeCandidates } from './nearbyTakes'
 import {
+  buildRetakeTranscriptFingerprint,
+  withRetakeTranscriptFingerprint,
+} from './freshness'
+import {
   normalizeRetakeRecommendation,
   type RetakeEvidence,
   type RetakeReason,
   type RetakeRecommendation,
+  type RetakeTranscriptFingerprint,
 } from './recommendation'
 
 const RETAKE_TITLES = {
@@ -101,6 +106,7 @@ function recommendationFromResult(
   candidate: RetakeCandidate,
   result: RetakeAnalysisResult,
   sourceDurationMs: number,
+  transcriptFingerprint: RetakeTranscriptFingerprint,
 ): RetakeRecommendation | null {
   if (!result.needsRetake) return null
 
@@ -121,7 +127,16 @@ function recommendationFromResult(
   const evidence = candidateEvidence(candidate.signals)
   if (evidence !== undefined) draft.evidence = evidence
 
-  return normalizeRetakeRecommendation(draft, sourceDurationMs)
+  const recommendation = normalizeRetakeRecommendation(
+    draft,
+    sourceDurationMs,
+  )
+  return recommendation === null
+    ? null
+    : withRetakeTranscriptFingerprint(
+        recommendation,
+        transcriptFingerprint,
+      )
 }
 
 /**
@@ -170,17 +185,32 @@ export async function analyzeRetakes(
         if (context === null) {
           throw new Error('Could not build a valid retake-analysis context.')
         }
+        const transcriptFingerprint = buildRetakeTranscriptFingerprint(
+          candidate,
+          context,
+        )
+        if (transcriptFingerprint === null) {
+          throw new Error('Could not fingerprint retake-analysis context.')
+        }
 
-        let result = cache?.get(context)
+        let result = cache?.get(
+          context,
+          transcriptFingerprint.fingerprint,
+        )
         if (result === undefined) {
           result = await analyzeContext(context)
-          cache?.set(context, result)
+          cache?.set(
+            context,
+            result,
+            transcriptFingerprint.fingerprint,
+          )
         }
 
         recommendations[candidateIndex] = recommendationFromResult(
           candidate,
           result,
           sourceDurationMs,
+          transcriptFingerprint,
         )
         analyzedCount++
         options.onProgress?.({ completed: analyzedCount, total })

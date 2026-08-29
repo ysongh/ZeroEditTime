@@ -333,6 +333,21 @@ describe('retake analysis cost controls', () => {
     })
   })
 
+  it('partitions equivalent model context by captured source provenance', () => {
+    const cache = createRetakeAnalysisSessionCache()
+    const unchangedContext = context()
+
+    cache.set(unchangedContext, POSITIVE_RESULT, 'source-version-a')
+
+    expect(
+      cache.get(unchangedContext, 'source-version-b'),
+    ).toBeUndefined()
+    expect(
+      cache.get(unchangedContext, 'source-version-a'),
+    ).toEqual(POSITIVE_RESULT)
+    expect(cache.get(unchangedContext)).toBeUndefined()
+  })
+
   it('uses bounded least-recently-used cache eviction', () => {
     const cache = createRetakeAnalysisSessionCache()
     for (let index = 0; index < MAX_RETAKE_ANALYSIS_CACHE_ENTRIES; index++) {

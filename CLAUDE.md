@@ -667,7 +667,7 @@ empty folders for future phases.
   partial-failure recovery/error presentation, and Part U owns cancellation/stale-request
   protection. Part I adds no automatic invocation, React/editor state, UI,
   API/proxy/prompt/schema change, fingerprint, EDL change, playback, Undo, or export behavior.
-- **Phase 11, Part J (done; stop here):** local request-cost policy now wraps Part I without
+- **Phase 11, Part J (done):** local request-cost policy now wraps Part I without
   changing the one-context/one-result relay contract. Pure `costControls.ts` discards malformed
   candidate ranges, deep-copies inputs, and greedily removes candidates whose intersection covers
   at least 80% of the shorter range, retaining the stronger candidate without merging ranges.
@@ -695,6 +695,36 @@ empty folders for future phases.
   K); it does not merge returned recommendations or arbitrate severity/copy (Part L), catch partial
   failures (Part T), coalesce/abort requests or guard state writes (Part U), or add React state/UI,
   EDL, playback, Undo, or export behavior.
+- **Phase 11, Part K (done; stop here):** recommendation freshness is now explicit source-
+  transcript provenance rather than an inference-cache side effect. Pure `src/retakes/freshness.ts`
+  builds a separately versioned compact fingerprint from the exact half-open candidate source
+  range, its complete normalized transcript text, and the exact normalized Part-E evidence supplied
+  to the model: bounded candidate excerpt/truncation, immediate before/after sentences, distance-two
+  alternate ranges/text/truncation, and local signals. Including the unclipped candidate closes the
+  intentional Part-E head/tail omission, so a middle edit cannot remain falsely current, while using
+  the actual request context avoids invalidation from unrelated nearby speech. Current fingerprints
+  are rebuilt from all locally screened candidates and matched by exact original-source range; a
+  disappeared candidate, reordered/relevant changed transcript, altered model evidence, or malformed
+  transcript becomes stale, while normalized whitespace and transcript outside supplied context do
+  not. Each recommendation stores a local fingerprint list whose entries retain their originating
+  candidate ranges, so every proof must remain current and later range aggregation can preserve
+  provenance without fabricating a new transcript identity. The API reports `current`, `stale`, or
+  `requires-reanalysis` (for missing/malformed/obsolete provenance) and provides a pure fail-closed
+  filter that removes everything not proven current while preserving order. Batch analysis captures
+  provenance beside the model context before awaiting, attaches it only after the existing unknown-
+  input normalizer, and partitions the Part-J session cache by that captured proof; therefore a
+  changed unclipped middle cannot reuse and relabel an older bounded-context decision. Negatives
+  still create nothing, model-supplied provenance remains discarded, and unchanged positive/
+  negative decisions still reuse the bounded LRU. EDL segments, captions, overlays, output timing,
+  recommendation copy/status, and Undo state are not inputs, so EDL-only cuts cannot alter source-
+  time identity; Part J's transient policy key and Part K's stored provenance keep separate versions
+  and lifetimes. Focused offline tests lock a golden versioned fingerprint, full-candidate and exact-
+  context/signal sensitivity, long-gap and long-sentence context, case/punctuation/whitespace,
+  distant-text and EDL exclusion, candidate disappearance, reordering, malformed data, missing/old/
+  multiple provenance, trust-boundary spoofing, async snapshot timing, cache partitioning, filtering,
+  determinism, freshness, and input purity. Part K adds no `stale` workflow status, overlap merging,
+  React/editor state, UI, network/schema change, EDL mutation, playback, Undo, or export behavior;
+  Part L must explicitly carry or discard the originating fingerprint entries when it merges ranges.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -981,10 +1011,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part J. This folder
-  contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, and Part-J request
-  cost controls; Parts G-H's conservative decision and replacement-script policies live in the
-  existing server relay. There is still no editor integration, state, or UI.
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part K. This folder
+  contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
+  controls, and Part-K transcript provenance; Parts G-H's conservative decision and replacement-
+  script policies live in the existing server relay. There is still no editor integration, state,
+  or UI.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1028,15 +1059,22 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `analysisApi.ts` — one-candidate browser call through the shared `/api/agent` transport. It
     validates/whitelists context before sending and validates the structured tool result again on
     return; `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries offline.
-  - `batchAnalysis.ts` — explicitly invoked Parts I-J client orchestration from local screened and
+  - `batchAnalysis.ts` — explicitly invoked Parts I-K client orchestration from local screened and
     cost-selected candidates through bounded context and a two-worker one-candidate analyzer into
     validated open recommendations. It reports progress, returns empty success without a request,
-    filters negative decisions, reuses unchanged bounded decisions within the page session, and
-    remains independent of React/editor state; `batchAnalysis.test.ts` covers that boundary offline.
+    filters negative decisions, captures local transcript provenance before awaiting, reuses only
+    decisions with unchanged context and provenance within the page session, and remains independent
+    of React/editor state; `batchAnalysis.test.ts` covers that boundary offline.
   - `costControls.ts` — pure Part-J pre-request validation, heavy-overlap deduplication,
     qualifying-signal priority, and strongest-ten selection plus versioned bounded-context keys and
-    a copied 50-entry LRU result cache. `costControls.test.ts` locks the complete selection/cache
-    policy without AI, browser, React, EDL, or editor state.
+    a copied 50-entry LRU result cache. Part K optionally partitions equivalent model contexts by
+    captured source provenance. `costControls.test.ts` locks the complete selection/cache policy
+    without AI, browser, React, EDL, or editor state.
+  - `freshness.ts` — pure Part-K source-transcript provenance. It fingerprints a recommendation's
+    exact source range, complete candidate text, and exact bounded model evidence; classifies
+    current, stale, and re-analysis-required advice; and can remove everything not proven current
+    without accepting EDL/output state. `freshness.test.ts` locks the fingerprint boundary, local
+    attachment, stale detection/filtering, determinism, defensive handling, and purity.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,

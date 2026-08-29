@@ -8,6 +8,7 @@ import {
 } from './batchAnalysis'
 import type { RetakeAnalysisContext } from './context'
 import { MAX_RETAKE_ANALYSIS_CANDIDATES } from './costControls'
+import { getRetakeRecommendationFreshness } from './freshness'
 
 const FAILED_DASHBOARD = [
   'The',
@@ -173,9 +174,24 @@ describe('analyzeRetakes', () => {
           confidence: 0.83,
           status: 'open',
           evidence: { fillerCount: 3 },
+          transcriptFingerprints: [
+            {
+              startSourceMs: 0,
+              endSourceMs: 3_900,
+              fingerprint: expect.stringMatching(
+                /^retake-transcript-v1:\d+:[0-9a-f]{16}$/u,
+              ),
+            },
+          ],
         },
       ],
     })
+    expect(
+      getRetakeRecommendationFreshness(
+        transcript,
+        result.recommendations[0],
+      ),
+    ).toBe('current')
     expect(transcript).toEqual(before)
     expect(decisions).toEqual(decisionsBefore)
   })
@@ -205,6 +221,15 @@ describe('analyzeRetakes', () => {
         confidence: 1,
         status: 'open',
         evidence: { fillerCount: 3 },
+        transcriptFingerprints: [
+          {
+            startSourceMs: 0,
+            endSourceMs: 3_900,
+            fingerprint: expect.stringMatching(
+              /^retake-transcript-v1:\d+:[0-9a-f]{16}$/u,
+            ),
+          },
+        ],
       },
     ])
   })
@@ -442,6 +467,84 @@ describe('analyzeRetakes', () => {
     )
 
     expect(calls).toBe(2)
+  })
+
+  it('partitions cached decisions when omitted middle candidate text changes', async () => {
+    const words = Array.from({ length: 160 }, (_, index) =>
+      index < 48
+        ? 'um'
+        : index === 80
+          ? 'middle-original'
+          : index === 159
+            ? 'finished.'
+            : `word-${index}`,
+    )
+    const firstTranscript = sequential(...words)
+    const secondTranscript = sequential(
+      ...words.map((word) =>
+        word === 'middle-original' ? 'middle-changed' : word,
+      ),
+    )
+    const contexts: RetakeAnalysisContext[] = []
+    let calls = 0
+    const analyzeContext = async (
+      context: RetakeAnalysisContext,
+    ): Promise<RetakeAnalysisResult> => {
+      calls++
+      contexts.push(structuredClone(context))
+      return POSITIVE_RESULT
+    }
+
+    const first = await analyzeRetakes(firstTranscript, 100_000, {
+      analyzeContext,
+    })
+    const second = await analyzeRetakes(secondTranscript, 100_000, {
+      analyzeContext,
+    })
+
+    expect(contexts).toHaveLength(2)
+    expect(contexts[0]).toEqual(contexts[1])
+    expect(calls).toBe(2)
+    expect(first.recommendations[0].transcriptFingerprints).not.toEqual(
+      second.recommendations[0].transcriptFingerprints,
+    )
+    expect(
+      getRetakeRecommendationFreshness(
+        firstTranscript,
+        first.recommendations[0],
+      ),
+    ).toBe('current')
+    expect(
+      getRetakeRecommendationFreshness(
+        secondTranscript,
+        second.recommendations[0],
+      ),
+    ).toBe('current')
+  })
+
+  it('captures provenance before awaiting an analyzer', async () => {
+    const transcript = sequential(...FAILED_DASHBOARD)
+    const analyzedTranscript = structuredClone(transcript)
+
+    const result = await analyzeRetakes(transcript, 10_000, {
+      analyzeContext: async () => {
+        transcript.words[1].text = 'workspace'
+        return POSITIVE_RESULT
+      },
+    })
+
+    expect(
+      getRetakeRecommendationFreshness(
+        analyzedTranscript,
+        result.recommendations[0],
+      ),
+    ).toBe('current')
+    expect(
+      getRetakeRecommendationFreshness(
+        transcript,
+        result.recommendations[0],
+      ),
+    ).toBe('stale')
   })
 
   it('does not cache rejected analyzer work', async () => {

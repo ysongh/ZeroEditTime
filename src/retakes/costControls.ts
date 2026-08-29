@@ -1,6 +1,7 @@
 // Pure/local Phase-11 cost controls plus a bounded page-session result cache.
 // Candidate selection happens before any AI request. Cache keys describe only
-// the bounded Part-E context; recommendation staleness remains a later layer.
+// the bounded Part-E context. Part K may add a captured source-provenance
+// partition without conflating this transient cache key with stored freshness.
 
 import type { RetakeAnalysisResult } from './analysis'
 import type { RetakeCandidate } from './candidates'
@@ -269,9 +270,26 @@ function copyAnalysisResult(
 
 export interface RetakeAnalysisSessionCache {
   readonly size: number
-  get(context: RetakeAnalysisContext): RetakeAnalysisResult | undefined
-  set(context: RetakeAnalysisContext, result: RetakeAnalysisResult): void
+  get(
+    context: RetakeAnalysisContext,
+    sourceFingerprint?: string,
+  ): RetakeAnalysisResult | undefined
+  set(
+    context: RetakeAnalysisContext,
+    result: RetakeAnalysisResult,
+    sourceFingerprint?: string,
+  ): void
   clear(): void
+}
+
+function inferenceCacheKey(
+  context: RetakeAnalysisContext,
+  sourceFingerprint: string | undefined,
+): string {
+  return JSON.stringify([
+    fingerprintRetakeAnalysisContext(context),
+    sourceFingerprint ?? null,
+  ])
 }
 
 class BoundedRetakeAnalysisSessionCache
@@ -283,8 +301,11 @@ class BoundedRetakeAnalysisSessionCache
     return this.entries.size
   }
 
-  get(context: RetakeAnalysisContext): RetakeAnalysisResult | undefined {
-    const key = fingerprintRetakeAnalysisContext(context)
+  get(
+    context: RetakeAnalysisContext,
+    sourceFingerprint?: string,
+  ): RetakeAnalysisResult | undefined {
+    const key = inferenceCacheKey(context, sourceFingerprint)
     const stored = this.entries.get(key)
     if (stored === undefined) return undefined
 
@@ -296,8 +317,9 @@ class BoundedRetakeAnalysisSessionCache
   set(
     context: RetakeAnalysisContext,
     result: RetakeAnalysisResult,
+    sourceFingerprint?: string,
   ): void {
-    const key = fingerprintRetakeAnalysisContext(context)
+    const key = inferenceCacheKey(context, sourceFingerprint)
     this.entries.delete(key)
     this.entries.set(key, copyAnalysisResult(result))
 

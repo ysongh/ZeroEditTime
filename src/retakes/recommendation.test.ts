@@ -261,6 +261,14 @@ describe('normalizeRetakeRecommendation', () => {
         ...VALID_RECOMMENDATION,
         id: '<model-id>',
         needsRetake: true,
+        transcriptFingerprints: [
+          {
+            startSourceMs: 4_000,
+            endSourceMs: 8_500,
+            fingerprint:
+              'retake-transcript-v1:10:0000000000000000',
+          },
+        ],
         hiddenInstruction: 'retain me',
       },
       SOURCE_DURATION_MS,
@@ -268,6 +276,7 @@ describe('normalizeRetakeRecommendation', () => {
 
     expect(normalized?.id).toBe('retake_4000_8500_severe-stumble')
     expect(normalized).not.toHaveProperty('needsRetake')
+    expect(normalized).not.toHaveProperty('transcriptFingerprints')
     expect(normalized).not.toHaveProperty('hiddenInstruction')
   })
 

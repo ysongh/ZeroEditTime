@@ -35,6 +35,13 @@ export interface RetakeEvidence {
   transcriptConfidence?: number
 }
 
+export interface RetakeTranscriptFingerprint {
+  /** Original candidate range retained so merged advice can keep provenance. */
+  startSourceMs: number
+  endSourceMs: number
+  fingerprint: string
+}
+
 export interface RetakeRecommendation {
   id: string
 
@@ -55,6 +62,9 @@ export interface RetakeRecommendation {
 
   /** Optional source signals retained for debugging and UI explanation. */
   evidence?: RetakeEvidence
+
+  /** Versioned local proofs attached only after the untrusted boundary. */
+  transcriptFingerprints?: RetakeTranscriptFingerprint[]
 }
 
 type UnknownRecord = Record<string, unknown>
