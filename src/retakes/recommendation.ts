@@ -136,7 +136,7 @@ function normalizeEvidence(value: unknown): RetakeEvidence | undefined {
   return Object.keys(evidence).length > 0 ? evidence : undefined
 }
 
-function makeRetakeId(
+export function makeRetakeRecommendationId(
   startSourceMs: number,
   endSourceMs: number,
   reason: RetakeReason,
@@ -186,7 +186,11 @@ export function normalizeRetakeRecommendation(
   if (endSourceMs <= startSourceMs) return null
 
   const recommendation: RetakeRecommendation = {
-    id: makeRetakeId(startSourceMs, endSourceMs, value.reason),
+    id: makeRetakeRecommendationId(
+      startSourceMs,
+      endSourceMs,
+      value.reason,
+    ),
     startSourceMs,
     endSourceMs,
     reason: value.reason,

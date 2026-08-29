@@ -177,10 +177,16 @@ function buildCurrentFingerprintIndex(
   return index
 }
 
-function isFingerprintShape(
+export function isRetakeTranscriptFingerprint(
   value: unknown,
 ): value is RetakeTranscriptFingerprint {
-  if (typeof value !== 'object' || value === null) return false
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    Array.isArray(value)
+  ) {
+    return false
+  }
   const fingerprint = value as Partial<RetakeTranscriptFingerprint>
   return (
     typeof fingerprint.startSourceMs === 'number' &&
@@ -202,7 +208,7 @@ function freshnessFromIndex(
   if (
     !Array.isArray(fingerprints) ||
     fingerprints.length === 0 ||
-    !fingerprints.every(isFingerprintShape)
+    !fingerprints.every(isRetakeTranscriptFingerprint)
   ) {
     return 'requires-reanalysis'
   }
@@ -231,7 +237,7 @@ export function withRetakeTranscriptFingerprint(
 ): RetakeRecommendation | null {
   if (
     !hasValidRange(recommendation) ||
-    !isFingerprintShape(fingerprint) ||
+    !isRetakeTranscriptFingerprint(fingerprint) ||
     fingerprint.startSourceMs < recommendation.startSourceMs ||
     fingerprint.endSourceMs > recommendation.endSourceMs
   ) {
@@ -243,7 +249,13 @@ export function withRetakeTranscriptFingerprint(
     ...(recommendation.evidence === undefined
       ? {}
       : { evidence: { ...recommendation.evidence } }),
-    transcriptFingerprints: [{ ...fingerprint }],
+    transcriptFingerprints: [
+      {
+        startSourceMs: fingerprint.startSourceMs,
+        endSourceMs: fingerprint.endSourceMs,
+        fingerprint: fingerprint.fingerprint,
+      },
+    ],
   }
 }
 

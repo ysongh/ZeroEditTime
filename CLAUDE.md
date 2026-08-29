@@ -695,7 +695,7 @@ empty folders for future phases.
   K); it does not merge returned recommendations or arbitrate severity/copy (Part L), catch partial
   failures (Part T), coalesce/abort requests or guard state writes (Part U), or add React state/UI,
   EDL, playback, Undo, or export behavior.
-- **Phase 11, Part K (done; stop here):** recommendation freshness is now explicit source-
+- **Phase 11, Part K (done):** recommendation freshness is now explicit source-
   transcript provenance rather than an inference-cache side effect. Pure `src/retakes/freshness.ts`
   builds a separately versioned compact fingerprint from the exact half-open candidate source
   range, its complete normalized transcript text, and the exact normalized Part-E evidence supplied
@@ -724,7 +724,46 @@ empty folders for future phases.
   multiple provenance, trust-boundary spoofing, async snapshot timing, cache partitioning, filtering,
   determinism, freshness, and input purity. Part K adds no `stale` workflow status, overlap merging,
   React/editor state, UI, network/schema change, EDL mutation, playback, Undo, or export behavior;
-  Part L must explicitly carry or discard the originating fingerprint entries when it merges ranges.
+  Part L now explicitly carries or discards the originating fingerprint entries when it merges
+  ranges.
+- **Phase 11, Part L (done; stop here):** completed recommendations now pass through the pure
+  `normalizeRetakeRecommendations(recommendations, sourceDurationMs)` collection boundary before
+  leaving `analyzeRetakes`. It reuses Part A's singular unknown-input normalizer, so malformed enum/
+  text/numeric data is removed, recoverable finite source bounds and confidence are clamped against
+  the real source duration, input ids/extra fields remain untrusted, and every surviving item gets
+  a locally derived id. Results are canonically sorted by half-open ORIGINAL-SOURCE-millisecond
+  range plus a total field/provenance tie-break, making output independent of input order. A pair is
+  a clear duplicate when its workflow status and issue family match and it either shares an exact
+  Part-K proof or has positive overlap covering at least 60% of the shorter and 30% of the longer
+  range. Exact copies of one locally derived identity also collapse across conflicting statuses,
+  with `resolved` taking precedence over `dismissed`, then `open`, so later state/UI code never sees
+  duplicate ids or resurrects completed advice. Speech/content reasons are compatible with one
+  another; `audio-quality` and `low-transcription-confidence` remain isolated families. Touching/
+  gapped ranges, tiny contained issues, other different-status overlaps, and technical-vs-content
+  advice therefore remain separate. A deterministic strongest-pair pass repeats to a fixed point;
+  this permits compatible overlap bridges while keeping normalized output stable and idempotent. A
+  merge unions the source range, recomputes identity from the union plus the deterministic copy
+  owner's reason, preserves the strongest severity, keeps maximum normalized confidence, selects
+  one coherent reason/title/explanation owner by normalized explanation usefulness with severity/
+  confidence tie-breaks, and independently retains the most useful available copy-ready script
+  without concatenating model prose. Original copy/script owners remain separate from aggregate
+  severity/confidence during pairwise merging, so arbitration is associative. Overlapping evidence
+  is not double-counted: counts and silence duration use maxima, while transcript confidence uses
+  the minimum supplied value. Provenance is all-contributors or nothing:
+  only when every member has a nonempty, current-format proof set contained in its own range are all
+  entries deep-copied, exact-deduplicated, and source/hash sorted; otherwise the merged field is
+  omitted so Part K returns `requires-reanalysis`. Any valid proofs still remain available
+  internally for exact duplicate matching during that normalization pass, but partial provenance is
+  never emitted and the expanded union never receives a fabricated fingerprint. Batch progress/
+  analyzed counts remain candidate-based. Focused offline tests cover
+  source bounds, finite confidence clamping/non-finite rejection, canonical ordering and reversed-
+  input equivalence, exact duplicates, the 41-46s/43-49s example, both overlap thresholds, touching/
+  gaps/family/status isolation and exact-id status precedence, fixed-point bridge/idempotence,
+  independent copy/script/severity/confidence/evidence policy, id regeneration, shared/distinct/
+  conflicting/missing/malformed provenance, Part-K current/stale/re-analysis behavior, deep
+  freshness, determinism, and input purity. Part L adds no editor state, UI, EDL
+  mutation, playback, Undo, export behavior, prompt/schema/network change, or partial-failure/
+  cancellation policy; Part M owns recommendation storage and workflow actions.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1011,11 +1050,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part K. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part L. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
-  controls, and Part-K transcript provenance; Parts G-H's conservative decision and replacement-
-  script policies live in the existing server relay. There is still no editor integration, state,
-  or UI.
+  controls, Part-K transcript provenance, and Part-L collection normalization; Parts G-H's
+  conservative decision and replacement-script policies live in the existing server relay. There
+  is still no editor integration, state, or UI.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1059,7 +1098,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `analysisApi.ts` — one-candidate browser call through the shared `/api/agent` transport. It
     validates/whitelists context before sending and validates the structured tool result again on
     return; `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries offline.
-  - `batchAnalysis.ts` — explicitly invoked Parts I-K client orchestration from local screened and
+  - `batchAnalysis.ts` — explicitly invoked Parts I-L client orchestration from local screened and
     cost-selected candidates through bounded context and a two-worker one-candidate analyzer into
     validated open recommendations. It reports progress, returns empty success without a request,
     filters negative decisions, captures local transcript provenance before awaiting, reuses only
@@ -1075,6 +1114,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     current, stale, and re-analysis-required advice; and can remove everything not proven current
     without accepting EDL/output state. `freshness.test.ts` locks the fingerprint boundary, local
     attachment, stale detection/filtering, determinism, defensive handling, and purity.
+  - `recommendations.ts` — pure Part-L source-duration-aware collection normalization. It applies
+    canonical sorting, conservative compatible-family/overlap grouping, union-range and strongest-
+    copy arbitration, non-additive evidence aggregation, deterministic id regeneration, and all-or-
+    nothing provenance union without accepting EDL or editor state. `recommendations.test.ts` locks
+    range/confidence validation, overlap and non-merge boundaries, copy/evidence/provenance policy,
+    determinism, Part-K interoperability, freshness, and purity.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,

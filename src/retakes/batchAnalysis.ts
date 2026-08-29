@@ -31,6 +31,7 @@ import {
   type RetakeRecommendation,
   type RetakeTranscriptFingerprint,
 } from './recommendation'
+import { normalizeRetakeRecommendations } from './recommendations'
 
 const RETAKE_TITLES = {
   'no-clean-take': 'No clean take found',
@@ -146,8 +147,9 @@ function recommendationFromResult(
  * server-owned schema returns exactly one result, so Part J keeps one candidate
  * per request and uses a fixed small worker pool. Local selection deduplicates,
  * prioritizes, and caps requests before this point; successful decisions are
- * cached only by their complete bounded context. Part L owns recommendation
- * merging, while Parts M and T own storage and partial-failure recovery.
+ * cached only by their complete bounded context. Part L normalization removes
+ * invalid and clearly duplicate overlapping recommendations,
+ * while Parts M and T own storage and partial-failure recovery.
  */
 export async function analyzeRetakes(
   transcript: Transcript,
@@ -229,12 +231,17 @@ export async function analyzeRetakes(
   )
   if (hasFailure) throw firstFailure
 
+  const completedRecommendations = recommendations.filter(
+    (recommendation): recommendation is RetakeRecommendation =>
+      recommendation !== null,
+  )
+
   return {
     candidateCount: total,
     analyzedCount,
-    recommendations: recommendations.filter(
-      (recommendation): recommendation is RetakeRecommendation =>
-        recommendation !== null,
+    recommendations: normalizeRetakeRecommendations(
+      completedRecommendations,
+      sourceDurationMs,
     ),
   }
 }
