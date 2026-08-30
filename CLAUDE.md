@@ -726,7 +726,7 @@ empty folders for future phases.
   React/editor state, UI, network/schema change, EDL mutation, playback, Undo, or export behavior;
   Part L now explicitly carries or discards the originating fingerprint entries when it merges
   ranges.
-- **Phase 11, Part L (done; stop here):** completed recommendations now pass through the pure
+- **Phase 11, Part L (done):** completed recommendations now pass through the pure
   `normalizeRetakeRecommendations(recommendations, sourceDurationMs)` collection boundary before
   leaving `analyzeRetakes`. It reuses Part A's singular unknown-input normalizer, so malformed enum/
   text/numeric data is removed, recoverable finite source bounds and confidence are clamped against
@@ -763,7 +763,29 @@ empty folders for future phases.
   conflicting/missing/malformed provenance, Part-K current/stale/re-analysis behavior, deep
   freshness, determinism, and input purity. Part L adds no editor state, UI, EDL
   mutation, playback, Undo, export behavior, prompt/schema/network change, or partial-failure/
-  cancellation policy; Part M owns recommendation storage and workflow actions.
+  cancellation policy; Part M now owns recommendation storage and workflow actions.
+- **Phase 11, Part M (done; stop here):** advisory retake state now lives in the pure
+  `src/retakes/editorState.ts` slice with backward-compatible `[]` / `idle` defaults, the requested
+  `idle | analyzing | complete | error` lifecycle status, optional copied progress/error metadata,
+  and immutable set/dismiss/resolve/clear operations plus one typed reducer. Recommendation
+  replacement accepts the trusted normalized Part-L collection, rejects duplicate local ids as an
+  upstream invariant violation, strips unknown fields by reconstructing exact domain values, and
+  deep-copies evidence and Part-K provenance. Dismiss and resolve retain the advisory record while
+  monotonically advancing its workflow status (`open` → `dismissed` → `resolved`); unknown ids and
+  already-equal transitions are same-reference no-ops. Clear removes only recommendations, keeping
+  lifecycle metadata so `complete + []` remains a valid successful empty result. A separate atomic
+  metadata operation can replace status/progress/error without implying analysis success or partial-
+  failure policy. App composes this slice beside its EDL/overlay state and forwards typed retake
+  actions against the latest reducer state, but deliberately excludes them from the content Undo
+  snapshot. Retake updates therefore create no Undo entry; EDL/overlay commits and Undo preserve
+  current recommendation/workflow state, EDL Reset does not change source-time advice, and only the
+  existing new-source `reset-document` path restores empty/idle defaults. No retake field enters
+  `EDL`, export, transcript, captions, overlays, or audio cleanup. Focused pure and App-reducer tests
+  lock defaults, deep freshness, replacement/no-op/duplicate behavior, monotonic status changes,
+  clear/lifecycle semantics, sequential reducer actions, EDL isolation, history exclusion, Undo
+  preservation, and source-document reset. Part M adds no analysis trigger, panel or other UI (Part
+  N), playback/markers/copy UX, network/batch behavior, partial-failure policy (Part T), or stale-
+  request protection (Part U).
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1050,11 +1072,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part L. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part M. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
-  controls, Part-K transcript provenance, and Part-L collection normalization; Parts G-H's
-  conservative decision and replacement-script policies live in the existing server relay. There
-  is still no editor integration, state, or UI.
+  controls, Part-K transcript provenance, Part-L collection normalization, and Part-M advisory
+  editor state; Parts G-H's conservative decision and replacement-script policies live in the
+  existing server relay. There is still no Retakes UI.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1120,6 +1142,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     nothing provenance union without accepting EDL or editor state. `recommendations.test.ts` locks
     range/confidence validation, overlap and non-merge boundaries, copy/evidence/provenance policy,
     determinism, Part-K interoperability, freshness, and purity.
+  - `editorState.ts` — pure Part-M advisory recommendation and analysis-lifecycle state. It provides
+    safe defaults, exact deep-copied collection replacement, monotonic dismiss/resolve workflow
+    actions, collection clearing, atomic lifecycle metadata replacement, and a typed reducer without
+    accepting EDL/editor-content data. `editorState.test.ts` locks those state invariants; App's
+    regression suite locks composition outside content Undo and reset behavior.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,

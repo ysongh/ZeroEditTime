@@ -11,6 +11,8 @@ import CaptionList from './captions/CaptionList'
 import CaptionOverlay from './captions/CaptionOverlay'
 import type { Caption, EDL } from './edl/types'
 import ExportButton from './export/ExportButton'
+import type { RetakeEditorState } from './retakes/editorState'
+import type { RetakeRecommendation } from './retakes/recommendation'
 import TranscriptView from './transcript/Transcript'
 import type { Transcript } from './transcript/types'
 
@@ -22,7 +24,7 @@ type StateRecord = {
 
 type ReducerRecord = {
   kind: 'reducer'
-  dispatch: ReturnType<typeof vi.fn>
+  dispatch: ReturnType<typeof vi.fn<(action: unknown) => void>>
   reducer: (state: unknown, action: unknown) => unknown
   state: unknown
 }
@@ -185,6 +187,16 @@ function renderApp(): ReactElement {
   return App()
 }
 
+function editorReducerRecord(): ReducerRecord {
+  const record = harness.slots.find(
+    (slot): slot is ReducerRecord => slot.kind === 'reducer',
+  )
+  if (record === undefined) {
+    throw new Error('Expected the App editor reducer hook.')
+  }
+  return record
+}
+
 function ranges(edl: EDL): Array<[number, number]> {
   return edl.segments.map((segment) => [segment.start, segment.end])
 }
@@ -265,7 +277,7 @@ beforeEach(() => {
           state:
             initializer === undefined ? initialArg : initializer(initialArg),
           reducer,
-          dispatch: vi.fn(),
+          dispatch: vi.fn<(action: unknown) => void>(),
         }
         created.dispatch.mockImplementation((action: unknown) => {
           created.state = created.reducer(created.state, action)
@@ -319,6 +331,92 @@ afterEach(() => {
 })
 
 describe('App regression wiring', () => {
+  it('stores retake advice outside EDL Undo and clears it with the source document', () => {
+    const file = { name: 'source.mp4' } as File
+    selectSource(file, 'blob:source', 10)
+    const editor = editorReducerRecord()
+    type EditorStateView = {
+      edl: EDL | null
+      history: unknown[]
+      retakes: RetakeEditorState
+    }
+    const state = () => editor.state as EditorStateView
+    const recommendation: RetakeRecommendation = {
+      id: 'retake_1000_3000_severe-stumble',
+      startSourceMs: 1_000,
+      endSourceMs: 3_000,
+      reason: 'severe-stumble',
+      severity: 'recommended',
+      title: 'Severe stumble',
+      explanation: 'The restart leaves no complete clean take.',
+      confidence: 0.9,
+      status: 'open',
+    }
+
+    expect(state().retakes).toEqual({
+      retakeRecommendations: [],
+      retakeAnalysisStatus: 'idle',
+    })
+    editor.dispatch({
+      type: 'update-retakes',
+      action: {
+        type: 'set-retake-analysis-state',
+        status: 'error',
+        progress: { completed: 1, total: 2 },
+        error: 'One section could not be analyzed.',
+      },
+    })
+    editor.dispatch({
+      type: 'update-retakes',
+      action: {
+        type: 'set-retake-recommendations',
+        recommendations: [recommendation],
+      },
+    })
+    expect(state().history).toEqual([])
+    expect(state().edl).not.toHaveProperty('retakeRecommendations')
+
+    const originalEdl = state().edl
+    if (originalEdl === null) throw new Error('Expected an initialized EDL.')
+    editor.dispatch({
+      type: 'commit-edl',
+      edl: {
+        ...originalEdl,
+        segments: [
+          { ...originalEdl.segments[0], start: 2, end: 10 },
+        ],
+      },
+    })
+    editor.dispatch({
+      type: 'update-retakes',
+      action: {
+        type: 'dismiss-retake-recommendation',
+        id: recommendation.id,
+      },
+    })
+    expect(state().history).toHaveLength(1)
+
+    editor.dispatch({ type: 'undo' })
+    expect(state().edl).toBe(originalEdl)
+    expect(state().history).toEqual([])
+    expect(state().retakes.retakeRecommendations[0].status).toBe(
+      'dismissed',
+    )
+    expect(state().retakes).toMatchObject({
+      retakeAnalysisStatus: 'error',
+      retakeAnalysisProgress: { completed: 1, total: 2 },
+      retakeAnalysisError: 'One section could not be analyzed.',
+    })
+
+    editor.dispatch({ type: 'reset-document' })
+    expect(state().edl).toBeNull()
+    expect(state().history).toEqual([])
+    expect(state().retakes).toEqual({
+      retakeRecommendations: [],
+      retakeAnalysisStatus: 'idle',
+    })
+  })
+
   it('keeps upload, URL replacement, preload, and metadata initialization connected', () => {
     const first = { name: 'first.mp4' } as File
     const second = { name: 'second.mov' } as File

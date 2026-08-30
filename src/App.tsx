@@ -18,6 +18,12 @@ import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
 import type { ImageOverlay, OverlayAsset } from './overlays/types'
 import {
+  createRetakeEditorState,
+  retakeEditorReducer,
+  type RetakeEditorAction,
+  type RetakeEditorState,
+} from './retakes/editorState'
+import {
   collectOverlayObjectUrls,
   createOverlayEditorState,
   overlayEditorReducer,
@@ -46,6 +52,7 @@ type EditorSnapshot = {
 type EditorState = {
   edl: EDL | null
   overlays: OverlayEditorState
+  retakes: RetakeEditorState
   history: EditorSnapshot[]
 }
 
@@ -53,6 +60,7 @@ type EditorAction =
   | { type: 'replace-edl'; edl: EDL }
   | { type: 'commit-edl'; edl: EDL }
   | { type: 'commit-overlays'; action: OverlayEditorAction }
+  | { type: 'update-retakes'; action: RetakeEditorAction }
   | { type: 'undo' }
   | { type: 'reset-document' }
 
@@ -60,6 +68,7 @@ function createEditorState(): EditorState {
   return {
     edl: null,
     overlays: createOverlayEditorState(),
+    retakes: createRetakeEditorState(),
     history: [],
   }
 }
@@ -73,9 +82,10 @@ function snapshotEditor(state: EditorState): EditorSnapshot {
 }
 
 /**
- * One atomic state machine for EDL + persistent overlay content. React dispatch
- * always reduces against the latest state, so an async EDL-only agent commit
- * cannot restore overlay arrays captured before the request started.
+ * One atomic state machine for editor content plus advisory retake state.
+ * React dispatch always reduces against the latest state, so an async EDL-only
+ * agent commit cannot restore overlay or retake data captured before it began.
+ * Only EDL/overlay content enters the Undo snapshots.
  */
 function editorReducer(state: EditorState, action: EditorAction): EditorState {
   switch (action.type) {
@@ -106,6 +116,10 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
         history: [...state.history, snapshotEditor(state)],
       }
     }
+    case 'update-retakes': {
+      const retakes = retakeEditorReducer(state.retakes, action.action)
+      return retakes === state.retakes ? state : { ...state, retakes }
+    }
     case 'undo': {
       const previous = state.history.at(-1)
       if (previous === undefined) {
@@ -125,6 +139,9 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
           imageOverlays: previous.imageOverlays,
           selectedOverlayId,
         },
+        // Retake advice is advisory source-time metadata, not editor content;
+        // EDL/overlay Undo deliberately leaves its current workflow state alone.
+        retakes: state.retakes,
         history: state.history.slice(0, -1),
       }
     }
