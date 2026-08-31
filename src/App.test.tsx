@@ -11,7 +11,20 @@ import CaptionList from './captions/CaptionList'
 import CaptionOverlay from './captions/CaptionOverlay'
 import type { Caption, EDL } from './edl/types'
 import ExportButton from './export/ExportButton'
+import RetakesPanel, {
+  type RetakesPanelProps,
+} from './retakes/RetakesPanel'
+import type {
+  RetakeBatchOptions,
+  RetakeBatchResult,
+} from './retakes/batchAnalysis'
+import { buildRetakeAnalysisContext } from './retakes/context'
 import type { RetakeEditorState } from './retakes/editorState'
+import {
+  buildRetakeTranscriptFingerprint,
+  withRetakeTranscriptFingerprint,
+} from './retakes/freshness'
+import { buildScreenedRetakeCandidates } from './retakes/nearbyTakes'
 import type { RetakeRecommendation } from './retakes/recommendation'
 import TranscriptView from './transcript/Transcript'
 import type { Transcript } from './transcript/types'
@@ -47,6 +60,7 @@ const harness = vi.hoisted(() => ({
   loadFfmpeg: vi.fn(),
   extractAudio: vi.fn(),
   transcribe: vi.fn(),
+  analyzeRetakes: vi.fn(),
 }))
 
 vi.mock('react', async (importOriginal) => {
@@ -70,6 +84,10 @@ vi.mock('./transcript/extractAudio', () => ({
 }))
 
 vi.mock('./transcript/api', () => ({ transcribe: harness.transcribe }))
+
+vi.mock('./retakes/batchAnalysis', () => ({
+  analyzeRetakes: harness.analyzeRetakes,
+}))
 
 type NodeProps = { children?: ReactNode }
 
@@ -102,7 +120,7 @@ type VideoProps = NodeProps & {
   src?: string
 }
 
-type TimelineProps = NodeProps & { edl: EDL }
+type TimelineProps = NodeProps & { edl: EDL; playhead: number }
 
 type TranscriptProps = NodeProps & {
   edl: EDL
@@ -197,6 +215,17 @@ function editorReducerRecord(): ReducerRecord {
   return record
 }
 
+function deferredValue<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+} {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
+
 function ranges(edl: EDL): Array<[number, number]> {
   return edl.segments.map((segment) => [segment.start, segment.end])
 }
@@ -230,6 +259,7 @@ beforeEach(() => {
   harness.loadFfmpeg.mockReset().mockResolvedValue(undefined)
   harness.extractAudio.mockReset()
   harness.transcribe.mockReset()
+  harness.analyzeRetakes.mockReset()
   harness.useState.mockReset()
   harness.useReducer.mockReset()
   harness.useRef.mockReset()
@@ -331,6 +361,211 @@ afterEach(() => {
 })
 
 describe('App regression wiring', () => {
+  it('runs retake analysis only on request and keeps panel actions outside EDL history', async () => {
+    const file = { name: 'source.mp4' } as File
+    const failedWords = [
+      'The',
+      'dashboard',
+      'lets',
+      'you',
+      'um',
+      'manage',
+      'uh',
+      'all',
+      'er',
+      'projects...',
+    ] as const
+    const transcript: Transcript = {
+      words: failedWords.map((text, index) => ({
+        text,
+        start: 1 + index * 0.4,
+        end: 1 + index * 0.4 + 0.3,
+      })),
+    }
+    const [candidate] = buildScreenedRetakeCandidates(transcript)
+    const context = buildRetakeAnalysisContext(transcript, candidate)
+    if (context === null) throw new Error('Expected retake context.')
+    const fingerprint = buildRetakeTranscriptFingerprint(candidate, context)
+    if (fingerprint === null) throw new Error('Expected retake proof.')
+    const stampedRecommendation = withRetakeTranscriptFingerprint(
+      {
+        id: 'retake_1000_4900_severe-stumble',
+        startSourceMs: 1_000,
+        endSourceMs: 4_900,
+        reason: 'severe-stumble',
+        severity: 'recommended',
+        title: 'Severe stumble',
+        explanation: 'The restart leaves no complete clean take.',
+        suggestedScript: 'State the complete thought once.',
+        confidence: 0.9,
+        status: 'open',
+      },
+      fingerprint,
+    )
+    if (stampedRecommendation === null) {
+      throw new Error('Expected stamped recommendation.')
+    }
+    const recommendation = stampedRecommendation
+    const analysis = deferredValue<RetakeBatchResult>()
+    let batchOptions: RetakeBatchOptions | undefined
+    harness.analyzeRetakes.mockImplementation(
+      (
+        receivedTranscript: Transcript,
+        sourceDurationMs: number,
+        options: RetakeBatchOptions,
+      ) => {
+        expect(receivedTranscript).toBe(transcript)
+        expect(sourceDurationMs).toBe(10_000)
+        batchOptions = options
+        options.onProgress?.({ completed: 0, total: 1 })
+        return analysis.promise
+      },
+    )
+    harness.extractAudio.mockResolvedValue(
+      new Blob([new Uint8Array([1])], { type: 'audio/mpeg' }),
+    )
+    harness.transcribe.mockResolvedValue(transcript)
+    const clipboardWrite = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', {
+      clipboard: { writeText: clipboardWrite },
+    })
+
+    let view = selectSource(file, 'blob:source', 10)
+    await findButton(view, 'Transcribe').props.onClick?.()
+    view = renderApp()
+    let panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(harness.analyzeRetakes).not.toHaveBeenCalled()
+    const editor = editorReducerRecord()
+    type EditorStateView = {
+      edl: EDL | null
+      history: unknown[]
+      retakes: RetakeEditorState
+    }
+    const state = () => editor.state as EditorStateView
+    const edlBefore = state().edl
+    const historyBefore = state().history
+
+    const pending = panel.props.onAnalyze()
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(harness.analyzeRetakes).toHaveBeenCalledOnce()
+    expect(panel.props).toMatchObject({
+      analysisStatus: 'analyzing',
+      analysisProgress: { completed: 0, total: 1 },
+    })
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+
+    batchOptions?.onProgress?.({ completed: 1, total: 1 })
+    analysis.resolve({
+      candidateCount: 1,
+      analyzedCount: 1,
+      recommendations: [recommendation],
+    })
+    await pending
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props).toMatchObject({
+      recommendations: [recommendation],
+      analysisStatus: 'complete',
+      analysisProgress: { completed: 1, total: 1 },
+    })
+
+    panel.props.onSeekSourceMs(recommendation.startSourceMs)
+    view = renderApp()
+    expect(
+      findComponent<TimelineProps>(view, Timeline, 'timeline').props.playhead,
+    ).toBe(1)
+    await panel.props.onCopyScript(recommendation.suggestedScript!)
+    expect(clipboardWrite).toHaveBeenCalledWith(
+      recommendation.suggestedScript,
+    )
+    panel.props.onDismiss(recommendation.id)
+    expect(state().retakes.retakeRecommendations[0].status).toBe(
+      'dismissed',
+    )
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+
+    harness.analyzeRetakes.mockRejectedValueOnce(
+      new Error('Retake request failed.'),
+    )
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    await panel.props.onAnalyze()
+    expect(state().retakes).toMatchObject({
+      retakeAnalysisStatus: 'error',
+      retakeAnalysisError: 'Retake request failed.',
+      retakeRecommendations: [{ status: 'dismissed' }],
+    })
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+
+    const withoutProof = { ...recommendation }
+    delete withoutProof.transcriptFingerprints
+    editor.dispatch({
+      type: 'update-retakes',
+      action: {
+        type: 'set-retake-recommendations',
+        recommendations: [withoutProof],
+      },
+    })
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.recommendations).toEqual([])
+
+    editor.dispatch({
+      type: 'update-retakes',
+      action: {
+        type: 'set-retake-recommendations',
+        recommendations: [recommendation],
+      },
+    })
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.recommendations).toHaveLength(1)
+
+    const changedTranscript: Transcript = {
+      words: transcript.words.map((word, index) =>
+        index === 1 ? { ...word, text: 'workspace' } : { ...word },
+      ),
+    }
+    harness.transcribe.mockResolvedValueOnce(changedTranscript)
+    await findButton(view, 'Transcribe').props.onClick?.()
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.recommendations).toEqual([])
+    expect(state().retakes.retakeRecommendations).toHaveLength(1)
+  })
+
   it('stores retake advice outside EDL Undo and clears it with the source document', () => {
     const file = { name: 'source.mp4' } as File
     selectSource(file, 'blob:source', 10)

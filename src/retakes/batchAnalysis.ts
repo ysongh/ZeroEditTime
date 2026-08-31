@@ -1,6 +1,6 @@
-// Framework-free Phase-11 batch orchestration. This module is inert until a
-// caller explicitly invokes it: later editor/UI parts own the user action and
-// state, while this layer composes the existing local and one-candidate APIs.
+// Framework-free Phase-11 batch orchestration. This module stays inert until
+// App's explicit Retakes-panel action invokes it; the UI owns state while this
+// layer composes the existing local and one-candidate APIs.
 
 import type { Transcript } from '../transcript/types'
 import type { RetakeAnalysisResult } from './analysis'
@@ -149,7 +149,7 @@ function recommendationFromResult(
  * prioritizes, and caps requests before this point; successful decisions are
  * cached only by their complete bounded context. Part L normalization removes
  * invalid and clearly duplicate overlapping recommendations,
- * while Parts M and T own storage and partial-failure recovery.
+ * while Part M owns storage and Part T owns partial-failure recovery.
  */
 export async function analyzeRetakes(
   transcript: Transcript,

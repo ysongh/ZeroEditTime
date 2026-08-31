@@ -764,7 +764,7 @@ empty folders for future phases.
   freshness, determinism, and input purity. Part L adds no editor state, UI, EDL
   mutation, playback, Undo, export behavior, prompt/schema/network change, or partial-failure/
   cancellation policy; Part M now owns recommendation storage and workflow actions.
-- **Phase 11, Part M (done; stop here):** advisory retake state now lives in the pure
+- **Phase 11, Part M (done):** advisory retake state now lives in the pure
   `src/retakes/editorState.ts` slice with backward-compatible `[]` / `idle` defaults, the requested
   `idle | analyzing | complete | error` lifecycle status, optional copied progress/error metadata,
   and immutable set/dismiss/resolve/clear operations plus one typed reducer. Recommendation
@@ -783,9 +783,38 @@ empty folders for future phases.
   `EDL`, export, transcript, captions, overlays, or audio cleanup. Focused pure and App-reducer tests
   lock defaults, deep freshness, replacement/no-op/duplicate behavior, monotonic status changes,
   clear/lifecycle semantics, sequential reducer actions, EDL isolation, history exclusion, Undo
-  preservation, and source-document reset. Part M adds no analysis trigger, panel or other UI (Part
-  N), playback/markers/copy UX, network/batch behavior, partial-failure policy (Part T), or stale-
-  request protection (Part U).
+  preservation, and source-document reset. Part M itself adds no analysis trigger, panel or other
+  UI; Part N now owns that first UI seam.
+- **Phase 11, Part N (done; stop here):** the compact controlled
+  `src/retakes/RetakesPanel.tsx` is rendered after the existing Agent bar whenever a transcript and
+  source EDL are available. Its explicit **Check for retakes** button is the first UI caller of the
+  otherwise inert Parts I-L pipeline: App guards an active run, sets Part-M lifecycle state to
+  `analyzing`, forwards candidate-based progress, invokes `analyzeRetakes` with the transcript and
+  real source duration in milliseconds, replaces recommendations only after full success, and then
+  records `complete` plus final analyzed/candidate counts. A basic catch moves state to `error`
+  without discarding older advice or leaving an unhandled promise; visible error/partial-success
+  policy remains Part T, and request ids/cancellation remain Part U. Before display, App applies
+  Part K's fail-closed current-transcript filter, so proofless or changed-transcript advice stays in
+  advisory state for later policy but cannot appear as current guidance. The panel preserves
+  normalized source order and derives its count/cards only from `open` recommendations, so
+  dismissed/resolved records remain in advisory state but disappear from the actionable list. Every
+  card shows the required humane severity label with uniform treatment, compact ORIGINAL-SOURCE
+  `MM:SS` (or
+  `H:MM:SS`) range plus exact-second metadata, concise title, explanation, source-time **Seek**, and
+  **Dismiss**. Seek forwards the exact source millisecond start and App converts once to the
+  existing source-second handler; it neither projects through nor mutates the EDL. Optional scripts
+  render in a small suggested-retake block and **Copy script** passes the exact text to the browser
+  clipboard while keeping clipboard failures inert for now. Progress appears during analysis and
+  the trigger is disabled; a neutral zero-open count avoids claiming that dismissed advice means a
+  clean analysis. Focused component tests lock open-only count/rendering, humane labels, source
+  ranges, script optionality, progress/disabled state, and exact callback values. App's mocked-batch
+  regression test locks explicit-only invocation, source-duration units, lifecycle/progress/result
+  storage, current/changed/missing-proof display filtering, seek conversion, clipboard text,
+  dismiss state, and unchanged EDL/history. Part N adds
+  no differentiated severity styling (Part O), original-source playback/bounds (Part P), timeline
+  markers (Part Q), enhanced suggestion/resolve/copy feedback (Part R), successful-empty copy (Part
+  S), full failure policy (Part T), stale-request protection (Part U), or accessibility audit (Part
+  V).
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1072,11 +1101,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part M. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part N. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
-  controls, Part-K transcript provenance, Part-L collection normalization, and Part-M advisory
-  editor state; Parts G-H's conservative decision and replacement-script policies live in the
-  existing server relay. There is still no Retakes UI.
+  controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
+  state, and the Part-N Retakes panel; Parts G-H's conservative decision and replacement-script
+  policies live in the existing server relay.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1147,6 +1176,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     actions, collection clearing, atomic lifecycle metadata replacement, and a typed reducer without
     accepting EDL/editor-content data. `editorState.test.ts` locks those state invariants; App's
     regression suite locks composition outside content Undo and reset behavior.
+  - `RetakesPanel.tsx` — controlled Part-N recommendation UI plus the explicit analysis trigger. It
+    renders/counts open advice, humanizes severity, displays original-source ranges/copy, forwards
+    source seek and dismiss actions, and exposes optional script copy without touching the EDL.
+    `RetakesPanel.test.tsx` locks its compact rendering and callbacks; App's regression suite mocks
+    the batch boundary and locks the complete state/seek/copy integration offline.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,

@@ -10,16 +10,20 @@ import MediaPanel from './overlays/MediaPanel'
 import OverlayInspector from './overlays/OverlayInspector'
 import OverlayStage from './overlays/OverlayStage'
 import OverlayTimelineTrack from './overlays/OverlayTimelineTrack'
+import RetakesPanel from './retakes/RetakesPanel'
 import { buildCaptions, updateCaptionText } from './captions/captions'
 import { transcribe } from './transcript/api'
 import { extractAudio } from './transcript/extractAudio'
 import { loadFfmpeg } from './ffmpeg/engine'
+import { analyzeRetakes } from './retakes/batchAnalysis'
+import { removeStaleRetakeRecommendations } from './retakes/freshness'
 import type { EDL } from './edl/types'
 import type { Transcript } from './transcript/types'
 import type { ImageOverlay, OverlayAsset } from './overlays/types'
 import {
   createRetakeEditorState,
   retakeEditorReducer,
+  type RetakeAnalysisProgress,
   type RetakeEditorAction,
   type RetakeEditorState,
 } from './retakes/editorState'
@@ -157,7 +161,7 @@ function App() {
     undefined,
     createEditorState,
   )
-  const { edl, overlays: overlayEditor, history } = editor
+  const { edl, overlays: overlayEditor, retakes, history } = editor
   // One history for all persistent editor content. Selection stays ephemeral,
   // but every snapshot captures EDL + overlay assets/layers so Undo follows the
   // user's actual cross-feature edit order instead of creating a second stack.
@@ -456,6 +460,93 @@ function App() {
     }
   }
 
+  // Part N is the first actual UI trigger for the inert Parts I-L pipeline.
+  // Recommendations remain visible until a successful replacement; Parts T/U
+  // later own partial-result policy and stale-request cancellation.
+  async function handleRetakeAnalysis() {
+    if (
+      transcript === null ||
+      edl === null ||
+      retakes.retakeAnalysisStatus === 'analyzing'
+    ) {
+      return
+    }
+
+    dispatchEditor({
+      type: 'update-retakes',
+      action: { type: 'set-retake-analysis-state', status: 'analyzing' },
+    })
+    let latestProgress: RetakeAnalysisProgress | undefined
+
+    try {
+      const result = await analyzeRetakes(
+        transcript,
+        edl.source.duration * 1_000,
+        {
+          onProgress: (progress) => {
+            latestProgress = progress
+            dispatchEditor({
+              type: 'update-retakes',
+              action: {
+                type: 'set-retake-analysis-state',
+                status: 'analyzing',
+                progress,
+              },
+            })
+          },
+        },
+      )
+      dispatchEditor({
+        type: 'update-retakes',
+        action: {
+          type: 'set-retake-recommendations',
+          recommendations: result.recommendations,
+        },
+      })
+      dispatchEditor({
+        type: 'update-retakes',
+        action: {
+          type: 'set-retake-analysis-state',
+          status: 'complete',
+          progress: {
+            completed: result.analyzedCount,
+            total: result.candidateCount,
+          },
+        },
+      })
+    } catch (cause) {
+      dispatchEditor({
+        type: 'update-retakes',
+        action: {
+          type: 'set-retake-analysis-state',
+          status: 'error',
+          progress: latestProgress,
+          error:
+            cause instanceof Error
+              ? cause.message
+              : 'Retake analysis failed.',
+        },
+      })
+    }
+  }
+
+  function dismissRetake(id: string) {
+    dispatchEditor({
+      type: 'update-retakes',
+      action: { type: 'dismiss-retake-recommendation', id },
+    })
+  }
+
+  // Basic clipboard support is required by Part N; richer feedback/fallback
+  // stays with the dedicated suggested-script UX in later parts.
+  async function copyRetakeScript(script: string) {
+    try {
+      await navigator.clipboard.writeText(script)
+    } catch {
+      // Part R/V will add visible clipboard feedback and fallback behavior.
+    }
+  }
+
   const hasSelection =
     inPoint !== null && outPoint !== null && inPoint !== outPoint
 
@@ -573,6 +664,14 @@ function App() {
       ? undefined
       : overlayEditor.overlayAssets.find(
           (asset) => asset.id === selectedImageOverlay.assetId,
+        )
+
+  const currentRetakeRecommendations =
+    transcript === null
+      ? []
+      : removeStaleRetakeRecommendations(
+          transcript,
+          retakes.retakeRecommendations,
         )
 
   return (
@@ -806,6 +905,17 @@ function App() {
                   edl={edl}
                   transcript={transcript}
                   onCommit={handleAgentCommit}
+                />
+                <RetakesPanel
+                  recommendations={currentRetakeRecommendations}
+                  analysisStatus={retakes.retakeAnalysisStatus}
+                  analysisProgress={retakes.retakeAnalysisProgress}
+                  onAnalyze={handleRetakeAnalysis}
+                  onSeekSourceMs={(sourceMs) =>
+                    handleSeek(sourceMs / 1_000)
+                  }
+                  onDismiss={dismissRetake}
+                  onCopyScript={copyRetakeScript}
                 />
                 <div style={{ marginTop: 12 }}>
                   <button type="button" onClick={generateCaptions}>
