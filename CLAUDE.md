@@ -826,7 +826,7 @@ empty folders for future phases.
   exact nonjudgmental labels, restrained style mapping, and unchanged source order. Part O adds no
   markers (Part Q), script/resolve/copy enhancements (Part R), empty or failure policy (Parts S-T),
   stale-request protection (Part U), or broad accessibility work (Part V).
-- **Phase 11, Part P (done; stop here):** each retake card's truthful **Play** action forwards both
+- **Phase 11, Part P (done):** each retake card's truthful **Play** action forwards both
   exact original-source millisecond bounds. App converts them once to source seconds, clamps them
   to the source duration, seeks the raw `<video>`, updates the source playhead, and calls `play()`.
   A small ref-owned preview range remains ephemeral player state—not EDL, editor history, React
@@ -840,9 +840,26 @@ empty folders for future phases.
   start/end forwarding and the **Play** label. App's regression places the recommendation inside a
   real removed source range and locks raw-source start/play, no EDL skip before the end, bounded
   pause, exact end playhead, rejected-play seek fallback, restored normal EDL skipping, and
-  unchanged EDL/history. Part P adds no timeline markers/selection (Part Q), script/resolve/copy
-  enhancements (Part R), empty/failure policy (Parts S-T), request cancellation (Part U), or broad
-  accessibility audit (Part V).
+  unchanged EDL/history. Part P adds no script/resolve/copy enhancements (Part R), empty/failure
+  policy (Parts S-T), request cancellation (Part U), or broad accessibility audit (Part V).
+- **Phase 11, Part Q (done; stop here):** `RetakeTimelineTrack` adds a separate compact **Retakes**
+  lane immediately below the existing video/image-overlay tracks. It receives the same current,
+  Part-K-filtered `open` recommendation collection as the panel and places each native button at
+  `startSourceMs / sourceDurationMs` on the full original-source scale; it never consults kept EDL
+  ranges or output time. Endpoint-specific transforms keep 0%/100% hit targets inside the rail,
+  while an invalid duration or no open advice renders no lane. Marker selection is ephemeral App
+  UI state with a modest pressed/accent treatment—not Part-M workflow state, EDL, or Undo history.
+  Clicking selects the exact recommendation id and routes its exact source milliseconds through the
+  existing source seek, which also cancels any active Part-P preview but does not auto-play.
+  Dismissing the selected item clears selection; dismissed/resolved, stale, and proofless records
+  have no marker. The lane itself has no click, pointer, drag, or duration behavior, so its isolated
+  button hitboxes cannot intercept main-timeline seeking or overlay pointer-captured timing edits.
+  Focused tests lock source percentages/order, edge placement, closed-item omission, null guards,
+  pressed state, select-before-seek ordering, exact callback values, and the inert rail. App's
+  regression locks the shared fresh/open collection and duration, original-source seek inside an
+  actual EDL gap, selection/dismissal/freshness behavior, and unchanged EDL/history. Part Q adds no
+  suggestion disclosure, resolve action, or copy feedback (Part R), successful-empty copy (Part S),
+  failure policy (Part T), request cancellation (Part U), or broad accessibility audit (Part V).
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1129,12 +1146,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part P. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part Q. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
-  state, the Part-N Retakes panel, Part-O severity presentation, and Part-P source playback wiring;
-  Parts G-H's conservative decision and replacement-script policies live in the existing server
-  relay.
+  state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, and
+  the Part-Q marker lane; Parts G-H's conservative decision and replacement-script policies live in
+  the existing server relay.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1212,6 +1229,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     copy without touching the EDL. `RetakesPanel.test.tsx` locks all three severity presentations,
     exact playback bounds, compact rendering, and callbacks; App's regression suite mocks the batch
     boundary and locks the complete state/play/copy integration offline.
+  - `RetakeTimelineTrack.tsx` — isolated Part-Q original-source marker lane. It renders only current
+    open recommendations, positions compact buttons from source start/duration, exposes ephemeral
+    pressed selection, and forwards exact select/seek actions without any parent drag/click surface.
+    `RetakeTimelineTrack.test.tsx` locks geometry, ordering, filtering, selection/callbacks, safe
+    endpoints, invalid-duration behavior, and interaction isolation; App coverage locks freshness,
+    source seek, dismissal, and EDL/history isolation.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,

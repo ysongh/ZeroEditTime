@@ -1,6 +1,7 @@
 // Phase-11 Part-N recommendation surface. This is intentionally a compact,
 // controlled view: App owns analysis, advisory state, and bounded source
-// playback, while later parts add timeline markers and richer script/state UX.
+// playback; the sibling Part-Q track owns markers, while later parts enrich
+// script and workflow UX.
 
 import type { CSSProperties } from 'react'
 import type {

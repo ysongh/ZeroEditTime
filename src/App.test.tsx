@@ -15,6 +15,9 @@ import ExportButton from './export/ExportButton'
 import RetakesPanel, {
   type RetakesPanelProps,
 } from './retakes/RetakesPanel'
+import RetakeTimelineTrack, {
+  type RetakeTimelineTrackProps,
+} from './retakes/RetakeTimelineTrack'
 import type {
   RetakeBatchOptions,
   RetakeBatchResult,
@@ -520,6 +523,34 @@ describe('App regression wiring', () => {
     if (videoRef === undefined) throw new Error('Expected the video ref.')
     videoRef.current = media
 
+    let retakeTrack = findComponent<RetakeTimelineTrackProps>(
+      view,
+      RetakeTimelineTrack,
+      'retake timeline track',
+    )
+    expect(retakeTrack.props).toMatchObject({
+      recommendations: [recommendation],
+      selectedRecommendationId: null,
+      sourceDurationMs: 10_000,
+    })
+    retakeTrack.props.onSelectRecommendation(recommendation.id)
+    retakeTrack.props.onSeekSourceMs(recommendation.startSourceMs)
+    view = renderApp()
+    retakeTrack = findComponent<RetakeTimelineTrackProps>(
+      view,
+      RetakeTimelineTrack,
+      'retake timeline track',
+    )
+    expect(retakeTrack.props.selectedRecommendationId).toBe(
+      recommendation.id,
+    )
+    expect(media.currentTime).toBe(1)
+    expect(
+      findComponent<TimelineProps>(view, Timeline, 'timeline').props.playhead,
+    ).toBe(1)
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+
     await panel.props.onPlaySourceRange(
       recommendation.startSourceMs,
       recommendation.endSourceMs,
@@ -569,6 +600,16 @@ describe('App regression wiring', () => {
     expect(state().retakes.retakeRecommendations[0].status).toBe(
       'dismissed',
     )
+    view = renderApp()
+    retakeTrack = findComponent<RetakeTimelineTrackProps>(
+      view,
+      RetakeTimelineTrack,
+      'retake timeline track',
+    )
+    expect(retakeTrack.props).toMatchObject({
+      recommendations: [],
+      selectedRecommendationId: null,
+    })
     expect(state().edl).toBe(edlBefore)
     expect(state().history).toBe(historyBefore)
 
@@ -606,6 +647,13 @@ describe('App regression wiring', () => {
       'retakes panel',
     )
     expect(panel.props.recommendations).toEqual([])
+    expect(
+      findComponent<RetakeTimelineTrackProps>(
+        view,
+        RetakeTimelineTrack,
+        'retake timeline track',
+      ).props.recommendations,
+    ).toEqual([])
 
     editor.dispatch({
       type: 'update-retakes',
@@ -636,6 +684,13 @@ describe('App regression wiring', () => {
       'retakes panel',
     )
     expect(panel.props.recommendations).toEqual([])
+    expect(
+      findComponent<RetakeTimelineTrackProps>(
+        view,
+        RetakeTimelineTrack,
+        'retake timeline track',
+      ).props.recommendations,
+    ).toEqual([])
     expect(state().retakes.retakeRecommendations).toHaveLength(1)
   })
 

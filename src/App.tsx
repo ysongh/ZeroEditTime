@@ -11,6 +11,7 @@ import OverlayInspector from './overlays/OverlayInspector'
 import OverlayStage from './overlays/OverlayStage'
 import OverlayTimelineTrack from './overlays/OverlayTimelineTrack'
 import RetakesPanel from './retakes/RetakesPanel'
+import RetakeTimelineTrack from './retakes/RetakeTimelineTrack'
 import { buildCaptions, updateCaptionText } from './captions/captions'
 import { transcribe } from './transcript/api'
 import { extractAudio } from './transcript/extractAudio'
@@ -186,6 +187,10 @@ function App() {
   // inline edit commits, cleared whenever generate_captions output is committed.
   const [captionsEdited, setCaptionsEdited] = useState(false)
   const [isOverlayEditing, setIsOverlayEditing] = useState(false)
+  // Marker selection is transient navigation state. Recommendation workflow
+  // status remains in the Part-M advisory reducer; neither belongs to the EDL.
+  const [selectedRetakeRecommendationId, setSelectedRetakeRecommendationId] =
+    useState<string | null>(null)
   const objectUrlRef = useRef<string | null>(null)
   const overlayObjectUrlsRef = useRef<Set<string>>(new Set())
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -374,6 +379,7 @@ function App() {
     setTranscribeError(null)
     setCaptionsEdited(false)
     setIsOverlayEditing(false)
+    setSelectedRetakeRecommendationId(null)
     clearSelection()
 
     // Warm the ~31 MB ffmpeg.wasm core in the background while the user reviews the
@@ -592,6 +598,7 @@ function App() {
           recommendations: result.recommendations,
         },
       })
+      setSelectedRetakeRecommendationId(null)
       dispatchEditor({
         type: 'update-retakes',
         action: {
@@ -620,6 +627,9 @@ function App() {
   }
 
   function dismissRetake(id: string) {
+    setSelectedRetakeRecommendationId((selectedId) =>
+      selectedId === id ? null : selectedId,
+    )
     dispatchEditor({
       type: 'update-retakes',
       action: { type: 'dismiss-retake-recommendation', id },
@@ -762,6 +772,18 @@ function App() {
           transcript,
           retakes.retakeRecommendations,
         )
+  const openCurrentRetakeRecommendations =
+    currentRetakeRecommendations.filter(
+      (recommendation) => recommendation.status === 'open',
+    )
+  const visibleSelectedRetakeRecommendationId =
+    selectedRetakeRecommendationId !== null &&
+    openCurrentRetakeRecommendations.some(
+      (recommendation) =>
+        recommendation.id === selectedRetakeRecommendationId,
+    )
+      ? selectedRetakeRecommendationId
+      : null
 
   return (
     <>
@@ -877,6 +899,18 @@ function App() {
                 onSeekSourceMs={(sourceMs) => handleSeek(sourceMs / 1000)}
                 onCommitTiming={updateImageOverlay}
                 onBeginTimingEdit={() => videoRef.current?.pause()}
+              />
+
+              <RetakeTimelineTrack
+                recommendations={openCurrentRetakeRecommendations}
+                selectedRecommendationId={
+                  visibleSelectedRetakeRecommendationId
+                }
+                sourceDurationMs={edl.source.duration * 1_000}
+                onSelectRecommendation={setSelectedRetakeRecommendationId}
+                onSeekSourceMs={(sourceMs) =>
+                  handleSeek(sourceMs / 1_000)
+                }
               />
 
               <div
@@ -998,7 +1032,7 @@ function App() {
                   onCommit={handleAgentCommit}
                 />
                 <RetakesPanel
-                  recommendations={currentRetakeRecommendations}
+                  recommendations={openCurrentRetakeRecommendations}
                   analysisStatus={retakes.retakeAnalysisStatus}
                   analysisProgress={retakes.retakeAnalysisProgress}
                   onAnalyze={handleRetakeAnalysis}
