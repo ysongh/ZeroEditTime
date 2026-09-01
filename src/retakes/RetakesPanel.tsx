@@ -1,6 +1,6 @@
 // Phase-11 Part-N recommendation surface. This is intentionally a compact,
-// controlled view: App owns analysis/state, while later parts add bounded
-// playback, timeline markers, richer script UX, and full state copy.
+// controlled view: App owns analysis, advisory state, and bounded source
+// playback, while later parts add timeline markers and richer script/state UX.
 
 import type { CSSProperties } from 'react'
 import type {
@@ -17,7 +17,10 @@ export interface RetakesPanelProps {
   analysisStatus: RetakeAnalysisStatus
   analysisProgress?: Readonly<RetakeAnalysisProgress>
   onAnalyze: () => void | Promise<void>
-  onSeekSourceMs: (sourceMs: number) => void
+  onPlaySourceRange: (
+    startSourceMs: number,
+    endSourceMs: number,
+  ) => void | Promise<void>
   onDismiss: (id: string) => void
   onCopyScript: (script: string) => void | Promise<void>
 }
@@ -90,7 +93,7 @@ export default function RetakesPanel({
   analysisStatus,
   analysisProgress,
   onAnalyze,
-  onSeekSourceMs,
+  onPlaySourceRange,
   onDismiss,
   onCopyScript,
 }: RetakesPanelProps) {
@@ -233,10 +236,13 @@ export default function RetakesPanel({
                     <button
                       type="button"
                       onClick={() =>
-                        onSeekSourceMs(recommendation.startSourceMs)
+                        onPlaySourceRange(
+                          recommendation.startSourceMs,
+                          recommendation.endSourceMs,
+                        )
                       }
                     >
-                      Seek
+                      Play
                     </button>
                     <button
                       type="button"

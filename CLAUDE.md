@@ -799,21 +799,22 @@ empty folders for future phases.
   normalized source order and derives its count/cards only from `open` recommendations, so
   dismissed/resolved records remain in advisory state but disappear from the actionable list. Every
   card shows the required humane severity label, compact ORIGINAL-SOURCE `MM:SS` (or `H:MM:SS`)
-  range plus exact-second metadata, concise title, explanation, source-time **Seek**, and
-  **Dismiss**. Seek forwards the exact source millisecond start and App converts once to the
-  existing source-second handler; it neither projects through nor mutates the EDL. Optional scripts
-  render in a small suggested-retake block and **Copy script** passes the exact text to the browser
-  clipboard while keeping clipboard failures inert for now. Progress appears during analysis and
-  the trigger is disabled; a neutral zero-open count avoids claiming that dismissed advice means a
-  clean analysis. Focused component tests lock open-only count/rendering, humane labels, source
-  ranges, script optionality, progress/disabled state, and exact callback values. App's mocked-batch
-  regression test locks explicit-only invocation, source-duration units, lifecycle/progress/result
-  storage, current/changed/missing-proof display filtering, seek conversion, clipboard text,
-  dismiss state, and unchanged EDL/history. Part N adds no original-source playback/bounds (Part P),
+  range plus exact-second metadata, concise title, explanation, source-time navigation, and
+  **Dismiss**. The initial navigation action forwards exact source milliseconds and neither
+  projects through nor mutates the EDL; Part P below upgrades it to bounded source playback.
+  Optional scripts render in a small suggested-retake block and **Copy script** passes the exact
+  text to the browser clipboard while keeping clipboard failures inert for now. Progress appears
+  during analysis and the trigger is disabled; a neutral zero-open count avoids claiming that
+  dismissed advice means a clean analysis. Focused component tests lock open-only count/rendering,
+  humane labels, source ranges, script optionality, progress/disabled state, and exact callback
+  values. App's mocked-batch regression test locks explicit-only invocation, source-duration units,
+  lifecycle/progress/result storage, current/changed/missing-proof display filtering, source
+  navigation, clipboard text, dismiss state, and unchanged EDL/history. Part N adds no
+  original-source playback/bounds (Part P),
   timeline markers (Part Q), enhanced suggestion/resolve/copy feedback (Part R), successful-empty
   copy (Part S), full failure policy (Part T), stale-request protection (Part U), or accessibility
   audit (Part V).
-- **Phase 11, Part O (done; stop here):** every retake severity now has an exhaustive, deterministic
+- **Phase 11, Part O (done):** every retake severity now has an exhaustive, deterministic
   presentation in `RetakesPanel`: the visible labels remain the humane **Suggestion**,
   **Recommended**, and **Strongly recommended**, while compact pills add modest visual hierarchy.
   Suggestions use the existing neutral code background and border, recommendations use the soft
@@ -823,9 +824,25 @@ empty folders for future phases.
   color alone. This is presentation-only: source order, counts, cards, actions, analysis state, EDL,
   and history are unchanged. Focused coverage renders all three enum values together and locks the
   exact nonjudgmental labels, restrained style mapping, and unchanged source order. Part O adds no
-  playback behavior (Part P), markers (Part Q), script/resolve/copy enhancements (Part R), empty or
-  failure policy (Parts S-T), stale-request protection (Part U), or broad accessibility work (Part
-  V).
+  markers (Part Q), script/resolve/copy enhancements (Part R), empty or failure policy (Parts S-T),
+  stale-request protection (Part U), or broad accessibility work (Part V).
+- **Phase 11, Part P (done; stop here):** each retake card's truthful **Play** action forwards both
+  exact original-source millisecond bounds. App converts them once to source seconds, clamps them
+  to the source duration, seeks the raw `<video>`, updates the source playhead, and calls `play()`.
+  A small ref-owned preview range remains ephemeral player state—not EDL, editor history, React
+  advisory state, output time, or export data. While that range is active, the existing `onPlay`
+  and `onTimeUpdate` controller bypasses `nextSourceTime`, so recommendations inside an EDL-removed
+  gap play the affected original take instead of silently jumping past it. Crossing the half-open
+  end snaps to the exact end, pauses, clears preview ownership, and restores ordinary EDL-driven
+  playback. Normal editor seeks, user pause, media end, metadata/source replacement, and an inert
+  unmount cleanup also clear the preview; a caught `play()` rejection clears only the same preview
+  session while retaining the completed seek fallback. Focused component coverage locks exact
+  start/end forwarding and the **Play** label. App's regression places the recommendation inside a
+  real removed source range and locks raw-source start/play, no EDL skip before the end, bounded
+  pause, exact end playhead, rejected-play seek fallback, restored normal EDL skipping, and
+  unchanged EDL/history. Part P adds no timeline markers/selection (Part Q), script/resolve/copy
+  enhancements (Part R), empty/failure policy (Parts S-T), request cancellation (Part U), or broad
+  accessibility audit (Part V).
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1112,11 +1129,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part O. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part P. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
-  state, the Part-N Retakes panel, and Part-O severity presentation; Parts G-H's conservative
-  decision and replacement-script policies live in the existing server relay.
+  state, the Part-N Retakes panel, Part-O severity presentation, and Part-P source playback wiring;
+  Parts G-H's conservative decision and replacement-script policies live in the existing server
+  relay.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1187,13 +1205,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     actions, collection clearing, atomic lifecycle metadata replacement, and a typed reducer without
     accepting EDL/editor-content data. `editorState.test.ts` locks those state invariants; App's
     regression suite locks composition outside content Undo and reset behavior.
-  - `RetakesPanel.tsx` — controlled Part-N recommendation UI plus the explicit analysis trigger and
-    Part-O modest severity pills. It renders/counts open advice, humanizes every severity with
-    visible text and theme-safe visual distinctions, displays original-source ranges/copy, forwards
-    source seek and dismiss actions, and exposes optional script copy without touching the EDL.
-    `RetakesPanel.test.tsx` locks all three severity presentations plus compact rendering and
-    callbacks; App's regression suite mocks the batch boundary and locks the complete
-    state/seek/copy integration offline.
+  - `RetakesPanel.tsx` — controlled Part-N recommendation UI plus the explicit analysis trigger,
+    Part-O modest severity pills, and Part-P exact source-range Play action. It renders/counts open
+    advice, humanizes every severity with visible text and theme-safe visual distinctions, displays
+    original-source ranges/copy, forwards playback/dismiss actions, and exposes optional script
+    copy without touching the EDL. `RetakesPanel.test.tsx` locks all three severity presentations,
+    exact playback bounds, compact rendering, and callbacks; App's regression suite mocks the batch
+    boundary and locks the complete state/play/copy integration offline.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,

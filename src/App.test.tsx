@@ -9,6 +9,7 @@ import App from './App'
 import Timeline from './Timeline'
 import CaptionList from './captions/CaptionList'
 import CaptionOverlay from './captions/CaptionOverlay'
+import { applyRemovedRange } from './edl/edl'
 import type { Caption, EDL } from './edl/types'
 import ExportButton from './export/ExportButton'
 import RetakesPanel, {
@@ -108,15 +109,19 @@ type VideoLike = {
   duration: number
   pause: () => void
   paused: boolean
+  play: () => Promise<void>
   videoHeight: number
   videoWidth: number
 }
 
 type VideoProps = NodeProps & {
   controls?: boolean
+  onEnded?: () => void
   onLoadedMetadata?: (event: { currentTarget: VideoLike }) => void
+  onPause?: () => void
   onPlay?: (event: { currentTarget: VideoLike }) => void
   onTimeUpdate?: (event: { currentTarget: VideoLike }) => void
+  ref?: { current: VideoLike | null }
   src?: string
 }
 
@@ -246,6 +251,7 @@ function selectSource(
     duration,
     pause: vi.fn(),
     paused: true,
+    play: vi.fn().mockResolvedValue(undefined),
     videoHeight: 1080,
     videoWidth: 1920,
   }
@@ -432,12 +438,6 @@ describe('App regression wiring', () => {
 
     let view = selectSource(file, 'blob:source', 10)
     await findButton(view, 'Transcribe').props.onClick?.()
-    view = renderApp()
-    let panel = findComponent<RetakesPanelProps>(
-      view,
-      RetakesPanel,
-      'retakes panel',
-    )
     expect(harness.analyzeRetakes).not.toHaveBeenCalled()
     const editor = editorReducerRecord()
     type EditorStateView = {
@@ -446,8 +446,25 @@ describe('App regression wiring', () => {
       retakes: RetakeEditorState
     }
     const state = () => editor.state as EditorStateView
+    const initialEdl = state().edl
+    if (initialEdl === null) throw new Error('Expected an initialized EDL.')
+    editor.dispatch({
+      type: 'commit-edl',
+      edl: applyRemovedRange(initialEdl, 0.5, 5),
+    })
+    view = renderApp()
+    let panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
     const edlBefore = state().edl
     const historyBefore = state().history
+    if (edlBefore === null) throw new Error('Expected the cut EDL.')
+    expect(ranges(edlBefore)).toEqual([
+      [0, 0.5],
+      [5, 10],
+    ])
 
     const pending = panel.props.onAnalyze()
     view = renderApp()
@@ -483,11 +500,67 @@ describe('App regression wiring', () => {
       analysisProgress: { completed: 1, total: 1 },
     })
 
-    panel.props.onSeekSourceMs(recommendation.startSourceMs)
+    const media: VideoLike = {
+      currentSrc: 'blob:source',
+      currentTime: 0,
+      duration: 10,
+      pause: vi.fn(),
+      paused: true,
+      play: vi.fn(),
+      videoHeight: 1080,
+      videoWidth: 1920,
+    }
+    media.play = vi.fn().mockImplementation(async () => {
+      media.paused = false
+    })
+    media.pause = vi.fn().mockImplementation(() => {
+      media.paused = true
+    })
+    const videoRef = findVideo(view).props.ref
+    if (videoRef === undefined) throw new Error('Expected the video ref.')
+    videoRef.current = media
+
+    await panel.props.onPlaySourceRange(
+      recommendation.startSourceMs,
+      recommendation.endSourceMs,
+    )
+    expect(media.currentTime).toBe(1)
+    expect(media.play).toHaveBeenCalledOnce()
+    findVideo(view).props.onPlay?.({ currentTarget: media })
+    expect(media.currentTime).toBe(1)
+
+    media.currentTime = 4.8
+    findVideo(view).props.onTimeUpdate?.({ currentTarget: media })
+    expect(media.pause).not.toHaveBeenCalled()
+    media.currentTime = 4.91
+    findVideo(view).props.onTimeUpdate?.({ currentTarget: media })
+    expect(media.currentTime).toBe(4.9)
+    expect(media.pause).toHaveBeenCalledOnce()
+
     view = renderApp()
     expect(
       findComponent<TimelineProps>(view, Timeline, 'timeline').props.playhead,
-    ).toBe(1)
+    ).toBe(4.9)
+    media.paused = false
+    media.currentTime = 2
+    findVideo(view).props.onPlay?.({ currentTarget: media })
+    expect(media.currentTime).toBe(5)
+
+    const rejectedPlay = vi.fn().mockRejectedValue(
+      new Error('Playback was blocked.'),
+    )
+    media.paused = true
+    media.play = rejectedPlay
+    await panel.props.onPlaySourceRange(
+      recommendation.startSourceMs,
+      recommendation.endSourceMs,
+    )
+    expect(media.currentTime).toBe(1)
+    expect(rejectedPlay).toHaveBeenCalledOnce()
+    media.paused = false
+    findVideo(view).props.onPlay?.({ currentTarget: media })
+    expect(media.currentTime).toBe(5)
+
     await panel.props.onCopyScript(recommendation.suggestedScript!)
     expect(clipboardWrite).toHaveBeenCalledWith(
       recommendation.suggestedScript,
@@ -684,6 +757,7 @@ describe('App regression wiring', () => {
       duration: 8,
       pause: vi.fn(),
       paused: true,
+      play: vi.fn().mockResolvedValue(undefined),
       videoHeight: 720,
       videoWidth: 1280,
     }
@@ -715,6 +789,7 @@ describe('App regression wiring', () => {
       duration: 10,
       pause: vi.fn(),
       paused: true,
+      play: vi.fn().mockResolvedValue(undefined),
       videoHeight: 1080,
       videoWidth: 1920,
     }

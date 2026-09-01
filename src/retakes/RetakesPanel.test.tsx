@@ -80,7 +80,7 @@ function renderPanel(
     recommendations: [RECOMMENDATION, SECOND_RECOMMENDATION],
     analysisStatus: 'complete',
     onAnalyze: vi.fn(),
-    onSeekSourceMs: vi.fn(),
+    onPlaySourceRange: vi.fn(),
     onDismiss: vi.fn(),
     onCopyScript: vi.fn(),
     ...patch,
@@ -163,21 +163,21 @@ describe('RetakesPanel', () => {
     ])
   })
 
-  it('forwards analyze, source seek, dismiss, and exact script-copy actions', () => {
+  it('forwards analyze, source playback, dismiss, and exact script-copy actions', () => {
     const onAnalyze = vi.fn()
-    const onSeekSourceMs = vi.fn()
+    const onPlaySourceRange = vi.fn()
     const onDismiss = vi.fn()
     const onCopyScript = vi.fn()
     const view = renderPanel({
       onAnalyze,
-      onSeekSourceMs,
+      onPlaySourceRange,
       onDismiss,
       onCopyScript,
     })
 
     findButton(view, 'Check for retakes').props.onClick?.()
     findHosts(view, 'button')
-      .filter((button) => textOf(button.props.children) === 'Seek')[0]
+      .filter((button) => textOf(button.props.children) === 'Play')[0]
       .props.onClick?.()
     findHosts(view, 'button')
       .filter((button) => textOf(button.props.children) === 'Dismiss')[0]
@@ -185,8 +185,9 @@ describe('RetakesPanel', () => {
     findButton(view, 'Copy script').props.onClick?.()
 
     expect(onAnalyze).toHaveBeenCalledOnce()
-    expect(onSeekSourceMs).toHaveBeenCalledWith(
+    expect(onPlaySourceRange).toHaveBeenCalledWith(
       RECOMMENDATION.startSourceMs,
+      RECOMMENDATION.endSourceMs,
     )
     expect(onDismiss).toHaveBeenCalledWith(RECOMMENDATION.id)
     expect(onCopyScript).toHaveBeenCalledWith(

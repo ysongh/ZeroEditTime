@@ -60,6 +60,11 @@ type EditorState = {
   history: EditorSnapshot[]
 }
 
+type RetakeSourcePreview = {
+  start: number
+  end: number
+}
+
 type EditorAction =
   | { type: 'replace-edl'; edl: EDL }
   | { type: 'commit-edl'; edl: EDL }
@@ -184,10 +189,14 @@ function App() {
   const objectUrlRef = useRef<string | null>(null)
   const overlayObjectUrlsRef = useRef<Set<string>>(new Set())
   const videoRef = useRef<HTMLVideoElement | null>(null)
+  // A retake preview is ephemeral player state in original-source seconds. It
+  // must never enter the EDL, output-time projection, editor history, or export.
+  const retakeSourcePreviewRef = useRef<RetakeSourcePreview | null>(null)
 
   // Revoke the video URL and every still-image object URL on disposal.
   useEffect(() => {
     return () => {
+      retakeSourcePreviewRef.current = null
       if (objectUrlRef.current !== null) {
         URL.revokeObjectURL(objectUrlRef.current)
       }
@@ -349,6 +358,8 @@ function App() {
       return
     }
 
+    retakeSourcePreviewRef.current = null
+
     if (objectUrlRef.current !== null) {
       URL.revokeObjectURL(objectUrlRef.current)
     }
@@ -375,6 +386,7 @@ function App() {
   // Initialize the EDL from the loaded source as a single full-length segment.
   function handleLoadedMetadata(event: SyntheticEvent<HTMLVideoElement>) {
     const video = event.currentTarget
+    retakeSourcePreviewRef.current = null
     dispatchEditor({
       type: 'replace-edl',
       edl: createEdl({
@@ -394,6 +406,22 @@ function App() {
   function handleTimeUpdate(event: SyntheticEvent<HTMLVideoElement>) {
     const video = event.currentTarget
     const t = video.currentTime
+    const retakePreview = retakeSourcePreviewRef.current
+
+    // Retake playback intentionally audits the unedited source, including any
+    // range removed from the EDL. Keep this branch ahead of nextSourceTime so
+    // the normal edited-preview skip controller cannot hide the affected take.
+    if (retakePreview !== null) {
+      if (t >= retakePreview.end) {
+        retakeSourcePreviewRef.current = null
+        video.currentTime = retakePreview.end
+        video.pause()
+        setPlayhead(retakePreview.end)
+        return
+      }
+      setPlayhead(t)
+      return
+    }
 
     if (edl === null || video.paused) {
       setPlayhead(t)
@@ -418,6 +446,9 @@ function App() {
   // past the end, or skip forward if we're sitting inside a removed gap.
   function handlePlay(event: SyntheticEvent<HTMLVideoElement>) {
     const video = event.currentTarget
+    if (retakeSourcePreviewRef.current !== null) {
+      return
+    }
     if (edl === null || edl.segments.length === 0) {
       return
     }
@@ -433,10 +464,68 @@ function App() {
   }
 
   function handleSeek(sourceTime: number) {
+    retakeSourcePreviewRef.current = null
     if (videoRef.current !== null) {
       videoRef.current.currentTime = sourceTime
     }
     setPlayhead(sourceTime)
+  }
+
+  // Part P previews one validated recommendation in original source time. The
+  // identity check prevents an older rejected play() promise from cancelling a
+  // newer preview click; a rejection keeps the completed seek as the allowed
+  // fallback and restores ordinary EDL-driven playback.
+  async function playRetakeSourceRange(
+    startSourceMs: number,
+    endSourceMs: number,
+  ) {
+    if (edl === null) {
+      return
+    }
+
+    const requestedStart = startSourceMs / 1_000
+    const requestedEnd = endSourceMs / 1_000
+    if (
+      !Number.isFinite(requestedStart) ||
+      !Number.isFinite(requestedEnd)
+    ) {
+      return
+    }
+
+    const start = Math.max(
+      0,
+      Math.min(requestedStart, edl.source.duration),
+    )
+    const end = Math.max(
+      start,
+      Math.min(requestedEnd, edl.source.duration),
+    )
+    if (end <= start) {
+      return
+    }
+
+    const preview: RetakeSourcePreview = { start, end }
+    retakeSourcePreviewRef.current = preview
+    const video = videoRef.current
+    if (video === null) {
+      setPlayhead(start)
+      retakeSourcePreviewRef.current = null
+      return
+    }
+
+    video.currentTime = start
+    setPlayhead(start)
+    try {
+      await video.play()
+    } catch {
+      if (retakeSourcePreviewRef.current === preview) {
+        retakeSourcePreviewRef.current = null
+      }
+    }
+  }
+
+  function cancelRetakeSourcePreview() {
+    retakeSourcePreviewRef.current = null
   }
 
   async function handleTranscribe() {
@@ -707,6 +796,8 @@ function App() {
               onLoadedMetadata={handleLoadedMetadata}
               onTimeUpdate={handleTimeUpdate}
               onPlay={handlePlay}
+              onPause={cancelRetakeSourcePreview}
+              onEnded={cancelRetakeSourcePreview}
               style={{ display: 'block', maxWidth: '100%', maxHeight: '60vh' }}
             />
             {edl !== null && (
@@ -911,9 +1002,7 @@ function App() {
                   analysisStatus={retakes.retakeAnalysisStatus}
                   analysisProgress={retakes.retakeAnalysisProgress}
                   onAnalyze={handleRetakeAnalysis}
-                  onSeekSourceMs={(sourceMs) =>
-                    handleSeek(sourceMs / 1_000)
-                  }
+                  onPlaySourceRange={playRetakeSourceRange}
                   onDismiss={dismissRetake}
                   onCopyScript={copyRetakeScript}
                 />
