@@ -1,6 +1,6 @@
 // Phase-11 Part-N recommendation surface. This is intentionally a compact,
 // controlled view: App owns analysis/state, while later parts add bounded
-// playback, timeline markers, richer severity/script UX, and full state copy.
+// playback, timeline markers, richer script UX, and full state copy.
 
 import type { CSSProperties } from 'react'
 import type {
@@ -30,11 +30,45 @@ const PANEL_STYLE: CSSProperties = {
   textAlign: 'left',
 }
 
-const SEVERITY_LABELS = {
-  suggestion: 'Suggestion',
-  recommended: 'Recommended',
-  'strongly-recommended': 'Strongly recommended',
-} as const satisfies Readonly<Record<RetakeSeverity, string>>
+const SEVERITY_BADGE_STYLE: CSSProperties = {
+  display: 'inline-block',
+  padding: '1px 6px',
+  border: '1px solid',
+  borderRadius: 999,
+  fontSize: 12,
+  lineHeight: 1.5,
+  fontWeight: 500,
+}
+
+const SEVERITY_PRESENTATION = {
+  suggestion: {
+    label: 'Suggestion',
+    style: {
+      color: 'var(--text)',
+      background: 'var(--code-bg)',
+      borderColor: 'var(--border)',
+    },
+  },
+  recommended: {
+    label: 'Recommended',
+    style: {
+      color: 'var(--text-h)',
+      background: 'var(--accent-bg)',
+      borderColor: 'var(--accent-border)',
+    },
+  },
+  'strongly-recommended': {
+    label: 'Strongly recommended',
+    style: {
+      color: 'var(--text-h)',
+      background: 'var(--accent-bg)',
+      borderColor: 'var(--accent)',
+      fontWeight: 600,
+    },
+  },
+} as const satisfies Readonly<
+  Record<RetakeSeverity, { label: string; style: CSSProperties }>
+>
 
 /** Format an ORIGINAL-SOURCE millisecond position for compact display. */
 function formatRetakeSourceTime(sourceMs: number): string {
@@ -112,6 +146,7 @@ export default function RetakesPanel({
           }}
         >
           {openRecommendations.map((recommendation) => {
+            const severity = SEVERITY_PRESENTATION[recommendation.severity]
             const start = formatRetakeSourceTime(
               recommendation.startSourceMs,
             )
@@ -127,7 +162,14 @@ export default function RetakesPanel({
                   }}
                 >
                   <p style={{ fontSize: 13, opacity: 0.75 }}>
-                    <span>{SEVERITY_LABELS[recommendation.severity]}</span>
+                    <span
+                      style={{
+                        ...SEVERITY_BADGE_STYLE,
+                        ...severity.style,
+                      }}
+                    >
+                      {severity.label}
+                    </span>
                     {' · '}
                     <span
                       title={`Original source time: ${(recommendation.startSourceMs / 1_000).toFixed(3)}s–${(recommendation.endSourceMs / 1_000).toFixed(3)}s`}

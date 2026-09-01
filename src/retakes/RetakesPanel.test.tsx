@@ -1,6 +1,7 @@
 import {
   Children,
   isValidElement,
+  type CSSProperties,
   type ReactElement,
   type ReactNode,
 } from 'react'
@@ -38,6 +39,7 @@ type HostProps = {
   disabled?: boolean
   onClick?: () => void
   role?: string
+  style?: CSSProperties
   title?: string
   type?: string
 }
@@ -105,9 +107,60 @@ describe('RetakesPanel', () => {
     expect(text).toContain(RECOMMENDATION.title)
     expect(text).toContain(RECOMMENDATION.explanation)
     expect(findHosts(view, 'article')).toHaveLength(2)
-    expect(findHosts(view, 'span')[1].props.title).toBe(
+    expect(
+      findHosts(view, 'span').find(
+        (element) => element.props.title !== undefined,
+      )?.props.title,
+    ).toBe(
       'Original source time: 41.250s–49.900s',
     )
+  })
+
+  it('distinguishes every severity with modest, humane badges', () => {
+    const recommended = {
+      ...RECOMMENDATION,
+      id: 'retake_41250_49900_repeated-attempts',
+      severity: 'recommended' as const,
+      title: 'Repeated attempt',
+    }
+    const stronglyRecommended = {
+      ...RECOMMENDATION,
+      id: 'retake_60000_65000_severe-stumble',
+      startSourceMs: 60_000,
+      endSourceMs: 65_000,
+    }
+    const view = renderPanel({
+      recommendations: [
+        recommended,
+        stronglyRecommended,
+        SECOND_RECOMMENDATION,
+      ],
+    })
+    const label = (text: string) =>
+      findHosts(view, 'span').find(
+        (element) => textOf(element.props.children) === text,
+      )
+
+    expect(label('Suggestion')?.props.style).toMatchObject({
+      background: 'var(--code-bg)',
+      borderColor: 'var(--border)',
+      fontWeight: 500,
+    })
+    expect(label('Recommended')?.props.style).toMatchObject({
+      background: 'var(--accent-bg)',
+      borderColor: 'var(--accent-border)',
+      fontWeight: 500,
+    })
+    expect(label('Strongly recommended')?.props.style).toMatchObject({
+      background: 'var(--accent-bg)',
+      borderColor: 'var(--accent)',
+      fontWeight: 600,
+    })
+    expect(findHosts(view, 'article').map(textOf)).toEqual([
+      expect.stringContaining('Recommended'),
+      expect.stringContaining('Strongly recommended'),
+      expect.stringContaining('Suggestion'),
+    ])
   })
 
   it('forwards analyze, source seek, dismiss, and exact script-copy actions', () => {

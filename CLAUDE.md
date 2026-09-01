@@ -785,7 +785,7 @@ empty folders for future phases.
   clear/lifecycle semantics, sequential reducer actions, EDL isolation, history exclusion, Undo
   preservation, and source-document reset. Part M itself adds no analysis trigger, panel or other
   UI; Part N now owns that first UI seam.
-- **Phase 11, Part N (done; stop here):** the compact controlled
+- **Phase 11, Part N (done):** the compact controlled
   `src/retakes/RetakesPanel.tsx` is rendered after the existing Agent bar whenever a transcript and
   source EDL are available. Its explicit **Check for retakes** button is the first UI caller of the
   otherwise inert Parts I-L pipeline: App guards an active run, sets Part-M lifecycle state to
@@ -798,9 +798,8 @@ empty folders for future phases.
   advisory state for later policy but cannot appear as current guidance. The panel preserves
   normalized source order and derives its count/cards only from `open` recommendations, so
   dismissed/resolved records remain in advisory state but disappear from the actionable list. Every
-  card shows the required humane severity label with uniform treatment, compact ORIGINAL-SOURCE
-  `MM:SS` (or
-  `H:MM:SS`) range plus exact-second metadata, concise title, explanation, source-time **Seek**, and
+  card shows the required humane severity label, compact ORIGINAL-SOURCE `MM:SS` (or `H:MM:SS`)
+  range plus exact-second metadata, concise title, explanation, source-time **Seek**, and
   **Dismiss**. Seek forwards the exact source millisecond start and App converts once to the
   existing source-second handler; it neither projects through nor mutates the EDL. Optional scripts
   render in a small suggested-retake block and **Copy script** passes the exact text to the browser
@@ -810,10 +809,22 @@ empty folders for future phases.
   ranges, script optionality, progress/disabled state, and exact callback values. App's mocked-batch
   regression test locks explicit-only invocation, source-duration units, lifecycle/progress/result
   storage, current/changed/missing-proof display filtering, seek conversion, clipboard text,
-  dismiss state, and unchanged EDL/history. Part N adds
-  no differentiated severity styling (Part O), original-source playback/bounds (Part P), timeline
-  markers (Part Q), enhanced suggestion/resolve/copy feedback (Part R), successful-empty copy (Part
-  S), full failure policy (Part T), stale-request protection (Part U), or accessibility audit (Part
+  dismiss state, and unchanged EDL/history. Part N adds no original-source playback/bounds (Part P),
+  timeline markers (Part Q), enhanced suggestion/resolve/copy feedback (Part R), successful-empty
+  copy (Part S), full failure policy (Part T), stale-request protection (Part U), or accessibility
+  audit (Part V).
+- **Phase 11, Part O (done; stop here):** every retake severity now has an exhaustive, deterministic
+  presentation in `RetakesPanel`: the visible labels remain the humane **Suggestion**,
+  **Recommended**, and **Strongly recommended**, while compact pills add modest visual hierarchy.
+  Suggestions use the existing neutral code background and border, recommendations use the soft
+  accent background/border, and strongly recommended advice uses only a firmer accent border and
+  slightly heavier text. The treatment reuses the light/dark theme tokens, introduces no alarming
+  red/orange colors, icons, uppercase copy, scores, or card-wide warning fills, and never relies on
+  color alone. This is presentation-only: source order, counts, cards, actions, analysis state, EDL,
+  and history are unchanged. Focused coverage renders all three enum values together and locks the
+  exact nonjudgmental labels, restrained style mapping, and unchanged source order. Part O adds no
+  playback behavior (Part P), markers (Part Q), script/resolve/copy enhancements (Part R), empty or
+  failure policy (Parts S-T), stale-request protection (Part U), or broad accessibility work (Part
   V).
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
@@ -1101,11 +1112,11 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part N. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part O. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
-  state, and the Part-N Retakes panel; Parts G-H's conservative decision and replacement-script
-  policies live in the existing server relay.
+  state, the Part-N Retakes panel, and Part-O severity presentation; Parts G-H's conservative
+  decision and replacement-script policies live in the existing server relay.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1176,11 +1187,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     actions, collection clearing, atomic lifecycle metadata replacement, and a typed reducer without
     accepting EDL/editor-content data. `editorState.test.ts` locks those state invariants; App's
     regression suite locks composition outside content Undo and reset behavior.
-  - `RetakesPanel.tsx` — controlled Part-N recommendation UI plus the explicit analysis trigger. It
-    renders/counts open advice, humanizes severity, displays original-source ranges/copy, forwards
+  - `RetakesPanel.tsx` — controlled Part-N recommendation UI plus the explicit analysis trigger and
+    Part-O modest severity pills. It renders/counts open advice, humanizes every severity with
+    visible text and theme-safe visual distinctions, displays original-source ranges/copy, forwards
     source seek and dismiss actions, and exposes optional script copy without touching the EDL.
-    `RetakesPanel.test.tsx` locks its compact rendering and callbacks; App's regression suite mocks
-    the batch boundary and locks the complete state/seek/copy integration offline.
+    `RetakesPanel.test.tsx` locks all three severity presentations plus compact rendering and
+    callbacks; App's regression suite mocks the batch boundary and locks the complete
+    state/seek/copy integration offline.
 - `src/ffmpeg/` — the one shared `ffmpeg.wasm` engine, used by BOTH export and (Phase 2.5)
   audio extraction so the ~31 MB core loads at most once per session.
   - `engine.ts` — owns the single `FFmpeg` instance via `getFfmpeg()` (built LAZILY on first call,
