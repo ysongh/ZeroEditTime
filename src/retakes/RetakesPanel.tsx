@@ -1,7 +1,7 @@
 // Phase-11 Part-N recommendation surface. This is intentionally a compact,
 // controlled view: App owns analysis, advisory state, and bounded source
-// playback; the sibling Part-Q track owns markers, while later parts enrich
-// script and workflow UX.
+// playback; the sibling Part-Q track owns markers, and Part R completes the
+// suggested-script and resolved-workflow controls.
 
 import type { CSSProperties } from 'react'
 import type {
@@ -13,6 +13,13 @@ import type {
   RetakeSeverity,
 } from './recommendation'
 
+export type RetakeScriptCopyStatus = 'copying' | 'copied' | 'error'
+
+export interface RetakeScriptCopyFeedback {
+  recommendationId: string
+  status: RetakeScriptCopyStatus
+}
+
 export interface RetakesPanelProps {
   recommendations: readonly RetakeRecommendation[]
   analysisStatus: RetakeAnalysisStatus
@@ -22,8 +29,10 @@ export interface RetakesPanelProps {
     startSourceMs: number,
     endSourceMs: number,
   ) => void | Promise<void>
+  copyFeedback: Readonly<RetakeScriptCopyFeedback> | null
   onDismiss: (id: string) => void
-  onCopyScript: (script: string) => void | Promise<void>
+  onResolve: (id: string) => void
+  onCopyScript: (id: string, script: string) => void | Promise<void>
 }
 
 const PANEL_STYLE: CSSProperties = {
@@ -95,7 +104,9 @@ export default function RetakesPanel({
   analysisProgress,
   onAnalyze,
   onPlaySourceRange,
+  copyFeedback,
   onDismiss,
+  onResolve,
   onCopyScript,
 }: RetakesPanelProps) {
   const openRecommendations = recommendations.filter(
@@ -156,6 +167,10 @@ export default function RetakesPanel({
             )
             const end = formatRetakeSourceTime(recommendation.endSourceMs)
             const suggestedScript = recommendation.suggestedScript
+            const copyStatus =
+              copyFeedback?.recommendationId === recommendation.id
+                ? copyFeedback.status
+                : null
             return (
               <li key={recommendation.id}>
                 <article
@@ -216,13 +231,43 @@ export default function RetakesPanel({
                       <p style={{ marginTop: 3, fontSize: 14 }}>
                         “{suggestedScript}”
                       </p>
-                      <button
-                        type="button"
-                        onClick={() => void onCopyScript(suggestedScript)}
-                        style={{ marginTop: 7 }}
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          flexWrap: 'wrap',
+                          gap: 7,
+                          marginTop: 7,
+                        }}
                       >
-                        Copy script
-                      </button>
+                        <button
+                          type="button"
+                          disabled={copyStatus === 'copying'}
+                          onClick={() =>
+                            void onCopyScript(
+                              recommendation.id,
+                              suggestedScript,
+                            )
+                          }
+                        >
+                          Copy script
+                        </button>
+                        {copyStatus === 'copying' && (
+                          <span role="status" style={{ fontSize: 13 }}>
+                            Copying…
+                          </span>
+                        )}
+                        {copyStatus === 'copied' && (
+                          <span role="status" style={{ fontSize: 13 }}>
+                            Copied.
+                          </span>
+                        )}
+                        {copyStatus === 'error' && (
+                          <span role="alert" style={{ fontSize: 13 }}>
+                            Couldn’t copy script. Try again.
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -250,6 +295,12 @@ export default function RetakesPanel({
                       onClick={() => onDismiss(recommendation.id)}
                     >
                       Dismiss
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onResolve(recommendation.id)}
+                    >
+                      Mark as re-recorded
                     </button>
                   </div>
                 </article>

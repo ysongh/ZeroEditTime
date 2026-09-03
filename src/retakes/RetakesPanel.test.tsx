@@ -81,7 +81,9 @@ function renderPanel(
     analysisStatus: 'complete',
     onAnalyze: vi.fn(),
     onPlaySourceRange: vi.fn(),
+    copyFeedback: null,
     onDismiss: vi.fn(),
+    onResolve: vi.fn(),
     onCopyScript: vi.fn(),
     ...patch,
   })
@@ -163,15 +165,17 @@ describe('RetakesPanel', () => {
     ])
   })
 
-  it('forwards analyze, source playback, dismiss, and exact script-copy actions', () => {
+  it('forwards playback, workflow, and exact script-copy actions', () => {
     const onAnalyze = vi.fn()
     const onPlaySourceRange = vi.fn()
     const onDismiss = vi.fn()
+    const onResolve = vi.fn()
     const onCopyScript = vi.fn()
     const view = renderPanel({
       onAnalyze,
       onPlaySourceRange,
       onDismiss,
+      onResolve,
       onCopyScript,
     })
 
@@ -182,6 +186,10 @@ describe('RetakesPanel', () => {
     findHosts(view, 'button')
       .filter((button) => textOf(button.props.children) === 'Dismiss')[0]
       .props.onClick?.()
+    const resolveButtons = findHosts(view, 'button').filter(
+      (button) => textOf(button.props.children) === 'Mark as re-recorded',
+    )
+    resolveButtons.forEach((button) => button.props.onClick?.())
     findButton(view, 'Copy script').props.onClick?.()
 
     expect(onAnalyze).toHaveBeenCalledOnce()
@@ -190,9 +198,20 @@ describe('RetakesPanel', () => {
       RECOMMENDATION.endSourceMs,
     )
     expect(onDismiss).toHaveBeenCalledWith(RECOMMENDATION.id)
+    expect(onResolve.mock.calls.map(([id]) => id)).toEqual([
+      RECOMMENDATION.id,
+      SECOND_RECOMMENDATION.id,
+    ])
     expect(onCopyScript).toHaveBeenCalledWith(
+      RECOMMENDATION.id,
       RECOMMENDATION.suggestedScript,
     )
+    expect(
+      findHosts(view, 'p').filter(
+        (element) => textOf(element.props.children) === 'Suggested retake',
+      ),
+    ).toHaveLength(1)
+    expect(textOf(view)).toContain(`“${RECOMMENDATION.suggestedScript}”`)
     expect(
       findHosts(view, 'button').every(
         (button) => button.props.type === 'button',
@@ -203,6 +222,72 @@ describe('RetakesPanel', () => {
         (button) => textOf(button.props.children) === 'Copy script',
       ),
     ).toHaveLength(1)
+    expect(resolveButtons).toHaveLength(2)
+  })
+
+  it('shows controlled copy progress, success, and retryable failure', () => {
+    const copying = renderPanel({
+      copyFeedback: {
+        recommendationId: RECOMMENDATION.id,
+        status: 'copying',
+      },
+    })
+    expect(findButton(copying, 'Copy script').props.disabled).toBe(true)
+    expect(
+      textOf(
+        findHosts(copying, 'span').find(
+          (element) => element.props.role === 'status',
+        ),
+      ),
+    ).toBe('Copying…')
+
+    const copied = renderPanel({
+      copyFeedback: {
+        recommendationId: RECOMMENDATION.id,
+        status: 'copied',
+      },
+    })
+    expect(findButton(copied, 'Copy script').props.disabled).toBe(false)
+    expect(textOf(copied)).toContain('Copied.')
+
+    const failed = renderPanel({
+      copyFeedback: {
+        recommendationId: RECOMMENDATION.id,
+        status: 'error',
+      },
+    })
+    expect(findButton(failed, 'Copy script').props.disabled).toBe(false)
+    expect(
+      textOf(
+        findHosts(failed, 'span').find(
+          (element) => element.props.role === 'alert',
+        ),
+      ),
+    ).toBe('Couldn’t copy script. Try again.')
+
+    const unrelated = renderPanel({
+      recommendations: [
+        RECOMMENDATION,
+        {
+          ...SECOND_RECOMMENDATION,
+          suggestedScript: 'Use one clean sentence.',
+        },
+      ],
+      copyFeedback: {
+        recommendationId: SECOND_RECOMMENDATION.id,
+        status: 'copied',
+      },
+    })
+    const unrelatedArticles = findHosts(unrelated, 'article')
+    expect(textOf(unrelatedArticles[0])).not.toContain('Copied.')
+    expect(textOf(unrelatedArticles[1])).toContain('Copied.')
+    expect(
+      findHosts(unrelated, 'button')
+        .filter(
+          (button) => textOf(button.props.children) === 'Copy script',
+        )
+        .every((button) => button.props.disabled !== true),
+    ).toBe(true)
   })
 
   it('disables repeat analysis and reports supplied progress while checking', () => {

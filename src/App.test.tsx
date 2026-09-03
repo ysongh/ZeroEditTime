@@ -592,9 +592,108 @@ describe('App regression wiring', () => {
     findVideo(view).props.onPlay?.({ currentTarget: media })
     expect(media.currentTime).toBe(5)
 
-    await panel.props.onCopyScript(recommendation.suggestedScript!)
+    const copyPending = panel.props.onCopyScript(
+      recommendation.id,
+      recommendation.suggestedScript!,
+    )
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.copyFeedback).toEqual({
+      recommendationId: recommendation.id,
+      status: 'copying',
+    })
+    await copyPending
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.copyFeedback).toEqual({
+      recommendationId: recommendation.id,
+      status: 'copied',
+    })
     expect(clipboardWrite).toHaveBeenCalledWith(
       recommendation.suggestedScript,
+    )
+
+    clipboardWrite.mockRejectedValueOnce(new Error('Clipboard denied.'))
+    await panel.props.onCopyScript(
+      recommendation.id,
+      recommendation.suggestedScript!,
+    )
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.copyFeedback).toEqual({
+      recommendationId: recommendation.id,
+      status: 'error',
+    })
+    expect(state().retakes.retakeAnalysisStatus).toBe('complete')
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+
+    const lateCopy = deferredValue<void>()
+    clipboardWrite.mockImplementationOnce(() => lateCopy.promise)
+    const lateCopyPending = panel.props.onCopyScript(
+      recommendation.id,
+      recommendation.suggestedScript!,
+    )
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.copyFeedback?.status).toBe('copying')
+    panel.props.onResolve(recommendation.id)
+    expect(state().retakes.retakeRecommendations[0].status).toBe(
+      'resolved',
+    )
+    lateCopy.resolve(undefined)
+    await lateCopyPending
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props).toMatchObject({
+      recommendations: [],
+      copyFeedback: null,
+    })
+    retakeTrack = findComponent<RetakeTimelineTrackProps>(
+      view,
+      RetakeTimelineTrack,
+      'retake timeline track',
+    )
+    expect(retakeTrack.props).toMatchObject({
+      recommendations: [],
+      selectedRecommendationId: null,
+    })
+    expect(media.currentSrc).toBe('blob:source')
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+
+    editor.dispatch({
+      type: 'update-retakes',
+      action: {
+        type: 'set-retake-recommendations',
+        recommendations: [recommendation],
+      },
+    })
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
     )
     panel.props.onDismiss(recommendation.id)
     expect(state().retakes.retakeRecommendations[0].status).toBe(

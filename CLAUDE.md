@@ -842,7 +842,7 @@ empty folders for future phases.
   pause, exact end playhead, rejected-play seek fallback, restored normal EDL skipping, and
   unchanged EDL/history. Part P adds no script/resolve/copy enhancements (Part R), empty/failure
   policy (Parts S-T), request cancellation (Part U), or broad accessibility audit (Part V).
-- **Phase 11, Part Q (done; stop here):** `RetakeTimelineTrack` adds a separate compact **Retakes**
+- **Phase 11, Part Q (done):** `RetakeTimelineTrack` adds a separate compact **Retakes**
   lane immediately below the existing video/image-overlay tracks. It receives the same current,
   Part-K-filtered `open` recommendation collection as the panel and places each native button at
   `startSourceMs / sourceDurationMs` on the full original-source scale; it never consults kept EDL
@@ -858,8 +858,29 @@ empty folders for future phases.
   pressed state, select-before-seek ordering, exact callback values, and the inert rail. App's
   regression locks the shared fresh/open collection and duration, original-source seek inside an
   actual EDL gap, selection/dismissal/freshness behavior, and unchanged EDL/history. Part Q adds no
-  suggestion disclosure, resolve action, or copy feedback (Part R), successful-empty copy (Part S),
-  failure policy (Part T), request cancellation (Part U), or broad accessibility audit (Part V).
+  resolve action or enhanced script/copy feedback (Part R), successful-empty copy (Part S), failure
+  policy (Part T), request cancellation (Part U), or broad accessibility audit (Part V).
+- **Phase 11, Part R (done; stop here):** optional normalized scripts remain expanded in the compact
+  **Suggested retake** block and are never inserted into transcripts, captions, EDL, audio, or
+  replacement media. **Copy script** forwards the recommendation id plus the exact raw script (the
+  display-only smart quotes are excluded). App owns one ephemeral card-keyed feedback value:
+  `copying` disables only the matching button, `copied` reports **Copied.**, and unavailable/rejected
+  clipboard access reports **Couldn’t copy script. Try again.** without an unhandled rejection or
+  false success. A monotonically increasing attempt token prevents older async completions from
+  overwriting a newer attempt or resurfacing after source/transcript/recommendation replacement,
+  dismissal, resolution, or unmount. Every open card—whether or not it has a script—also exposes
+  **Mark as re-recorded**. App routes that id through Part M's existing monotonic `resolved` action,
+  clears matching marker selection and copy feedback, and retains the advisory record; shared
+  open-only derivation then removes its card and marker naturally. This action records no media and
+  changes no source, EDL, history, playback, timeline duration, or export behavior. Component tests
+  lock optional-script rendering, exact id/text callbacks, all-card resolution, matching-only copy
+  progress/success/error, enabled retry, and unchanged Part-N actions. App coverage locks clipboard
+  success/failure/late-completion behavior, selected recommendation resolution, card/marker removal,
+  stored `resolved` status, source preservation, and EDL/history identity. The neutral **0 open
+  recommendations.** remains after workflow closure; Part S still owns the distinct successful
+  zero-result state. Part R adds no replacement recording/upload flow, successful-empty copy (Part
+  S), analysis/partial-failure UI (Part T), analysis request cancellation (Part U), or broad
+  accessibility audit/clipboard fallback (Part V).
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1146,12 +1167,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part Q. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part R. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
-  state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, and
-  the Part-Q marker lane; Parts G-H's conservative decision and replacement-script policies live in
-  the existing server relay.
+  state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, the
+  Part-Q marker lane, and Part-R script/workflow UX; Parts G-H's conservative decision and
+  replacement-script policies live in the existing server relay.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1223,12 +1244,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     accepting EDL/editor-content data. `editorState.test.ts` locks those state invariants; App's
     regression suite locks composition outside content Undo and reset behavior.
   - `RetakesPanel.tsx` — controlled Part-N recommendation UI plus the explicit analysis trigger,
-    Part-O modest severity pills, and Part-P exact source-range Play action. It renders/counts open
-    advice, humanizes every severity with visible text and theme-safe visual distinctions, displays
-    original-source ranges/copy, forwards playback/dismiss actions, and exposes optional script
-    copy without touching the EDL. `RetakesPanel.test.tsx` locks all three severity presentations,
-    exact playback bounds, compact rendering, and callbacks; App's regression suite mocks the batch
-    boundary and locks the complete state/play/copy integration offline.
+    Part-O modest severity pills, Part-P exact source-range Play action, and Part-R suggested-script
+    feedback/resolution UX. It renders/counts open advice, humanizes every severity, displays
+    original-source ranges and optional exact-copy script blocks, forwards playback/dismiss/resolve
+    actions, and renders card-keyed clipboard progress/outcomes without touching the EDL.
+    `RetakesPanel.test.tsx` locks all three severity presentations, exact playback/copy values,
+    workflow callbacks, controlled feedback, compact rendering, and optionality; App's regression
+    suite mocks external boundaries and locks complete state/play/copy/resolve integration offline.
   - `RetakeTimelineTrack.tsx` — isolated Part-Q original-source marker lane. It renders only current
     open recommendations, positions compact buttons from source start/duration, exposes ephemeral
     pressed selection, and forwards exact select/seek actions without any parent drag/click surface.

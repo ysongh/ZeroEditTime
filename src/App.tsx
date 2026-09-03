@@ -10,7 +10,9 @@ import MediaPanel from './overlays/MediaPanel'
 import OverlayInspector from './overlays/OverlayInspector'
 import OverlayStage from './overlays/OverlayStage'
 import OverlayTimelineTrack from './overlays/OverlayTimelineTrack'
-import RetakesPanel from './retakes/RetakesPanel'
+import RetakesPanel, {
+  type RetakeScriptCopyFeedback,
+} from './retakes/RetakesPanel'
 import RetakeTimelineTrack from './retakes/RetakeTimelineTrack'
 import { buildCaptions, updateCaptionText } from './captions/captions'
 import { transcribe } from './transcript/api'
@@ -191,17 +193,21 @@ function App() {
   // status remains in the Part-M advisory reducer; neither belongs to the EDL.
   const [selectedRetakeRecommendationId, setSelectedRetakeRecommendationId] =
     useState<string | null>(null)
+  const [retakeScriptCopyFeedback, setRetakeScriptCopyFeedback] =
+    useState<RetakeScriptCopyFeedback | null>(null)
   const objectUrlRef = useRef<string | null>(null)
   const overlayObjectUrlsRef = useRef<Set<string>>(new Set())
   const videoRef = useRef<HTMLVideoElement | null>(null)
   // A retake preview is ephemeral player state in original-source seconds. It
   // must never enter the EDL, output-time projection, editor history, or export.
   const retakeSourcePreviewRef = useRef<RetakeSourcePreview | null>(null)
+  const retakeScriptCopyAttemptRef = useRef(0)
 
   // Revoke the video URL and every still-image object URL on disposal.
   useEffect(() => {
     return () => {
       retakeSourcePreviewRef.current = null
+      retakeScriptCopyAttemptRef.current += 1
       if (objectUrlRef.current !== null) {
         URL.revokeObjectURL(objectUrlRef.current)
       }
@@ -364,6 +370,7 @@ function App() {
     }
 
     retakeSourcePreviewRef.current = null
+    clearRetakeScriptCopyFeedback()
 
     if (objectUrlRef.current !== null) {
       URL.revokeObjectURL(objectUrlRef.current)
@@ -545,7 +552,9 @@ function App() {
       setTranscribePhase('preparing')
       const audio = await extractAudio(file)
       setTranscribePhase('transcribing')
-      setTranscript(await transcribe(audio))
+      const nextTranscript = await transcribe(audio)
+      clearRetakeScriptCopyFeedback()
+      setTranscript(nextTranscript)
     } catch (err) {
       setTranscribeError(
         err instanceof Error ? err.message : 'Transcription failed.',
@@ -599,6 +608,7 @@ function App() {
         },
       })
       setSelectedRetakeRecommendationId(null)
+      clearRetakeScriptCopyFeedback()
       dispatchEditor({
         type: 'update-retakes',
         action: {
@@ -627,6 +637,7 @@ function App() {
   }
 
   function dismissRetake(id: string) {
+    clearRetakeScriptCopyFeedback()
     setSelectedRetakeRecommendationId((selectedId) =>
       selectedId === id ? null : selectedId,
     )
@@ -636,13 +647,47 @@ function App() {
     })
   }
 
-  // Basic clipboard support is required by Part N; richer feedback/fallback
-  // stays with the dedicated suggested-script UX in later parts.
-  async function copyRetakeScript(script: string) {
+  function resolveRetake(id: string) {
+    clearRetakeScriptCopyFeedback()
+    setSelectedRetakeRecommendationId((selectedId) =>
+      selectedId === id ? null : selectedId,
+    )
+    dispatchEditor({
+      type: 'update-retakes',
+      action: { type: 'resolve-retake-recommendation', id },
+    })
+  }
+
+  function clearRetakeScriptCopyFeedback() {
+    retakeScriptCopyAttemptRef.current += 1
+    setRetakeScriptCopyFeedback(null)
+  }
+
+  // Copy feedback is ephemeral UI state. A monotonically increasing attempt
+  // token prevents an older clipboard result from replacing a newer card's
+  // feedback or resurfacing after the recommendation is closed/replaced.
+  async function copyRetakeScript(id: string, script: string) {
+    const attempt = retakeScriptCopyAttemptRef.current + 1
+    retakeScriptCopyAttemptRef.current = attempt
+    setRetakeScriptCopyFeedback({
+      recommendationId: id,
+      status: 'copying',
+    })
     try {
       await navigator.clipboard.writeText(script)
+      if (retakeScriptCopyAttemptRef.current === attempt) {
+        setRetakeScriptCopyFeedback({
+          recommendationId: id,
+          status: 'copied',
+        })
+      }
     } catch {
-      // Part R/V will add visible clipboard feedback and fallback behavior.
+      if (retakeScriptCopyAttemptRef.current === attempt) {
+        setRetakeScriptCopyFeedback({
+          recommendationId: id,
+          status: 'error',
+        })
+      }
     }
   }
 
@@ -783,6 +828,15 @@ function App() {
         recommendation.id === selectedRetakeRecommendationId,
     )
       ? selectedRetakeRecommendationId
+      : null
+  const visibleRetakeScriptCopyFeedback =
+    retakeScriptCopyFeedback !== null &&
+    openCurrentRetakeRecommendations.some(
+      (recommendation) =>
+        recommendation.id ===
+        retakeScriptCopyFeedback.recommendationId,
+    )
+      ? retakeScriptCopyFeedback
       : null
 
   return (
@@ -1037,7 +1091,9 @@ function App() {
                   analysisProgress={retakes.retakeAnalysisProgress}
                   onAnalyze={handleRetakeAnalysis}
                   onPlaySourceRange={playRetakeSourceRange}
+                  copyFeedback={visibleRetakeScriptCopyFeedback}
                   onDismiss={dismissRetake}
+                  onResolve={resolveRetake}
                   onCopyScript={copyRetakeScript}
                 />
                 <div style={{ marginTop: 12 }}>
