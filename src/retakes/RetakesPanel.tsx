@@ -1,7 +1,7 @@
 // Phase-11 Part-N recommendation surface. This is intentionally a compact,
 // controlled view: App owns analysis, advisory state, and bounded source
-// playback; the sibling Part-Q track owns markers, and Part R completes the
-// suggested-script and resolved-workflow controls.
+// playback; the sibling Part-Q track owns markers, Part R completes the
+// suggested-script/resolved workflow, and Part T supplies aggregate outcomes.
 
 import type { CSSProperties } from 'react'
 import type {
@@ -24,6 +24,7 @@ export interface RetakesPanelProps {
   recommendations: readonly RetakeRecommendation[]
   analysisStatus: RetakeAnalysisStatus
   analysisProgress?: Readonly<RetakeAnalysisProgress>
+  analysisError?: string
   hasSuccessfulEmptyAnalysis: boolean
   onAnalyze: () => void | Promise<void>
   onPlaySourceRange: (
@@ -103,6 +104,7 @@ export default function RetakesPanel({
   recommendations,
   analysisStatus,
   analysisProgress,
+  analysisError,
   hasSuccessfulEmptyAnalysis,
   onAnalyze,
   onPlaySourceRange,
@@ -115,10 +117,19 @@ export default function RetakesPanel({
     (recommendation) => recommendation.status === 'open',
   )
   const isAnalyzing = analysisStatus === 'analyzing'
+  const failedCount = analysisProgress?.failed ?? 0
+  const checkedCount =
+    (analysisProgress?.completed ?? 0) + failedCount
+  const showPartialResult =
+    analysisStatus === 'complete' &&
+    analysisProgress !== undefined &&
+    failedCount > 0
   const showSuccessfulEmptyState =
     hasSuccessfulEmptyAnalysis &&
     analysisStatus === 'complete' &&
-    recommendations.length === 0
+    recommendations.length === 0 &&
+    failedCount === 0
+  const errorMessage = analysisError?.trim() || 'Try again.'
 
   return (
     <section style={PANEL_STYLE} aria-labelledby="retakes-panel-heading">
@@ -157,9 +168,25 @@ export default function RetakesPanel({
           )}
           {isAnalyzing && analysisProgress !== undefined && (
             <p role="status" style={{ marginTop: 4, fontSize: 13 }}>
-              Checked {analysisProgress.completed} of {analysisProgress.total}{' '}
+              Checked {checkedCount} of {analysisProgress.total}{' '}
               sections…
             </p>
+          )}
+          {showPartialResult && (
+            <p role="status" style={{ marginTop: 4, fontSize: 13 }}>
+              Checked {analysisProgress.total} sections.{' '}
+              {analysisProgress.completed} completed; {failedCount} could not
+              be analyzed.
+            </p>
+          )}
+          {analysisStatus === 'error' && (
+            <div
+              role="alert"
+              style={{ marginTop: 6, fontSize: 13, color: 'crimson' }}
+            >
+              <p style={{ fontWeight: 600 }}>Couldn’t check for retakes.</p>
+              <p style={{ marginTop: 2 }}>{errorMessage}</p>
+            </div>
           )}
         </div>
         <button

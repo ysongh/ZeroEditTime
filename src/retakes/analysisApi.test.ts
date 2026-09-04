@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { FetchLike } from '../agent/api'
 import {
   RETAKE_ANALYSIS_MODE,
   RETAKE_ANALYSIS_TOOL_NAME,
 } from './analysis'
-import { analyzeRetakeContext } from './analysisApi'
+import {
+  RETAKE_ANALYSIS_TIMEOUT_MS,
+  analyzeRetakeContext,
+} from './analysisApi'
 import type { RetakeAnalysisContext } from './context'
 
 const CONTEXT: RetakeAnalysisContext = {
@@ -83,6 +86,8 @@ describe('analyzeRetakeContext', () => {
     })
     expect(requestedInit?.headers).not.toHaveProperty('Authorization')
     expect(requestedInit?.headers).not.toHaveProperty('x-api-key')
+    expect(requestedInit?.signal).toBeInstanceOf(AbortSignal)
+    expect(requestedInit?.signal?.aborted).toBe(false)
     expect(JSON.parse(String(requestedInit?.body))).toEqual({
       mode: RETAKE_ANALYSIS_MODE,
       context: CONTEXT,
@@ -137,6 +142,7 @@ describe('analyzeRetakeContext', () => {
       'a text-only reply',
       { content: [{ type: 'text', text: 'No retake.' }], stop_reason: 'end_turn' },
     ],
+    ['an empty tool reply', { content: [], stop_reason: 'tool_use' }],
     [
       'the wrong tool',
       {
@@ -200,5 +206,72 @@ describe('analyzeRetakeContext', () => {
     await expect(analyzeRetakeContext(CONTEXT, fetchImpl)).rejects.toThrow(
       'Retake analysis is unavailable.',
     )
+  })
+
+  it('rejects an empty successful response body', async () => {
+    const fetchImpl: FetchLike = async () =>
+      new Response(null, { status: 200 })
+
+    await expect(analyzeRetakeContext(CONTEXT, fetchImpl)).rejects.toThrow(
+      'Received a malformed response from the agent.',
+    )
+  })
+
+  it('aborts and reports a controlled error when one analysis times out', async () => {
+    vi.useFakeTimers()
+    try {
+      let signal: AbortSignal | null | undefined
+      const fetchImpl: FetchLike = async (_input, init) => {
+        signal = init?.signal
+        return await new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            reject(new DOMException('The request was aborted.', 'AbortError'))
+          })
+        })
+      }
+
+      const analysis = analyzeRetakeContext(CONTEXT, fetchImpl)
+      const rejection = expect(analysis).rejects.toThrow(
+        'Retake analysis timed out. Try again.',
+      )
+      await vi.advanceTimersByTimeAsync(RETAKE_ANALYSIS_TIMEOUT_MS)
+
+      await rejection
+      expect(signal?.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the request deadline after an ordinary failure', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchImpl: FetchLike = async () => {
+        throw new Error('Network unavailable.')
+      }
+
+      await expect(
+        analyzeRetakeContext(CONTEXT, fetchImpl),
+      ).rejects.toThrow('Network unavailable.')
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the request deadline after a successful response', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchImpl: FetchLike = async () =>
+        modelReply({ needsRetake: false, confidence: 0.9 })
+
+      await expect(
+        analyzeRetakeContext(CONTEXT, fetchImpl),
+      ).resolves.toEqual({ needsRetake: false, confidence: 0.9 })
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

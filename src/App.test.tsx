@@ -440,6 +440,13 @@ describe('App regression wiring', () => {
     })
 
     let view = selectSource(file, 'blob:source', 10)
+    expect(() =>
+      findComponent<RetakesPanelProps>(
+        view,
+        RetakesPanel,
+        'retakes panel',
+      ),
+    ).toThrow('Could not find retakes panel.')
     await findButton(view, 'Transcribe').props.onClick?.()
     expect(harness.analyzeRetakes).not.toHaveBeenCalled()
     const editor = editorReducerRecord()
@@ -714,9 +721,11 @@ describe('App regression wiring', () => {
     expect(state().edl).toBe(edlBefore)
     expect(state().history).toBe(historyBefore)
 
-    harness.analyzeRetakes.mockRejectedValueOnce(
-      new Error('Retake request failed.'),
-    )
+    harness.analyzeRetakes.mockResolvedValueOnce({
+      candidateCount: 2,
+      analyzedCount: 1,
+      recommendations: [recommendation],
+    })
     view = renderApp()
     panel = findComponent<RetakesPanelProps>(
       view,
@@ -724,11 +733,58 @@ describe('App regression wiring', () => {
       'retakes panel',
     )
     await panel.props.onAnalyze()
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(state().retakes).toMatchObject({
+      retakeAnalysisStatus: 'complete',
+      retakeAnalysisProgress: { completed: 1, failed: 1, total: 2 },
+      retakeRecommendations: [{ status: 'open' }],
+    })
+    expect(state().retakes).not.toHaveProperty('retakeAnalysisError')
+    expect(panel.props).toMatchObject({
+      recommendations: [recommendation],
+      analysisStatus: 'complete',
+      analysisProgress: { completed: 1, failed: 1, total: 2 },
+      analysisError: undefined,
+      hasSuccessfulEmptyAnalysis: false,
+    })
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+
+    harness.analyzeRetakes.mockImplementationOnce(
+      async (
+        _transcript: Transcript,
+        _sourceDurationMs: number,
+        options: RetakeBatchOptions,
+      ) => {
+        options.onProgress?.({ completed: 0, failed: 2, total: 2 })
+        throw new Error('Retake request failed.')
+      },
+    )
+    await panel.props.onAnalyze()
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
     expect(state().retakes).toMatchObject({
       retakeAnalysisStatus: 'error',
+      retakeAnalysisProgress: { completed: 0, failed: 2, total: 2 },
       retakeAnalysisError: 'Retake request failed.',
-      retakeRecommendations: [{ status: 'dismissed' }],
+      retakeRecommendations: [{ status: 'open' }],
     })
+    expect(panel.props.analysisError).toBe('Retake request failed.')
+    expect(panel.props.analysisProgress).toEqual({
+      completed: 0,
+      failed: 2,
+      total: 2,
+    })
+    expect(panel.props.recommendations).toEqual([recommendation])
     expect(state().edl).toBe(edlBefore)
     expect(state().history).toBe(historyBefore)
 
@@ -918,7 +974,41 @@ describe('App regression wiring', () => {
       RetakesPanel,
       'retakes panel',
     )
-    expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(false)
+    expect(panel.props).toMatchObject({
+      recommendations: [],
+      analysisStatus: 'complete',
+      analysisProgress: { completed: 1, failed: 1, total: 2 },
+      analysisError: undefined,
+      hasSuccessfulEmptyAnalysis: false,
+    })
+
+    const nextAnalysis = deferredValue<RetakeBatchResult>()
+    harness.analyzeRetakes.mockClear()
+    harness.analyzeRetakes.mockReturnValueOnce(nextAnalysis.promise)
+    const firstStart = panel.props.onAnalyze()
+    const blockedStart = panel.props.onAnalyze()
+    await blockedStart
+    expect(harness.analyzeRetakes).toHaveBeenCalledOnce()
+
+    nextAnalysis.resolve({
+      candidateCount: 0,
+      analyzedCount: 0,
+      recommendations: [],
+    })
+    await firstStart
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    harness.analyzeRetakes.mockResolvedValueOnce({
+      candidateCount: 0,
+      analyzedCount: 0,
+      recommendations: [],
+    })
+    await panel.props.onAnalyze()
+    expect(harness.analyzeRetakes).toHaveBeenCalledTimes(2)
   })
 
   it('stores retake advice outside EDL Undo and clears it with the source document', () => {

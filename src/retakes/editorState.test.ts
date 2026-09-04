@@ -218,7 +218,7 @@ describe('retake editor state', () => {
     const state = createRetakeEditorState({
       retakeRecommendations: [RECOMMENDATION],
     })
-    const progress = { completed: 3, total: 7 }
+    const progress = { completed: 3, failed: 2, total: 7 }
     const error = setRetakeAnalysisState(
       state,
       'error',
@@ -240,7 +240,7 @@ describe('retake editor state', () => {
       setRetakeAnalysisState(
         error,
         'error',
-        { completed: 3, total: 7 },
+        { completed: 3, failed: 2, total: 7 },
         'Analysis failed.',
       ),
     ).toBe(error)

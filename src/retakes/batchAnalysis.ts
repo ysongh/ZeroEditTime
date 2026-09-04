@@ -46,8 +46,11 @@ const RETAKE_TITLES = {
 } as const satisfies Readonly<Record<RetakeReason, string>>
 
 export interface RetakeBatchProgress {
+  /** Successfully completed candidate analyses. */
   completed: number
   total: number
+  /** Failed candidate analyses; omitted while zero. */
+  failed?: number
 }
 
 export interface RetakeBatchResult {
@@ -132,12 +135,30 @@ function recommendationFromResult(
     draft,
     sourceDurationMs,
   )
-  return recommendation === null
-    ? null
-    : withRetakeTranscriptFingerprint(
-        recommendation,
-        transcriptFingerprint,
-      )
+  if (recommendation === null) {
+    throw new Error('Could not create a valid retake recommendation.')
+  }
+  const withFingerprint = withRetakeTranscriptFingerprint(
+    recommendation,
+    transcriptFingerprint,
+  )
+  if (withFingerprint === null) {
+    throw new Error('Could not verify a retake recommendation.')
+  }
+  return withFingerprint
+}
+
+function candidateFitsSource(
+  candidate: Readonly<RetakeCandidate>,
+  sourceDurationMs: number,
+): boolean {
+  return (
+    Number.isFinite(candidate.startSourceMs) &&
+    Number.isFinite(candidate.endSourceMs) &&
+    candidate.startSourceMs >= 0 &&
+    candidate.endSourceMs > candidate.startSourceMs &&
+    candidate.endSourceMs <= sourceDurationMs
+  )
 }
 
 /**
@@ -148,20 +169,25 @@ function recommendationFromResult(
  * per request and uses a fixed small worker pool. Local selection deduplicates,
  * prioritizes, and caps requests before this point; successful decisions are
  * cached only by their complete bounded context. Part L normalization removes
- * invalid and clearly duplicate overlapping recommendations,
- * while Part M owns storage and Part T owns partial-failure recovery.
+ * invalid and clearly duplicate overlapping recommendations, while Part M
+ * owns storage. Candidate failures are isolated so valid sibling decisions
+ * and recommendations survive.
  */
 export async function analyzeRetakes(
-  transcript: Transcript,
+  transcript: Transcript | null | undefined,
   sourceDurationMs: number,
   options: Readonly<RetakeBatchOptions> = {},
 ): Promise<RetakeBatchResult> {
+  if (transcript === null || transcript === undefined) {
+    throw new Error('Generate a transcript before checking for retakes.')
+  }
+  const availableTranscript = transcript
   if (!Number.isFinite(sourceDurationMs) || sourceDurationMs <= 0) {
     throw new Error('Cannot analyze retakes without a valid source duration.')
   }
 
   const candidates = selectRetakeCandidatesForAnalysis(
-    buildScreenedRetakeCandidates(transcript),
+    buildScreenedRetakeCandidates(availableTranscript),
   )
   const total = candidates.length
   const analyzeContext = options.analyzeContext ?? analyzeRetakeContext
@@ -172,18 +198,36 @@ export async function analyzeRetakes(
   )
   let nextCandidateIndex = 0
   let analyzedCount = 0
-  let hasFailure = false
-  let firstFailure: unknown
+  let failedCount = 0
+  const failures: Array<{ cause: unknown } | undefined> = Array.from(
+    { length: total },
+  )
 
   options.onProgress?.({ completed: 0, total })
 
+  function reportProgress(): void {
+    options.onProgress?.({
+      completed: analyzedCount,
+      total,
+      ...(failedCount === 0 ? {} : { failed: failedCount }),
+    })
+  }
+
   async function runWorker(): Promise<void> {
-    while (!hasFailure && nextCandidateIndex < total) {
+    while (nextCandidateIndex < total) {
       const candidateIndex = nextCandidateIndex
       nextCandidateIndex++
       const candidate = candidates[candidateIndex]
       try {
-        const context = buildRetakeAnalysisContext(transcript, candidate)
+        if (!candidateFitsSource(candidate, sourceDurationMs)) {
+          throw new Error(
+            'A retake-analysis section falls outside the source duration.',
+          )
+        }
+        const context = buildRetakeAnalysisContext(
+          availableTranscript,
+          candidate,
+        )
         if (context === null) {
           throw new Error('Could not build a valid retake-analysis context.')
         }
@@ -199,13 +243,10 @@ export async function analyzeRetakes(
           context,
           transcriptFingerprint.fingerprint,
         )
+        let shouldCache = false
         if (result === undefined) {
           result = await analyzeContext(context)
-          cache?.set(
-            context,
-            result,
-            transcriptFingerprint.fingerprint,
-          )
+          shouldCache = true
         }
 
         recommendations[candidateIndex] = recommendationFromResult(
@@ -214,14 +255,19 @@ export async function analyzeRetakes(
           sourceDurationMs,
           transcriptFingerprint,
         )
-        analyzedCount++
-        options.onProgress?.({ completed: analyzedCount, total })
-      } catch (error) {
-        if (!hasFailure) {
-          hasFailure = true
-          firstFailure = error
+        if (shouldCache) {
+          cache?.set(
+            context,
+            result,
+            transcriptFingerprint.fingerprint,
+          )
         }
+        analyzedCount++
+      } catch (error) {
+        failedCount++
+        failures[candidateIndex] = { cause: error }
       }
+      reportProgress()
     }
   }
 
@@ -229,7 +275,14 @@ export async function analyzeRetakes(
   await Promise.all(
     Array.from({ length: workerCount }, () => runWorker()),
   )
-  if (hasFailure) throw firstFailure
+  if (analyzedCount === 0 && failedCount > 0) {
+    const firstFailure = failures.find(
+      (failure) => failure !== undefined,
+    )
+    throw firstFailure?.cause instanceof Error
+      ? firstFailure.cause
+      : new Error('Retake analysis failed. Try again.')
+  }
 
   const completedRecommendations = recommendations.filter(
     (recommendation): recommendation is RetakeRecommendation =>

@@ -100,6 +100,25 @@ describe('analyzeRetakes', () => {
     expect(calls).toBe(0)
   })
 
+  it('rejects a missing transcript before progress or analysis begins', async () => {
+    const progress: RetakeBatchProgress[] = []
+    let calls = 0
+
+    await expect(
+      analyzeRetakes(null, 10_000, {
+        analyzeContext: async () => {
+          calls++
+          return NEGATIVE_RESULT
+        },
+        onProgress: (event) => progress.push(event),
+      }),
+    ).rejects.toThrow(
+      'Generate a transcript before checking for retakes.',
+    )
+    expect(calls).toBe(0)
+    expect(progress).toEqual([])
+  })
+
   it('uses bounded concurrency, reports progress, and keeps source-ordered positives', async () => {
     const transcript = sequential(
       ...FAILED_DASHBOARD,
@@ -354,49 +373,94 @@ describe('analyzeRetakes', () => {
     )
   })
 
-  it('stops new work and drains in-flight work before rejecting', async () => {
+  it('keeps valid sibling results when one candidate analysis fails', async () => {
     const transcript = sequential(
       ...FAILED_DASHBOARD,
       ...FAILED_DASHBOARD,
       ...FAILED_DASHBOARD,
     )
-    const secondRequest = deferred()
     const starts: number[] = []
     const progress: RetakeBatchProgress[] = []
-    let settled = false
 
-    const analysis = analyzeRetakes(transcript, 20_000, {
+    const result = await analyzeRetakes(transcript, 20_000, {
       analyzeContext: async (context) => {
         starts.push(context.candidate.startSourceMs)
         if (context.candidate.startSourceMs === 0) {
           throw new Error('first request failed')
         }
-        await secondRequest.promise
-        return NEGATIVE_RESULT
+        return context.candidate.startSourceMs === 4_000
+          ? POSITIVE_RESULT
+          : NEGATIVE_RESULT
       },
       onProgress: (event) => progress.push(event),
     })
-    void analysis.then(
-      () => {
-        settled = true
+
+    expect(starts.toSorted((left, right) => left - right)).toEqual([
+      0, 4_000, 8_000,
+    ])
+    expect(result).toMatchObject({
+      candidateCount: 3,
+      analyzedCount: 2,
+      recommendations: [
+        {
+          startSourceMs: 4_000,
+          reason: 'incomplete-thought',
+        },
+      ],
+    })
+    expect(progress).toHaveLength(4)
+    expect(
+      progress.map(
+        ({ completed, failed = 0 }) => completed + failed,
+      ),
+    ).toEqual([0, 1, 2, 3])
+    expect(progress.at(-1)).toEqual({
+      completed: 2,
+      failed: 1,
+      total: 3,
+    })
+  })
+
+  it('attempts every candidate and rejects the first source-ordered failure when all fail', async () => {
+    const transcript = sequential(
+      ...FAILED_DASHBOARD,
+      ...FAILED_DASHBOARD,
+      ...FAILED_DASHBOARD,
+    )
+    const firstRequest = deferred()
+    const allStarted = deferred()
+    const starts: number[] = []
+    const progress: RetakeBatchProgress[] = []
+
+    const analysis = analyzeRetakes(transcript, 20_000, {
+      analyzeContext: async (context) => {
+        const start = context.candidate.startSourceMs
+        starts.push(start)
+        if (starts.length === 3) allStarted.resolve()
+        if (start === 0) {
+          await firstRequest.promise
+          throw new Error('first source failure')
+        }
+        throw new Error(`later failure at ${start}`)
       },
-      () => {
-        settled = true
-      },
+      onProgress: (event) => progress.push(event),
+    })
+    const rejection = expect(analysis).rejects.toThrow(
+      'first source failure',
     )
 
-    for (let turn = 0; turn < 10 && starts.length < 2; turn++) {
-      await Promise.resolve()
-    }
-    expect(starts).toEqual([0, 4_000])
-    expect(settled).toBe(false)
+    await allStarted.promise
+    expect(starts.toSorted((left, right) => left - right)).toEqual([
+      0, 4_000, 8_000,
+    ])
 
-    secondRequest.resolve()
-    await expect(analysis).rejects.toThrow('first request failed')
-    expect(starts).toEqual([0, 4_000])
-    const finalProgressCount = progress.length
-    await Promise.resolve()
-    expect(progress).toHaveLength(finalProgressCount)
+    firstRequest.resolve()
+    await rejection
+    expect(progress.at(-1)).toEqual({
+      completed: 0,
+      failed: 3,
+      total: 3,
+    })
   })
 
   it('reuses unchanged positive and negative decisions during the session', async () => {
@@ -584,6 +648,34 @@ describe('analyzeRetakes', () => {
       expect(calls).toBe(0)
     },
   )
+
+  it('fails an out-of-source candidate without spending an AI request', async () => {
+    const transcript = sequential(...FAILED_DASHBOARD)
+    transcript.words = transcript.words.map((word) => ({
+      ...word,
+      start: word.start + 20,
+      end: word.end + 20,
+    }))
+    const progress: RetakeBatchProgress[] = []
+    let calls = 0
+
+    await expect(
+      analyzeRetakes(transcript, 10_000, {
+        analyzeContext: async () => {
+          calls++
+          return POSITIVE_RESULT
+        },
+        onProgress: (event) => progress.push(event),
+      }),
+    ).rejects.toThrow(
+      'A retake-analysis section falls outside the source duration.',
+    )
+    expect(calls).toBe(0)
+    expect(progress).toEqual([
+      { completed: 0, total: 1 },
+      { completed: 0, failed: 1, total: 1 },
+    ])
+  })
 
   it('returns fresh deterministic recommendations without mutating inputs', async () => {
     const transcript = sequential(...FAILED_DASHBOARD)

@@ -18,8 +18,11 @@ export type RetakeAnalysisStatus =
   (typeof RETAKE_ANALYSIS_STATUSES)[number]
 
 export interface RetakeAnalysisProgress {
+  /** Successfully completed candidate analyses. */
   completed: number
   total: number
+  /** Failed candidate analyses; omitted when none have failed. */
+  failed?: number
 }
 
 export interface RetakeEditorState {
@@ -171,7 +174,9 @@ function progressEqual(
   right: Readonly<RetakeAnalysisProgress> | undefined,
 ): boolean {
   return (
-    left?.completed === right?.completed && left?.total === right?.total
+    left?.completed === right?.completed &&
+    left?.total === right?.total &&
+    left?.failed === right?.failed
   )
 }
 
@@ -271,7 +276,7 @@ export function clearRetakeRecommendations(
     : { ...state, retakeRecommendations: [] }
 }
 
-/** Replace lifecycle metadata without introducing request/error policy yet. */
+/** Replace lifecycle metadata without coupling pure state to request policy. */
 export function setRetakeAnalysisState(
   state: RetakeEditorState,
   status: RetakeAnalysisStatus,

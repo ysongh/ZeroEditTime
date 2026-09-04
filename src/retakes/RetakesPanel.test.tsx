@@ -294,7 +294,7 @@ describe('RetakesPanel', () => {
   it('disables repeat analysis and reports supplied progress while checking', () => {
     const view = renderPanel({
       analysisStatus: 'analyzing',
-      analysisProgress: { completed: 2, total: 5 },
+      analysisProgress: { completed: 2, failed: 1, total: 5 },
     })
 
     expect(findButton(view, 'Checking…').props).toMatchObject({
@@ -304,7 +304,44 @@ describe('RetakesPanel', () => {
     const status = findHosts(view, 'p').find(
       (element) => element.props.role === 'status',
     )
-    expect(textOf(status)).toBe('Checked 2 of 5 sections…')
+    expect(textOf(status)).toBe('Checked 3 of 5 sections…')
+  })
+
+  it('reports partial success while retaining valid recommendations', () => {
+    const view = renderPanel({
+      recommendations: [RECOMMENDATION],
+      analysisStatus: 'complete',
+      analysisProgress: { completed: 5, failed: 2, total: 7 },
+    })
+
+    expect(textOf(view)).toContain(
+      'Checked 7 sections. 5 completed; 2 could not be analyzed.',
+    )
+    expect(textOf(view)).toContain(RECOMMENDATION.title)
+    expect(findHosts(view, 'article')).toHaveLength(1)
+    expect(findButton(view, 'Check for retakes').props.disabled).not.toBe(
+      true,
+    )
+  })
+
+  it('shows a retryable controlled error without hiding older advice', () => {
+    const view = renderPanel({
+      recommendations: [RECOMMENDATION],
+      analysisStatus: 'error',
+      analysisError: 'Retake request failed.',
+    })
+    const alert = findHosts(view, 'div').find(
+      (element) => element.props.role === 'alert',
+    )
+
+    expect(textOf(alert)).toBe(
+      'Couldn’t check for retakes.Retake request failed.',
+    )
+    expect(textOf(view)).toContain(RECOMMENDATION.title)
+    expect(findHosts(view, 'article')).toHaveLength(1)
+    expect(findButton(view, 'Check for retakes').props.disabled).not.toBe(
+      true,
+    )
   })
 
   it('shows a neutral zero-open count without rendering closed cards', () => {
@@ -368,6 +405,17 @@ describe('RetakesPanel', () => {
     )
     expect(textOf(withRecommendation)).toContain(
       '1 section may be worth recording again.',
+    )
+
+    const partial = renderPanel({
+      recommendations: [],
+      analysisStatus: 'complete',
+      analysisProgress: { completed: 1, failed: 1, total: 2 },
+      hasSuccessfulEmptyAnalysis: true,
+    })
+    expect(textOf(partial)).not.toContain('No retakes recommended')
+    expect(textOf(partial)).toContain(
+      'Checked 2 sections. 1 completed; 1 could not be analyzed.',
     )
   })
 })

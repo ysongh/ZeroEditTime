@@ -655,17 +655,18 @@ empty folders for future phases.
   inherit only the local candidate's ORIGINAL-SOURCE-millisecond range, receive a deterministic
   neutral title and `open` status, copy the available local filler/pause/stumble/confidence
   evidence, and pass through the existing source-duration-aware recommendation normalizer before
-  entering the returned fresh array. Model-supplied extra timing cannot affect that range, and an
-  invalid assembled recommendation is omitted. Focused offline tests cover clean and locally
+  entering the returned fresh array. Model-supplied extra timing cannot affect that range; Part T
+  below treats an invalid assembled recommendation as a failed candidate rather than a clean
+  negative. Focused offline tests cover clean and locally
   suppressed zero-call success, bounded per-candidate context, serial source order, progress,
   positive/negative assembly, local timing and evidence ownership, final source-bound validation,
   invalid duration, determinism, freshness, and input purity. The returned result is the seam for
   later state. Part-B/D screening currently yields one distinct non-overlapping sentence envelope
   per candidate and the model owns no timestamps, so overlap cannot arise on this path; Part L
   still owns general overlap merging. Parts M-N own storage and the actual user-triggered
-  button/panel, Part S owns visible empty-state copy, Part T owns the currently deferred
-  partial-failure recovery/error presentation, and Part U owns cancellation/stale-request
-  protection. Part I adds no automatic invocation, React/editor state, UI,
+  button/panel, Part S owns visible empty-state copy, Part T below owns partial-failure recovery/
+  error presentation, and Part U owns cancellation/stale-request protection. Part I adds no
+  automatic invocation, React/editor state, UI,
   API/proxy/prompt/schema change, fingerprint, EDL change, playback, Undo, or export behavior.
 - **Phase 11, Part J (done):** local request-cost policy now wraps Part I without
   changing the one-context/one-result relay contract. Pure `costControls.ts` discards malformed
@@ -790,10 +791,9 @@ empty folders for future phases.
   source EDL are available. Its explicit **Check for retakes** button is the first UI caller of the
   otherwise inert Parts I-L pipeline: App guards an active run, sets Part-M lifecycle state to
   `analyzing`, forwards candidate-based progress, invokes `analyzeRetakes` with the transcript and
-  real source duration in milliseconds, replaces recommendations only after full success, and then
-  records `complete` plus final analyzed/candidate counts. A basic catch moves state to `error`
-  without discarding older advice or leaving an unhandled promise; visible error/partial-success
-  policy remains Part T, and request ids/cancellation remain Part U. Before display, App applies
+  real source duration in milliseconds, and records lifecycle/progress state. Part T below extends
+  replacement to valid partial results and gives the existing error state a visible policy. Request
+  ids/cancellation remain Part U. Before display, App applies
   Part K's fail-closed current-transcript filter, so proofless or changed-transcript advice stays in
   advisory state for later policy but cannot appear as current guidance. The panel preserves
   normalized source order and derives its count/cards only from `open` recommendations, so
@@ -881,7 +881,7 @@ empty folders for future phases.
   a successful zero-result run. Part R adds no replacement recording/upload flow, successful-empty
   copy (Part S), analysis/partial-failure UI (Part T), analysis request cancellation (Part U), or
   broad accessibility audit/clipboard fallback (Part V).
-- **Phase 11, Part S (done; stop here):** a fully successful analysis that returns zero
+- **Phase 11, Part S (done):** a fully successful analysis that returns zero
   recommendations now renders **No retakes recommended** and **The sections we checked appear
   fixable through normal editing.** The panel receives this as an explicit controlled condition and
   defensively requires `complete` status plus no supplied recommendations; idle, analyzing, error,
@@ -896,6 +896,30 @@ empty folders for future phases.
   defensive non-success states, no marker, transcript invalidation, and unchanged EDL/history.
   Part S adds no visible error or partial-failure policy (Part T), request cancellation/latest-wins
   behavior (Part U), or broad accessibility work (Part V).
+- **Phase 11, Part T (done; stop here):** retake analysis now isolates failures per selected
+  candidate under the existing two-worker limit instead of stopping and discarding sibling work.
+  Progress retains successful `completed` decisions and an optional failed count, so every settled
+  section is represented. If at least one candidate succeeds, the batch returns its source-ordered,
+  normalized recommendations and App replaces prior advice with that valid subset; the panel shows
+  the aggregate **Checked N sections. X completed; Y could not be analyzed.** outcome and never
+  presents a partial empty result as Part-S clean success. If every candidate fails, the batch waits
+  for all selected work, deterministically throws the first source-ordered cause, App preserves
+  prior advice, and the panel exposes a visible retryable **Couldn’t check for retakes.** message.
+  Starting a new run clears the prior outcome, while a synchronous App-owned running lock closes the
+  same-render double-start window and releases after either success or failure. This is only
+  concurrency admission; Part U still owns cancellation and protection from stale async writes.
+  Each real one-candidate request now has a retake-specific 30-second deadline that aborts its fetch,
+  clears its timer, and becomes an ordinary isolated candidate failure. Malformed/empty replies and
+  unknown enums continue to fail at the existing trust boundary; batch candidates outside the
+  source duration fail before any model request; an invalid positive can no longer masquerade as a
+  clean negative; and final normalization continues to collapse duplicates. A missing transcript
+  is rejected by the batch boundary, while App keeps the panel/trigger unavailable until a source
+  transcript exists; a valid empty transcript/candidate-zero run remains successful without a
+  request. Focused API, batch, state, panel, and App tests lock timeout cleanup, all-failure and
+  partial-result behavior, exact aggregate/error copy, retry/double-start behavior, preservation of
+  valid/older advice as appropriate, source bounds, and unchanged EDL/history. Part T adds no
+  request ids, cross-source abort, latest-wins state guard (Part U), or broad accessibility audit
+  (Part V).
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1182,12 +1206,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part S. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part T. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
   state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, the
-  Part-Q marker lane, Part-R script/workflow UX, and Part-S successful-empty presentation; Parts
-  G-H's conservative decision and replacement-script policies live in the existing server relay.
+  Part-Q marker lane, Part-R script/workflow UX, Part-S successful-empty presentation, and Part-T
+  partial/error policy; Parts G-H's conservative decision and replacement-script policies live in
+  the existing server relay.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1230,13 +1255,16 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     that could later masquerade as a recommendation.
   - `analysisApi.ts` — one-candidate browser call through the shared `/api/agent` transport. It
     validates/whitelists context before sending and validates the structured tool result again on
-    return; `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries offline.
+    return. Part T adds a cleared 30-second aborting deadline around only this retake request;
+    `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries and timeout offline.
   - `batchAnalysis.ts` — explicitly invoked Parts I-L client orchestration from local screened and
     cost-selected candidates through bounded context and a two-worker one-candidate analyzer into
-    validated open recommendations. It reports progress, returns empty success without a request,
-    filters negative decisions, captures local transcript provenance before awaiting, reuses only
-    decisions with unchanged context and provenance within the page session, and remains independent
-    of React/editor state; `batchAnalysis.test.ts` covers that boundary offline.
+    validated open recommendations. It reports success/failure progress, returns empty success
+    without a request, isolates candidate failures while retaining valid siblings, rejects only an
+    all-failed batch, filters negative decisions, captures local transcript provenance before
+    awaiting, reuses only validated decisions with unchanged context and provenance within the page
+    session, and remains independent of React/editor state; `batchAnalysis.test.ts` covers that
+    boundary offline.
   - `costControls.ts` — pure Part-J pre-request validation, heavy-overlap deduplication,
     qualifying-signal priority, and strongest-ten selection plus versioned bounded-context keys and
     a copied 50-entry LRU result cache. Part K optionally partitions equivalent model contexts by
@@ -1255,19 +1283,21 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     determinism, Part-K interoperability, freshness, and purity.
   - `editorState.ts` — pure Part-M advisory recommendation and analysis-lifecycle state. It provides
     safe defaults, exact deep-copied collection replacement, monotonic dismiss/resolve workflow
-    actions, collection clearing, atomic lifecycle metadata replacement, and a typed reducer without
-    accepting EDL/editor-content data. `editorState.test.ts` locks those state invariants; App's
-    regression suite locks composition outside content Undo and reset behavior.
+    actions, collection clearing, atomic lifecycle metadata replacement (including Part-T optional
+    failure progress), and a typed reducer without accepting EDL/editor-content data.
+    `editorState.test.ts` locks those state invariants; App's regression suite locks composition
+    outside content Undo and reset behavior.
   - `RetakesPanel.tsx` — controlled Part-N recommendation UI plus the explicit analysis trigger,
     Part-O modest severity pills, Part-P exact source-range Play action, Part-R suggested-script
-    feedback/resolution UX, and Part-S successful-empty result. It renders/counts open advice,
+    feedback/resolution UX, Part-S successful-empty result, and Part-T aggregate partial/error
+    outcomes. It renders/counts open advice,
     humanizes every severity, displays original-source ranges and optional exact-copy script blocks,
     forwards playback/dismiss/resolve actions, and distinguishes a proven zero-result completion
     from merely having no visible open cards without touching the EDL.
     `RetakesPanel.test.tsx` locks all three severity presentations, exact playback/copy values,
-    workflow callbacks, controlled feedback, compact rendering, optionality, and exact empty-state
-    copy; App's regression suite mocks external boundaries and locks complete state/play/copy/
-    resolve/empty-result integration offline.
+    workflow callbacks, controlled feedback, compact rendering, optionality, exact empty-state copy,
+    and retryable partial/error presentation; App's regression suite mocks external boundaries and
+    locks complete state/play/copy/resolve/empty/partial/failure integration offline.
   - `RetakeTimelineTrack.tsx` — isolated Part-Q original-source marker lane. It renders only current
     open recommendations, positions compact buttons from source start/duration, exposes ephemeral
     pressed selection, and forwards exact select/seek actions without any parent drag/click surface.

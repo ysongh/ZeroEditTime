@@ -215,12 +215,16 @@ function App() {
   // must never enter the EDL, output-time projection, editor history, or export.
   const retakeSourcePreviewRef = useRef<RetakeSourcePreview | null>(null)
   const retakeScriptCopyAttemptRef = useRef(0)
+  // This synchronous lock closes the same-render double-click window that the
+  // reducer status alone cannot see. Part U separately owns stale completion.
+  const retakeAnalysisRunningRef = useRef(false)
 
   // Revoke the video URL and every still-image object URL on disposal.
   useEffect(() => {
     return () => {
       retakeSourcePreviewRef.current = null
       retakeScriptCopyAttemptRef.current += 1
+      retakeAnalysisRunningRef.current = false
       if (objectUrlRef.current !== null) {
         URL.revokeObjectURL(objectUrlRef.current)
       }
@@ -580,17 +584,19 @@ function App() {
   }
 
   // Part N is the first actual UI trigger for the inert Parts I-L pipeline.
-  // Recommendations remain visible until a successful replacement; Parts T/U
-  // later own partial-result policy and stale-request cancellation.
+  // Recommendations remain visible until a successful full/partial
+  // replacement. Part U later owns stale-request cancellation.
   async function handleRetakeAnalysis() {
     if (
       transcript === null ||
       edl === null ||
-      retakes.retakeAnalysisStatus === 'analyzing'
+      retakes.retakeAnalysisStatus === 'analyzing' ||
+      retakeAnalysisRunningRef.current
     ) {
       return
     }
 
+    retakeAnalysisRunningRef.current = true
     const analysisTranscript = transcript
     const analysisSourceId = edl.source.id
     const analysisSourceDurationMs = edl.source.duration * 1_000
@@ -629,8 +635,9 @@ function App() {
       })
       setSelectedRetakeRecommendationId(null)
       clearRetakeScriptCopyFeedback()
+      const failedCount = result.candidateCount - result.analyzedCount
       setSuccessfulRetakeAnalysis(
-        result.analyzedCount === result.candidateCount
+        failedCount === 0
           ? {
               transcript: analysisTranscript,
               sourceId: analysisSourceId,
@@ -647,6 +654,7 @@ function App() {
           progress: {
             completed: result.analyzedCount,
             total: result.candidateCount,
+            ...(failedCount === 0 ? {} : { failed: failedCount }),
           },
         },
       })
@@ -660,9 +668,11 @@ function App() {
           error:
             cause instanceof Error
               ? cause.message
-              : 'Retake analysis failed.',
+              : 'Retake analysis failed. Try again.',
         },
       })
+    } finally {
+      retakeAnalysisRunningRef.current = false
     }
   }
 
@@ -1130,6 +1140,7 @@ function App() {
                   recommendations={openCurrentRetakeRecommendations}
                   analysisStatus={retakes.retakeAnalysisStatus}
                   analysisProgress={retakes.retakeAnalysisProgress}
+                  analysisError={retakes.retakeAnalysisError}
                   hasSuccessfulEmptyAnalysis={
                     hasSuccessfulEmptyRetakeAnalysis
                   }
