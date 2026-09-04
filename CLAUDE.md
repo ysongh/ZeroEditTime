@@ -896,7 +896,7 @@ empty folders for future phases.
   defensive non-success states, no marker, transcript invalidation, and unchanged EDL/history.
   Part S adds no visible error or partial-failure policy (Part T), request cancellation/latest-wins
   behavior (Part U), or broad accessibility work (Part V).
-- **Phase 11, Part T (done; stop here):** retake analysis now isolates failures per selected
+- **Phase 11, Part T (done):** retake analysis now isolates failures per selected
   candidate under the existing two-worker limit instead of stopping and discarding sibling work.
   Progress retains successful `completed` decisions and an optional failed count, so every settled
   section is represented. If at least one candidate succeeds, the batch returns its source-ordered,
@@ -907,7 +907,7 @@ empty folders for future phases.
   prior advice, and the panel exposes a visible retryable **Couldn’t check for retakes.** message.
   Starting a new run clears the prior outcome, while a synchronous App-owned running lock closes the
   same-render double-start window and releases after either success or failure. This is only
-  concurrency admission; Part U still owns cancellation and protection from stale async writes.
+  concurrency admission; Part U below adds cancellation and protection from stale async writes.
   Each real one-candidate request now has a retake-specific 30-second deadline that aborts its fetch,
   clears its timer, and becomes an ordinary isolated candidate failure. Malformed/empty replies and
   unknown enums continue to fail at the existing trust boundary; batch candidates outside the
@@ -917,9 +917,27 @@ empty folders for future phases.
   transcript exists; a valid empty transcript/candidate-zero run remains successful without a
   request. Focused API, batch, state, panel, and App tests lock timeout cleanup, all-failure and
   partial-result behavior, exact aggregate/error copy, retry/double-start behavior, preservation of
-  valid/older advice as appropriate, source bounds, and unchanged EDL/history. Part T adds no
-  request ids, cross-source abort, latest-wins state guard (Part U), or broad accessibility audit
-  (Part V).
+  valid/older advice as appropriate, source bounds, and unchanged EDL/history. At this boundary,
+  request identity, cross-source abort, and latest-wins state guards remained deferred to Part U;
+  Part T adds no broad accessibility audit (Part V).
+- **Phase 11, Part U (done; stop here):** every user-triggered retake run now owns one App-level
+  request token and `AbortController`. Selecting a replacement source, successfully replacing the
+  transcript, or unmounting invalidates that token before aborting its work; transcript replacement
+  also resets the advisory lifecycle to `idle`, allowing the new input to be analyzed immediately
+  while Part-K filtering continues to hide retained raw advice from the older transcript. The same
+  token remains the synchronous duplicate-start lock. Progress, recommendation replacement,
+  selection/copy cleanup, successful-empty provenance, completion/error state, and final lock
+  release all require current-token identity, so a superseded request cannot overwrite newer state
+  or have its late `finally` unlock a newer in-flight run—even when a mock or transport ignores
+  cancellation. The caller signal flows through the batch worker pool to each candidate request.
+  A cancelled batch starts no more queued candidates and admits no late recommendation, cache,
+  progress, or failed-count write; an unrelated candidate timeout/`AbortError` remains the isolated
+  Part-T failure it was before. The one-candidate API composes caller cancellation with its private
+  30-second deadline, aborts the underlying fetch, settles with a controlled `AbortError` even for
+  an abort-ignoring transport, and clears both its timer and external listener. Focused API, batch,
+  and App regressions cover pre/in-flight cancellation, signal forwarding, queued-work and cache
+  suppression, transcript/source replacement, newer-result authority, and old-finally ownership,
+  with EDL/history unchanged. Part U adds no cancel button or broad accessibility audit (Part V).
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1034,11 +1052,15 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   the selected `OverlayInspector`; its field commits reuse that exact generic update callback,
   while duplicate/layer/delete actions dispatch through the same atomic overlay reducer. Part I
   renders `OverlayTimelineTrack` on the full source scale; it selects/seeks ephemerally and sends
-  one final timing patch through that callback per completed drag or trim.
+  one final timing patch through that callback per completed drag or trim. Phase 11 Part U owns an
+  active retake-analysis token/controller, aborts it when its source transcript is replaced or the
+  App unmounts, and admits lifecycle/result writes only from the current token.
 - `src/App.test.tsx` — Part-V persistent no-DOM controller harness covering file selection and
   URL replacement, engine preload, metadata/EDL initialization, reversed trims and Undo, middle
   deletion with playback gap skipping/final stop, transcript deletion safeguards, and the shared
-  caption generate/edit/preview/export/Undo path. Native decoding and playback remain manual.
+  caption generate/edit/preview/export/Undo path. Phase 11 coverage also locks the retake panel,
+  source preview/markers, workflow state, partial/empty outcomes, and Part-U latest-wins request
+  ownership. Native decoding and playback remain manual.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/Timeline.test.tsx` — Part-V source-time regression coverage for kept-range, selection, and
@@ -1206,13 +1228,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part T. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part U. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
   state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, the
-  Part-Q marker lane, Part-R script/workflow UX, Part-S successful-empty presentation, and Part-T
-  partial/error policy; Parts G-H's conservative decision and replacement-script policies live in
-  the existing server relay.
+  Part-Q marker lane, Part-R script/workflow UX, Part-S successful-empty presentation, Part-T
+  partial/error policy, and Part-U cancellation/latest-wins handling; Parts G-H's conservative
+  decision and replacement-script policies live in the existing server relay.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1256,14 +1278,18 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   - `analysisApi.ts` — one-candidate browser call through the shared `/api/agent` transport. It
     validates/whitelists context before sending and validates the structured tool result again on
     return. Part T adds a cleared 30-second aborting deadline around only this retake request;
-    `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries and timeout offline.
+    Part U links a caller signal without surrendering that private timeout, promptly rejects
+    cancellation even if an injected transport ignores abort, and removes the listener/timer.
+    `analysis.test.ts` and `analysisApi.test.ts` cover both trust boundaries and lifecycle offline.
   - `batchAnalysis.ts` — explicitly invoked Parts I-L client orchestration from local screened and
     cost-selected candidates through bounded context and a two-worker one-candidate analyzer into
     validated open recommendations. It reports success/failure progress, returns empty success
     without a request, isolates candidate failures while retaining valid siblings, rejects only an
     all-failed batch, filters negative decisions, captures local transcript provenance before
     awaiting, reuses only validated decisions with unchanged context and provenance within the page
-    session, and remains independent of React/editor state; `batchAnalysis.test.ts` covers that
+    session, and remains independent of React/editor state. Part U forwards caller cancellation,
+    stops dequeuing after abort, and excludes late results from recommendations, cache, and progress
+    while preserving isolated Part-T candidate failures; `batchAnalysis.test.ts` covers that
     boundary offline.
   - `costControls.ts` — pure Part-J pre-request validation, heavy-overlap deduplication,
     qualifying-signal priority, and strongest-ten selection plus versioned bounded-context keys and

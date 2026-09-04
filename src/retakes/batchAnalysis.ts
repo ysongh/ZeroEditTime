@@ -61,12 +61,21 @@ export interface RetakeBatchResult {
 
 export type RetakeContextAnalyzer = (
   context: RetakeAnalysisContext,
+  signal?: AbortSignal,
 ) => Promise<RetakeAnalysisResult>
 
 export interface RetakeBatchOptions {
   analyzeContext?: RetakeContextAnalyzer
   onProgress?: (progress: RetakeBatchProgress) => void
+  signal?: AbortSignal
 }
+
+// Keep one adapter identity across runs so the session cache remains useful for
+// the default analyzer while still forwarding each run's cancellation signal.
+const DEFAULT_RETAKE_CONTEXT_ANALYZER: RetakeContextAnalyzer = (
+  context,
+  signal,
+) => analyzeRetakeContext(context, undefined, undefined, signal)
 
 let sessionCaches = new WeakMap<
   RetakeContextAnalyzer,
@@ -190,7 +199,9 @@ export async function analyzeRetakes(
     buildScreenedRetakeCandidates(availableTranscript),
   )
   const total = candidates.length
-  const analyzeContext = options.analyzeContext ?? analyzeRetakeContext
+  const analyzeContext =
+    options.analyzeContext ?? DEFAULT_RETAKE_CONTEXT_ANALYZER
+  const signal = options.signal
   const cache = sessionCacheFor(analyzeContext)
   const recommendations: Array<RetakeRecommendation | null> = Array.from(
     { length: total },
@@ -203,9 +214,13 @@ export async function analyzeRetakes(
     { length: total },
   )
 
+  // A pre-cancelled run must not look as though analysis started.
+  signal?.throwIfAborted()
   options.onProgress?.({ completed: 0, total })
 
   function reportProgress(): void {
+    // Cancellation is a batch lifecycle event, not a failed candidate.
+    signal?.throwIfAborted()
     options.onProgress?.({
       completed: analyzedCount,
       total,
@@ -214,7 +229,11 @@ export async function analyzeRetakes(
   }
 
   async function runWorker(): Promise<void> {
-    while (nextCandidateIndex < total) {
+    while (true) {
+      // No worker may dequeue more model work after this run is superseded.
+      signal?.throwIfAborted()
+      if (nextCandidateIndex >= total) return
+
       const candidateIndex = nextCandidateIndex
       nextCandidateIndex++
       const candidate = candidates[candidateIndex]
@@ -245,9 +264,15 @@ export async function analyzeRetakes(
         )
         let shouldCache = false
         if (result === undefined) {
-          result = await analyzeContext(context)
+          result = await analyzeContext(context, signal)
+          // An analyzer is allowed to ignore AbortSignal. Recheck before its
+          // late result can enter recommendations or the shared session cache.
+          signal?.throwIfAborted()
           shouldCache = true
         }
+
+        // Cached work must obey the same cancellation boundary as fresh work.
+        signal?.throwIfAborted()
 
         recommendations[candidateIndex] = recommendationFromResult(
           candidate,
@@ -264,6 +289,10 @@ export async function analyzeRetakes(
         }
         analyzedCount++
       } catch (error) {
+        // Only this batch's signal cancels the whole run. An AbortError from a
+        // live analyzer (including its own timeout) remains an isolated Part-T
+        // candidate failure so valid sibling results still survive.
+        signal?.throwIfAborted()
         failedCount++
         failures[candidateIndex] = { cause: error }
       }
@@ -275,6 +304,7 @@ export async function analyzeRetakes(
   await Promise.all(
     Array.from({ length: workerCount }, () => runWorker()),
   )
+  signal?.throwIfAborted()
   if (analyzedCount === 0 && failedCount > 0) {
     const firstFailure = failures.find(
       (failure) => failure !== undefined,

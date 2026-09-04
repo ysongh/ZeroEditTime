@@ -6,6 +6,7 @@ import {
 } from './analysis'
 import {
   RETAKE_ANALYSIS_TIMEOUT_MS,
+  RetakeAnalysisCancelledError,
   analyzeRetakeContext,
 } from './analysisApi'
 import type { RetakeAnalysisContext } from './context'
@@ -220,6 +221,7 @@ describe('analyzeRetakeContext', () => {
   it('aborts and reports a controlled error when one analysis times out', async () => {
     vi.useFakeTimers()
     try {
+      const callerController = new AbortController()
       let signal: AbortSignal | null | undefined
       const fetchImpl: FetchLike = async (_input, init) => {
         signal = init?.signal
@@ -230,7 +232,12 @@ describe('analyzeRetakeContext', () => {
         })
       }
 
-      const analysis = analyzeRetakeContext(CONTEXT, fetchImpl)
+      const analysis = analyzeRetakeContext(
+        CONTEXT,
+        fetchImpl,
+        RETAKE_ANALYSIS_TIMEOUT_MS,
+        callerController.signal,
+      )
       const rejection = expect(analysis).rejects.toThrow(
         'Retake analysis timed out. Try again.',
       )
@@ -238,6 +245,61 @@ describe('analyzeRetakeContext', () => {
 
       await rejection
       expect(signal?.aborted).toBe(true)
+      expect(callerController.signal.aborted).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a pre-cancelled analysis before starting a request or deadline', async () => {
+    vi.useFakeTimers()
+    try {
+      const controller = new AbortController()
+      controller.abort()
+      const fetchImpl = vi.fn<FetchLike>()
+
+      await expect(
+        analyzeRetakeContext(
+          CONTEXT,
+          fetchImpl,
+          RETAKE_ANALYSIS_TIMEOUT_MS,
+          controller.signal,
+        ),
+      ).rejects.toEqual(new RetakeAnalysisCancelledError())
+      expect(fetchImpl).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts an in-flight request and clears its deadline when the caller cancels', async () => {
+    vi.useFakeTimers()
+    try {
+      const controller = new AbortController()
+      let requestSignal: AbortSignal | null | undefined
+      const fetchImpl: FetchLike = async (_input, init) => {
+        requestSignal = init?.signal
+        // Deliberately ignore abort to prove the caller-facing race still
+        // settles promptly for non-conforming transports and test doubles.
+        return await new Promise<Response>(() => {})
+      }
+
+      const analysis = analyzeRetakeContext(
+        CONTEXT,
+        fetchImpl,
+        RETAKE_ANALYSIS_TIMEOUT_MS,
+        controller.signal,
+      )
+      const rejection = expect(analysis).rejects.toMatchObject({
+        name: 'AbortError',
+        message: 'Retake analysis was cancelled.',
+      })
+      controller.abort()
+
+      await rejection
+      expect(requestSignal?.aborted).toBe(true)
       expect(vi.getTimerCount()).toBe(0)
     } finally {
       vi.useRealTimers()

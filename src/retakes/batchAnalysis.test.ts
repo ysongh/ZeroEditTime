@@ -119,6 +119,31 @@ describe('analyzeRetakes', () => {
     expect(progress).toEqual([])
   })
 
+  it('rejects a pre-cancelled batch before progress or analysis begins', async () => {
+    const controller = new AbortController()
+    const cancellation = new DOMException(
+      'A newer retake analysis started.',
+      'AbortError',
+    )
+    controller.abort(cancellation)
+    const progress: RetakeBatchProgress[] = []
+    let calls = 0
+
+    await expect(
+      analyzeRetakes(sequential(...FAILED_DASHBOARD), 10_000, {
+        analyzeContext: async () => {
+          calls++
+          return NEGATIVE_RESULT
+        },
+        onProgress: (event) => progress.push(event),
+        signal: controller.signal,
+      }),
+    ).rejects.toBe(cancellation)
+
+    expect(calls).toBe(0)
+    expect(progress).toEqual([])
+  })
+
   it('uses bounded concurrency, reports progress, and keeps source-ordered positives', async () => {
     const transcript = sequential(
       ...FAILED_DASHBOARD,
@@ -418,6 +443,107 @@ describe('analyzeRetakes', () => {
       completed: 2,
       failed: 1,
       total: 3,
+    })
+  })
+
+  it('cancels the whole batch without caching late results or starting queued work', async () => {
+    const transcript = sequential(
+      ...FAILED_DASHBOARD,
+      ...FAILED_DASHBOARD,
+      ...FAILED_DASHBOARD,
+    )
+    const controller = new AbortController()
+    const cancellation = new DOMException(
+      'The transcript was replaced.',
+      'AbortError',
+    )
+    const releaseInFlight = deferred()
+    const bothWorkersStarted = deferred()
+    const starts: number[] = []
+    const receivedSignals: Array<AbortSignal | undefined> = []
+    const progress: RetakeBatchProgress[] = []
+    let cancellingRun = true
+    const analyzeContext = async (
+      context: RetakeAnalysisContext,
+      signal?: AbortSignal,
+    ): Promise<RetakeAnalysisResult> => {
+      starts.push(context.candidate.startSourceMs)
+      receivedSignals.push(signal)
+      if (cancellingRun) {
+        if (starts.length === 2) bothWorkersStarted.resolve()
+        await releaseInFlight.promise
+      }
+      return NEGATIVE_RESULT
+    }
+
+    const analysis = analyzeRetakes(transcript, 20_000, {
+      analyzeContext,
+      onProgress: (event) => progress.push(event),
+      signal: controller.signal,
+    })
+    const rejection = expect(analysis).rejects.toBe(cancellation)
+
+    await bothWorkersStarted.promise
+    expect(starts).toEqual([0, 4_000])
+    expect(receivedSignals).toEqual([
+      controller.signal,
+      controller.signal,
+    ])
+
+    controller.abort(cancellation)
+    releaseInFlight.resolve()
+    await rejection
+
+    expect(starts).toEqual([0, 4_000])
+    expect(progress).toEqual([{ completed: 0, total: 3 }])
+
+    // Neither late in-flight result entered the session cache. A fresh run
+    // analyzes all three candidates, including the one cancellation never
+    // allowed either worker to dequeue.
+    cancellingRun = false
+    await expect(
+      analyzeRetakes(transcript, 20_000, { analyzeContext }),
+    ).resolves.toMatchObject({ candidateCount: 3, analyzedCount: 3 })
+    expect(starts).toEqual([0, 4_000, 0, 4_000, 8_000])
+    expect(receivedSignals.slice(2)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ])
+  })
+
+  it('keeps an analyzer AbortError isolated while the batch signal is live', async () => {
+    const controller = new AbortController()
+    const progress: RetakeBatchProgress[] = []
+    const result = await analyzeRetakes(
+      sequential(...FAILED_DASHBOARD, ...FAILED_DASHBOARD),
+      10_000,
+      {
+        analyzeContext: async (context, signal) => {
+          expect(signal).toBe(controller.signal)
+          if (context.candidate.startSourceMs === 0) {
+            throw new DOMException(
+              'The individual request was aborted.',
+              'AbortError',
+            )
+          }
+          return NEGATIVE_RESULT
+        },
+        onProgress: (event) => progress.push(event),
+        signal: controller.signal,
+      },
+    )
+
+    expect(controller.signal.aborted).toBe(false)
+    expect(result).toEqual({
+      candidateCount: 2,
+      analyzedCount: 1,
+      recommendations: [],
+    })
+    expect(progress.at(-1)).toEqual({
+      completed: 1,
+      failed: 1,
+      total: 2,
     })
   })
 

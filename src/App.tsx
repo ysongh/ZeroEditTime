@@ -75,6 +75,10 @@ type SuccessfulRetakeAnalysis = {
   recommendationCount: number
 }
 
+type ActiveRetakeAnalysis = {
+  controller: AbortController
+}
+
 type EditorAction =
   | { type: 'replace-edl'; edl: EDL }
   | { type: 'commit-edl'; edl: EDL }
@@ -215,16 +219,19 @@ function App() {
   // must never enter the EDL, output-time projection, editor history, or export.
   const retakeSourcePreviewRef = useRef<RetakeSourcePreview | null>(null)
   const retakeScriptCopyAttemptRef = useRef(0)
-  // This synchronous lock closes the same-render double-click window that the
-  // reducer status alone cannot see. Part U separately owns stale completion.
-  const retakeAnalysisRunningRef = useRef(false)
+  // Object identity is both the synchronous double-start lock and the
+  // latest-request token. Invalidating it before aborting makes every late
+  // callback from that request harmless, even after a newer run has started.
+  const activeRetakeAnalysisRef = useRef<ActiveRetakeAnalysis | null>(null)
 
   // Revoke the video URL and every still-image object URL on disposal.
   useEffect(() => {
     return () => {
       retakeSourcePreviewRef.current = null
       retakeScriptCopyAttemptRef.current += 1
-      retakeAnalysisRunningRef.current = false
+      const activeRetakeAnalysis = activeRetakeAnalysisRef.current
+      activeRetakeAnalysisRef.current = null
+      activeRetakeAnalysis?.controller.abort()
       if (objectUrlRef.current !== null) {
         URL.revokeObjectURL(objectUrlRef.current)
       }
@@ -380,12 +387,21 @@ function App() {
     setIsOverlayEditing(!isOverlayEditing)
   }
 
+  function cancelActiveRetakeAnalysis() {
+    const activeRetakeAnalysis = activeRetakeAnalysisRef.current
+    // Invalidate first: abort listeners may settle the old promise promptly,
+    // but none of its callbacks may observe themselves as current.
+    activeRetakeAnalysisRef.current = null
+    activeRetakeAnalysis?.controller.abort()
+  }
+
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const selected = event.target.files?.[0]
     if (selected === undefined) {
       return
     }
 
+    cancelActiveRetakeAnalysis()
     retakeSourcePreviewRef.current = null
     setSuccessfulRetakeAnalysis(null)
     clearRetakeScriptCopyFeedback()
@@ -571,8 +587,14 @@ function App() {
       const audio = await extractAudio(file)
       setTranscribePhase('transcribing')
       const nextTranscript = await transcribe(audio)
+      cancelActiveRetakeAnalysis()
       clearRetakeScriptCopyFeedback()
       setSuccessfulRetakeAnalysis(null)
+      setSelectedRetakeRecommendationId(null)
+      dispatchEditor({
+        type: 'update-retakes',
+        action: { type: 'set-retake-analysis-state', status: 'idle' },
+      })
       setTranscript(nextTranscript)
     } catch (err) {
       setTranscribeError(
@@ -585,18 +607,22 @@ function App() {
 
   // Part N is the first actual UI trigger for the inert Parts I-L pipeline.
   // Recommendations remain visible until a successful full/partial
-  // replacement. Part U later owns stale-request cancellation.
+  // replacement. The active object is also the latest-wins token: source or
+  // transcript replacement invalidates it before aborting the underlying work.
   async function handleRetakeAnalysis() {
     if (
       transcript === null ||
       edl === null ||
       retakes.retakeAnalysisStatus === 'analyzing' ||
-      retakeAnalysisRunningRef.current
+      activeRetakeAnalysisRef.current !== null
     ) {
       return
     }
 
-    retakeAnalysisRunningRef.current = true
+    const activeRetakeAnalysis: ActiveRetakeAnalysis = {
+      controller: new AbortController(),
+    }
+    activeRetakeAnalysisRef.current = activeRetakeAnalysis
     const analysisTranscript = transcript
     const analysisSourceId = edl.source.id
     const analysisSourceDurationMs = edl.source.duration * 1_000
@@ -613,7 +639,11 @@ function App() {
         analysisTranscript,
         analysisSourceDurationMs,
         {
+          signal: activeRetakeAnalysis.controller.signal,
           onProgress: (progress) => {
+            if (activeRetakeAnalysisRef.current !== activeRetakeAnalysis) {
+              return
+            }
             latestProgress = progress
             dispatchEditor({
               type: 'update-retakes',
@@ -626,6 +656,9 @@ function App() {
           },
         },
       )
+      if (activeRetakeAnalysisRef.current !== activeRetakeAnalysis) {
+        return
+      }
       dispatchEditor({
         type: 'update-retakes',
         action: {
@@ -659,6 +692,9 @@ function App() {
         },
       })
     } catch (cause) {
+      if (activeRetakeAnalysisRef.current !== activeRetakeAnalysis) {
+        return
+      }
       dispatchEditor({
         type: 'update-retakes',
         action: {
@@ -672,7 +708,9 @@ function App() {
         },
       })
     } finally {
-      retakeAnalysisRunningRef.current = false
+      if (activeRetakeAnalysisRef.current === activeRetakeAnalysis) {
+        activeRetakeAnalysisRef.current = null
+      }
     }
   }
 

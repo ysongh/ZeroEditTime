@@ -957,7 +957,7 @@ describe('App regression wiring', () => {
     expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(false)
     expect(state().retakes).toMatchObject({
       retakeRecommendations: [],
-      retakeAnalysisStatus: 'complete',
+      retakeAnalysisStatus: 'idle',
     })
     expect(state().edl).toBe(edlBefore)
     expect(state().history).toEqual(historyBefore)
@@ -1009,6 +1009,221 @@ describe('App regression wiring', () => {
     })
     await panel.props.onAnalyze()
     expect(harness.analyzeRetakes).toHaveBeenCalledTimes(2)
+  })
+
+  it('lets a new transcript analysis win every stale callback from the prior run', async () => {
+    const file = { name: 'source.mp4' } as File
+    const firstTranscript: Transcript = {
+      words: [
+        { text: 'First', start: 0, end: 0.4 },
+        { text: 'version.', start: 0.5, end: 0.9 },
+      ],
+    }
+    const secondTranscript: Transcript = {
+      words: [
+        { text: 'Second', start: 0, end: 0.4 },
+        { text: 'version.', start: 0.5, end: 0.9 },
+      ],
+    }
+    const staleRecommendation: RetakeRecommendation = {
+      id: 'stale-first-result',
+      startSourceMs: 0,
+      endSourceMs: 900,
+      reason: 'unclear-explanation',
+      severity: 'recommended',
+      title: 'Stale first result',
+      explanation: 'This belongs only to the first transcript.',
+      confidence: 0.8,
+      status: 'open',
+    }
+    const firstAnalysis = deferredValue<RetakeBatchResult>()
+    const secondAnalysis = deferredValue<RetakeBatchResult>()
+    let firstOptions: RetakeBatchOptions | undefined
+    let secondOptions: RetakeBatchOptions | undefined
+
+    harness.extractAudio.mockResolvedValue(
+      new Blob([new Uint8Array([1])], { type: 'audio/mpeg' }),
+    )
+    harness.transcribe
+      .mockResolvedValueOnce(firstTranscript)
+      .mockResolvedValueOnce(secondTranscript)
+    harness.analyzeRetakes.mockImplementation(
+      (
+        receivedTranscript: Transcript,
+        _sourceDurationMs: number,
+        options: RetakeBatchOptions,
+      ) => {
+        if (receivedTranscript === firstTranscript) {
+          firstOptions = options
+          return firstAnalysis.promise
+        }
+        if (receivedTranscript === secondTranscript) {
+          secondOptions = options
+          return secondAnalysis.promise
+        }
+        throw new Error('Unexpected analysis transcript.')
+      },
+    )
+
+    let view = selectSource(file, 'blob:source', 10)
+    await findButton(view, 'Transcribe').props.onClick?.()
+    view = renderApp()
+    let panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    const editor = editorReducerRecord()
+    type EditorStateView = {
+      edl: EDL | null
+      history: unknown[]
+      retakes: RetakeEditorState
+    }
+    const state = () => editor.state as EditorStateView
+    const edlBefore = state().edl
+    const historyBefore = state().history
+
+    const firstPending = panel.props.onAnalyze()
+    expect(firstOptions?.signal?.aborted).toBe(false)
+
+    // A successful replacement invalidates the old token before aborting it,
+    // resets lifecycle state, and makes a new run possible after rerender.
+    await findButton(view, 'Transcribe').props.onClick?.()
+    expect(firstOptions?.signal?.aborted).toBe(true)
+    expect(state().retakes.retakeAnalysisStatus).toBe('idle')
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    const secondRunTrigger = panel.props.onAnalyze
+    const secondPending = secondRunTrigger()
+    expect(harness.analyzeRetakes).toHaveBeenCalledTimes(2)
+    expect(secondOptions?.signal?.aborted).toBe(false)
+
+    secondOptions?.onProgress?.({ completed: 0, total: 2 })
+    firstOptions?.onProgress?.({ completed: 1, total: 1 })
+    expect(state().retakes).toMatchObject({
+      retakeAnalysisStatus: 'analyzing',
+      retakeAnalysisProgress: { completed: 0, total: 2 },
+    })
+
+    // The stale success executes its return/finally while B is still pending.
+    // Reusing B's pre-start callback then proves A's finally did not unlock B.
+    firstAnalysis.resolve({
+      candidateCount: 1,
+      analyzedCount: 1,
+      recommendations: [staleRecommendation],
+    })
+    await firstPending
+    await secondRunTrigger()
+    expect(harness.analyzeRetakes).toHaveBeenCalledTimes(2)
+    expect(state().retakes).toMatchObject({
+      retakeAnalysisStatus: 'analyzing',
+      retakeAnalysisProgress: { completed: 0, total: 2 },
+      retakeRecommendations: [],
+    })
+
+    secondOptions?.onProgress?.({ completed: 2, total: 2 })
+    secondAnalysis.resolve({
+      candidateCount: 2,
+      analyzedCount: 2,
+      recommendations: [],
+    })
+    await secondPending
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props).toMatchObject({
+      recommendations: [],
+      analysisStatus: 'complete',
+      analysisProgress: { completed: 2, total: 2 },
+      analysisError: undefined,
+      hasSuccessfulEmptyAnalysis: true,
+    })
+    expect(state().retakes.retakeRecommendations).toEqual([])
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+  })
+
+  it('aborts and ignores an analysis that outlives its source document', async () => {
+    const firstFile = { name: 'first.mp4' } as File
+    const secondFile = { name: 'second.mp4' } as File
+    const transcript: Transcript = {
+      words: [{ text: 'First source.', start: 0, end: 0.8 }],
+    }
+    const staleRecommendation: RetakeRecommendation = {
+      id: 'stale-source-result',
+      startSourceMs: 0,
+      endSourceMs: 800,
+      reason: 'unclear-explanation',
+      severity: 'recommended',
+      title: 'Stale source result',
+      explanation: 'This belongs only to the replaced source.',
+      confidence: 0.8,
+      status: 'open',
+    }
+    const analysis = deferredValue<RetakeBatchResult>()
+    let options: RetakeBatchOptions | undefined
+
+    harness.extractAudio.mockResolvedValue(
+      new Blob([new Uint8Array([1])], { type: 'audio/mpeg' }),
+    )
+    harness.transcribe.mockResolvedValue(transcript)
+    harness.analyzeRetakes.mockImplementation(
+      (
+        _transcript: Transcript,
+        _sourceDurationMs: number,
+        receivedOptions: RetakeBatchOptions,
+      ) => {
+        options = receivedOptions
+        return analysis.promise
+      },
+    )
+
+    let view = selectSource(firstFile, 'blob:first', 10)
+    await findButton(view, 'Transcribe').props.onClick?.()
+    view = renderApp()
+    const panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    const pending = panel.props.onAnalyze()
+    expect(options?.signal?.aborted).toBe(false)
+
+    vi.mocked(URL.createObjectURL).mockReturnValueOnce('blob:second')
+    findFileInput(view).props.onChange?.({ target: { files: [secondFile] } })
+    expect(options?.signal?.aborted).toBe(true)
+    const editor = editorReducerRecord()
+    const state = () =>
+      editor.state as {
+        edl: EDL | null
+        history: unknown[]
+        retakes: RetakeEditorState
+      }
+    expect(state().retakes).toEqual({
+      retakeRecommendations: [],
+      retakeAnalysisStatus: 'idle',
+    })
+
+    options?.onProgress?.({ completed: 1, total: 1 })
+    analysis.resolve({
+      candidateCount: 1,
+      analyzedCount: 1,
+      recommendations: [staleRecommendation],
+    })
+    await pending
+    expect(state().edl).toBeNull()
+    expect(state().history).toEqual([])
+    expect(state().retakes).toEqual({
+      retakeRecommendations: [],
+      retakeAnalysisStatus: 'idle',
+    })
   })
 
   it('stores retake advice outside EDL Undo and clears it with the source document', () => {

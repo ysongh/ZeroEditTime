@@ -19,6 +19,13 @@ import {
 
 export const RETAKE_ANALYSIS_TIMEOUT_MS = 30_000
 
+export class RetakeAnalysisCancelledError extends Error {
+  constructor() {
+    super('Retake analysis was cancelled.')
+    this.name = 'AbortError'
+  }
+}
+
 function requestTimeoutMs(value: number): number {
   return Number.isFinite(value) && value > 0
     ? value
@@ -37,7 +44,12 @@ export async function analyzeRetakeContext(
   context: RetakeAnalysisContext,
   fetchImpl: FetchLike = fetch,
   timeoutMs = RETAKE_ANALYSIS_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<RetakeAnalysisResult> {
+  if (signal?.aborted) {
+    throw new RetakeAnalysisCancelledError()
+  }
+
   const boundedContext = normalizeRetakeAnalysisContext(context)
   if (boundedContext === null) {
     throw new Error('Cannot analyze a malformed retake context.')
@@ -46,6 +58,18 @@ export async function analyzeRetakeContext(
   const controller = new AbortController()
   let didTimeOut = false
   let timeoutId: ReturnType<typeof setTimeout> | undefined
+  let rejectCancellation: ((reason: Error) => void) | undefined
+  const cancellation = new Promise<never>((_resolve, reject) => {
+    rejectCancellation = reject
+  })
+  const cancelRequest = () => {
+    const error = new RetakeAnalysisCancelledError()
+    // Reject the caller-facing race before aborting the transport so an
+    // AbortError from fetch cannot replace the controlled cancellation.
+    rejectCancellation?.(error)
+    controller.abort(error)
+  }
+  signal?.addEventListener('abort', cancelRequest, { once: true })
   const timeout = new Promise<never>((_resolve, reject) => {
     timeoutId = setTimeout(() => {
       didTimeOut = true
@@ -61,7 +85,14 @@ export async function analyzeRetakeContext(
       (input, init) =>
         fetchImpl(input, { ...init, signal: controller.signal }),
     )
-    reply = await Promise.race([request, timeout])
+    reply = await Promise.race([
+      request,
+      timeout,
+      ...(signal === undefined ? [] : [cancellation]),
+    ])
+    if (signal?.aborted) {
+      throw new RetakeAnalysisCancelledError()
+    }
   } catch (cause) {
     if (didTimeOut) {
       throw new Error('Retake analysis timed out. Try again.', { cause })
@@ -69,6 +100,7 @@ export async function analyzeRetakeContext(
     throw cause
   } finally {
     if (timeoutId !== undefined) clearTimeout(timeoutId)
+    signal?.removeEventListener('abort', cancelRequest)
   }
   const result = extractRetakeAnalysisResult(reply)
   if (result === null) {
