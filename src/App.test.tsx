@@ -501,6 +501,7 @@ describe('App regression wiring', () => {
       recommendations: [recommendation],
       analysisStatus: 'complete',
       analysisProgress: { completed: 1, total: 1 },
+      hasSuccessfulEmptyAnalysis: false,
     })
 
     const media: VideoLike = {
@@ -668,6 +669,7 @@ describe('App regression wiring', () => {
     expect(panel.props).toMatchObject({
       recommendations: [],
       copyFeedback: null,
+      hasSuccessfulEmptyAnalysis: false,
     })
     retakeTrack = findComponent<RetakeTimelineTrackProps>(
       view,
@@ -746,6 +748,7 @@ describe('App regression wiring', () => {
       'retakes panel',
     )
     expect(panel.props.recommendations).toEqual([])
+    expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(false)
     expect(
       findComponent<RetakeTimelineTrackProps>(
         view,
@@ -783,6 +786,7 @@ describe('App regression wiring', () => {
       'retakes panel',
     )
     expect(panel.props.recommendations).toEqual([])
+    expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(false)
     expect(
       findComponent<RetakeTimelineTrackProps>(
         view,
@@ -791,6 +795,130 @@ describe('App regression wiring', () => {
       ).props.recommendations,
     ).toEqual([])
     expect(state().retakes.retakeRecommendations).toHaveLength(1)
+  })
+
+  it('shows a successful empty result only for the fully checked current source transcript', async () => {
+    const file = { name: 'source.mp4' } as File
+    const transcript: Transcript = {
+      words: [
+        { text: 'A', start: 0, end: 0.4 },
+        { text: 'clean', start: 0.5, end: 0.9 },
+        { text: 'take.', start: 1, end: 1.4 },
+      ],
+    }
+    const audio = new Blob([new Uint8Array([1])], {
+      type: 'audio/mpeg',
+    })
+    harness.extractAudio.mockResolvedValue(audio)
+    harness.transcribe.mockResolvedValue(transcript)
+    harness.analyzeRetakes.mockResolvedValue({
+      candidateCount: 0,
+      analyzedCount: 0,
+      recommendations: [],
+    })
+
+    let view = selectSource(file, 'blob:source', 10)
+    await findButton(view, 'Transcribe').props.onClick?.()
+    view = renderApp()
+    let panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(false)
+
+    const editor = editorReducerRecord()
+    type EditorStateView = {
+      edl: EDL | null
+      history: unknown[]
+      retakes: RetakeEditorState
+    }
+    const state = () => editor.state as EditorStateView
+    const edlBefore = state().edl
+    const historyBefore = state().history
+
+    await panel.props.onAnalyze()
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(harness.analyzeRetakes).toHaveBeenCalledWith(
+      transcript,
+      10_000,
+      expect.any(Object),
+    )
+    expect(panel.props).toMatchObject({
+      recommendations: [],
+      analysisStatus: 'complete',
+      analysisProgress: { completed: 0, total: 0 },
+      hasSuccessfulEmptyAnalysis: true,
+    })
+    expect(state().retakes.retakeRecommendations).toEqual([])
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toBe(historyBefore)
+    expect(
+      findComponent<RetakeTimelineTrackProps>(
+        view,
+        RetakeTimelineTrack,
+        'retake timeline track',
+      ).props.recommendations,
+    ).toEqual([])
+
+    if (edlBefore === null) throw new Error('Expected an initialized EDL.')
+    editor.dispatch({
+      type: 'commit-edl',
+      edl: applyRemovedRange(edlBefore, 2, 3),
+    })
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(true)
+    editor.dispatch({ type: 'undo' })
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(true)
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toEqual(historyBefore)
+
+    // A new transcript generation invalidates the claim even if a test double
+    // returns the same object: the new transcript has not itself been checked.
+    await findButton(view, 'Transcribe').props.onClick?.()
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(false)
+    expect(state().retakes).toMatchObject({
+      retakeRecommendations: [],
+      retakeAnalysisStatus: 'complete',
+    })
+    expect(state().edl).toBe(edlBefore)
+    expect(state().history).toEqual(historyBefore)
+
+    harness.analyzeRetakes.mockResolvedValueOnce({
+      candidateCount: 2,
+      analyzedCount: 1,
+      recommendations: [],
+    })
+    await panel.props.onAnalyze()
+    view = renderApp()
+    panel = findComponent<RetakesPanelProps>(
+      view,
+      RetakesPanel,
+      'retakes panel',
+    )
+    expect(panel.props.hasSuccessfulEmptyAnalysis).toBe(false)
   })
 
   it('stores retake advice outside EDL Undo and clears it with the source document', () => {

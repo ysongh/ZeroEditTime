@@ -68,6 +68,13 @@ type RetakeSourcePreview = {
   end: number
 }
 
+type SuccessfulRetakeAnalysis = {
+  transcript: Transcript
+  sourceId: string
+  sourceDurationMs: number
+  recommendationCount: number
+}
+
 type EditorAction =
   | { type: 'replace-edl'; edl: EDL }
   | { type: 'commit-edl'; edl: EDL }
@@ -195,6 +202,12 @@ function App() {
     useState<string | null>(null)
   const [retakeScriptCopyFeedback, setRetakeScriptCopyFeedback] =
     useState<RetakeScriptCopyFeedback | null>(null)
+  // An empty result has no recommendation-level Part-K fingerprint. Retain the
+  // exact successful input locally so "nothing found" is shown only for the
+  // source transcript that was actually checked, never merely because every
+  // visible recommendation was closed or filtered as stale.
+  const [successfulRetakeAnalysis, setSuccessfulRetakeAnalysis] =
+    useState<SuccessfulRetakeAnalysis | null>(null)
   const objectUrlRef = useRef<string | null>(null)
   const overlayObjectUrlsRef = useRef<Set<string>>(new Set())
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -370,6 +383,7 @@ function App() {
     }
 
     retakeSourcePreviewRef.current = null
+    setSuccessfulRetakeAnalysis(null)
     clearRetakeScriptCopyFeedback()
 
     if (objectUrlRef.current !== null) {
@@ -554,6 +568,7 @@ function App() {
       setTranscribePhase('transcribing')
       const nextTranscript = await transcribe(audio)
       clearRetakeScriptCopyFeedback()
+      setSuccessfulRetakeAnalysis(null)
       setTranscript(nextTranscript)
     } catch (err) {
       setTranscribeError(
@@ -576,6 +591,11 @@ function App() {
       return
     }
 
+    const analysisTranscript = transcript
+    const analysisSourceId = edl.source.id
+    const analysisSourceDurationMs = edl.source.duration * 1_000
+    setSuccessfulRetakeAnalysis(null)
+
     dispatchEditor({
       type: 'update-retakes',
       action: { type: 'set-retake-analysis-state', status: 'analyzing' },
@@ -584,8 +604,8 @@ function App() {
 
     try {
       const result = await analyzeRetakes(
-        transcript,
-        edl.source.duration * 1_000,
+        analysisTranscript,
+        analysisSourceDurationMs,
         {
           onProgress: (progress) => {
             latestProgress = progress
@@ -609,6 +629,16 @@ function App() {
       })
       setSelectedRetakeRecommendationId(null)
       clearRetakeScriptCopyFeedback()
+      setSuccessfulRetakeAnalysis(
+        result.analyzedCount === result.candidateCount
+          ? {
+              transcript: analysisTranscript,
+              sourceId: analysisSourceId,
+              sourceDurationMs: analysisSourceDurationMs,
+              recommendationCount: result.recommendations.length,
+            }
+          : null,
+      )
       dispatchEditor({
         type: 'update-retakes',
         action: {
@@ -821,6 +851,17 @@ function App() {
     currentRetakeRecommendations.filter(
       (recommendation) => recommendation.status === 'open',
     )
+  const hasSuccessfulEmptyRetakeAnalysis =
+    transcript !== null &&
+    edl !== null &&
+    retakes.retakeAnalysisStatus === 'complete' &&
+    retakes.retakeRecommendations.length === 0 &&
+    successfulRetakeAnalysis !== null &&
+    successfulRetakeAnalysis.recommendationCount === 0 &&
+    successfulRetakeAnalysis.transcript === transcript &&
+    successfulRetakeAnalysis.sourceId === edl.source.id &&
+    successfulRetakeAnalysis.sourceDurationMs ===
+      edl.source.duration * 1_000
   const visibleSelectedRetakeRecommendationId =
     selectedRetakeRecommendationId !== null &&
     openCurrentRetakeRecommendations.some(
@@ -1089,6 +1130,9 @@ function App() {
                   recommendations={openCurrentRetakeRecommendations}
                   analysisStatus={retakes.retakeAnalysisStatus}
                   analysisProgress={retakes.retakeAnalysisProgress}
+                  hasSuccessfulEmptyAnalysis={
+                    hasSuccessfulEmptyRetakeAnalysis
+                  }
                   onAnalyze={handleRetakeAnalysis}
                   onPlaySourceRange={playRetakeSourceRange}
                   copyFeedback={visibleRetakeScriptCopyFeedback}

@@ -24,6 +24,7 @@ export interface RetakesPanelProps {
   recommendations: readonly RetakeRecommendation[]
   analysisStatus: RetakeAnalysisStatus
   analysisProgress?: Readonly<RetakeAnalysisProgress>
+  hasSuccessfulEmptyAnalysis: boolean
   onAnalyze: () => void | Promise<void>
   onPlaySourceRange: (
     startSourceMs: number,
@@ -102,6 +103,7 @@ export default function RetakesPanel({
   recommendations,
   analysisStatus,
   analysisProgress,
+  hasSuccessfulEmptyAnalysis,
   onAnalyze,
   onPlaySourceRange,
   copyFeedback,
@@ -113,6 +115,10 @@ export default function RetakesPanel({
     (recommendation) => recommendation.status === 'open',
   )
   const isAnalyzing = analysisStatus === 'analyzing'
+  const showSuccessfulEmptyState =
+    hasSuccessfulEmptyAnalysis &&
+    analysisStatus === 'complete' &&
+    recommendations.length === 0
 
   return (
     <section style={PANEL_STYLE} aria-labelledby="retakes-panel-heading">
@@ -129,9 +135,26 @@ export default function RetakesPanel({
           <h2 id="retakes-panel-heading" style={{ margin: 0 }}>
             Retakes
           </h2>
-          <p style={{ marginTop: 4, fontSize: 14, opacity: 0.75 }}>
-            {recommendationSummary(openRecommendations.length)}
-          </p>
+          {showSuccessfulEmptyState ? (
+            <div style={{ marginTop: 6 }}>
+              <p
+                style={{
+                  color: 'var(--text-h)',
+                  fontSize: 14,
+                  fontWeight: 600,
+                }}
+              >
+                No retakes recommended
+              </p>
+              <p style={{ marginTop: 3, fontSize: 14, opacity: 0.75 }}>
+                The sections we checked appear fixable through normal editing.
+              </p>
+            </div>
+          ) : (
+            <p style={{ marginTop: 4, fontSize: 14, opacity: 0.75 }}>
+              {recommendationSummary(openRecommendations.length)}
+            </p>
+          )}
           {isAnalyzing && analysisProgress !== undefined && (
             <p role="status" style={{ marginTop: 4, fontSize: 13 }}>
               Checked {analysisProgress.completed} of {analysisProgress.total}{' '}

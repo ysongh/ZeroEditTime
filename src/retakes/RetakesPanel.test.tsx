@@ -79,6 +79,7 @@ function renderPanel(
   return RetakesPanel({
     recommendations: [RECOMMENDATION, SECOND_RECOMMENDATION],
     analysisStatus: 'complete',
+    hasSuccessfulEmptyAnalysis: false,
     onAnalyze: vi.fn(),
     onPlaySourceRange: vi.fn(),
     copyFeedback: null,
@@ -316,5 +317,57 @@ describe('RetakesPanel', () => {
 
     expect(textOf(view)).toContain('0 open recommendations.')
     expect(findHosts(view, 'article')).toEqual([])
+  })
+
+  it('treats a proven zero-recommendation result as a successful result', () => {
+    const view = renderPanel({
+      recommendations: [],
+      analysisStatus: 'complete',
+      hasSuccessfulEmptyAnalysis: true,
+    })
+    const text = textOf(view)
+
+    expect(text).toContain('No retakes recommended')
+    expect(text).toContain(
+      'The sections we checked appear fixable through normal editing.',
+    )
+    expect(text).not.toContain('0 open recommendations.')
+    expect(findHosts(view, 'article')).toEqual([])
+    expect(findButton(view, 'Check for retakes').props.disabled).not.toBe(
+      true,
+    )
+  })
+
+  it('does not mistake other zero-visible states for successful analysis', () => {
+    for (const analysisStatus of ['idle', 'analyzing', 'error'] as const) {
+      const view = renderPanel({
+        recommendations: [],
+        analysisStatus,
+        hasSuccessfulEmptyAnalysis: true,
+      })
+      expect(textOf(view)).not.toContain('No retakes recommended')
+      expect(textOf(view)).toContain('0 open recommendations.')
+    }
+
+    const closed = renderPanel({
+      recommendations: [
+        { ...RECOMMENDATION, status: 'dismissed' },
+        { ...SECOND_RECOMMENDATION, status: 'resolved' },
+      ],
+      hasSuccessfulEmptyAnalysis: true,
+    })
+    expect(textOf(closed)).not.toContain('No retakes recommended')
+    expect(textOf(closed)).toContain('0 open recommendations.')
+
+    const withRecommendation = renderPanel({
+      recommendations: [RECOMMENDATION],
+      hasSuccessfulEmptyAnalysis: true,
+    })
+    expect(textOf(withRecommendation)).not.toContain(
+      'No retakes recommended',
+    )
+    expect(textOf(withRecommendation)).toContain(
+      '1 section may be worth recording again.',
+    )
   })
 })
