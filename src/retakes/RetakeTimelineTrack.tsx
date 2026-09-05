@@ -1,5 +1,9 @@
 import type { CSSProperties } from 'react'
 import type { RetakeRecommendation } from './recommendation'
+import {
+  formatRetakeSourceRangeForSpeech,
+  formatRetakeSourceTime,
+} from './sourceTime'
 
 export interface RetakeTimelineTrackProps {
   recommendations: readonly RetakeRecommendation[]
@@ -10,15 +14,6 @@ export interface RetakeTimelineTrackProps {
 }
 
 const MARKER_WIDTH_PX = 24
-
-function formatSourceTime(sourceMs: number): string {
-  const totalSeconds = Math.max(0, Math.floor(sourceMs / 1_000))
-  const seconds = String(totalSeconds % 60).padStart(2, '0')
-  const totalMinutes = Math.floor(totalSeconds / 60)
-  const minutes = String(totalMinutes % 60).padStart(2, '0')
-  const hours = Math.floor(totalMinutes / 60)
-  return hours === 0 ? `${minutes}:${seconds}` : `${hours}:${minutes}:${seconds}`
-}
 
 function markerPosition(
   sourceMs: number,
@@ -80,13 +75,18 @@ export default function RetakeTimelineTrack({
       >
         {openRecommendations.map((recommendation) => {
           const selected = recommendation.id === selectedRecommendationId
-          const start = formatSourceTime(recommendation.startSourceMs)
-          const end = formatSourceTime(recommendation.endSourceMs)
+          const start = formatRetakeSourceTime(recommendation.startSourceMs)
+          const end = formatRetakeSourceTime(recommendation.endSourceMs)
+          const spokenRange = formatRetakeSourceRangeForSpeech(
+            recommendation.startSourceMs,
+            recommendation.endSourceMs,
+          )
           return (
             <button
               key={recommendation.id}
               type="button"
-              aria-label={`${recommendation.title}, ${start} to ${end} source time`}
+              className="retake-timeline-marker"
+              aria-label={`Seek to ${recommendation.title}. ${spokenRange}.`}
               aria-pressed={selected}
               title={`${recommendation.title} · ${start}–${end}`}
               onClick={() => {
@@ -113,7 +113,7 @@ export default function RetakeTimelineTrack({
                 ),
               }}
             >
-              <span aria-hidden="true">▲</span>
+              <span aria-hidden="true">{selected ? '▲' : '△'}</span>
             </button>
           )
         })}

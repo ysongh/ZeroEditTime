@@ -920,7 +920,7 @@ empty folders for future phases.
   valid/older advice as appropriate, source bounds, and unchanged EDL/history. At this boundary,
   request identity, cross-source abort, and latest-wins state guards remained deferred to Part U;
   Part T adds no broad accessibility audit (Part V).
-- **Phase 11, Part U (done; stop here):** every user-triggered retake run now owns one App-level
+- **Phase 11, Part U (done):** every user-triggered retake run now owns one App-level
   request token and `AbortController`. Selecting a replacement source, successfully replacing the
   transcript, or unmounting invalidates that token before aborting its work; transcript replacement
   also resets the advisory lifecycle to `idle`, allowing the new input to be analyzed immediately
@@ -938,6 +938,23 @@ empty folders for future phases.
   and App regressions cover pre/in-flight cancellation, signal forwarding, queued-work and cache
   suppression, transcript/source replacement, newer-result authority, and old-finally ownership,
   with EDL/history unchanged. Part U adds no cancel button or broad accessibility audit (Part V).
+- **Phase 11, Part V (done; stop here):** Retakes-panel actions and source-time markers keep
+  native button keyboard behavior and now have descriptive names containing their action,
+  recommendation title, and exact spoken source range. The shared `sourceTime.ts` keeps compact
+  visual clocks while spelling out hours, minutes, and fractional seconds for assistive technology;
+  card clocks are hidden from screen readers in favor of the equivalent visually hidden wording.
+  Each article is named by its heading. Scoped focus outlines cover panel controls and markers;
+  marker outlines sit inside the clipped rail and focused markers stack above neighbors. Dismiss
+  and resolve move focus from the departing button to the next card's Play control, the previous
+  card, the enabled analysis button, or finally the panel heading while analysis is busy. They do
+  not move unrelated focus. A persistent polite status region announces counts, initial checking,
+  progress, partial outcomes, and successful-empty results. Each script button describes its own
+  persistent copy status/error regions, retaining visible progress, success, and retry feedback.
+  Severity remains written text at full opacity; selected markers also change from an outlined to
+  a filled triangle alongside `aria-pressed`, so state has a non-color cue. Focused offline tests
+  cover names, spoken timestamp precision/boundaries, native controls, announcement associations,
+  and focus fallback ordering. These tests verify markup and controller behavior, not a real
+  browser/screen-reader audit. Part W's comprehensive test audit remains the next step.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1228,13 +1245,17 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part U. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part V. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
   state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, the
   Part-Q marker lane, Part-R script/workflow UX, Part-S successful-empty presentation, Part-T
-  partial/error policy, and Part-U cancellation/latest-wins handling; Parts G-H's conservative
-  decision and replacement-script policies live in the existing server relay.
+  partial/error policy, Part-U cancellation/latest-wins handling, and Part-V accessibility;
+  Parts G-H's conservative decision and replacement-script policies live in the existing server
+  relay.
+  - `sourceTime.ts` — shared compact source clocks and spoken source-range formatting with explicit
+    hour/minute/second units and millisecond precision. `sourceTime.test.ts` covers unit boundaries,
+    precision, and invalid-value guards; both the panel and marker lane use this presentation layer.
   - `recommendation.ts` — pure typed recommendation contract plus the singular runtime
     normalization/validation boundary for a completed recommendation. It enforces half-open source
     milliseconds, source-duration bounds, enum/text/numeric validity, normalized confidence,
@@ -1315,18 +1336,21 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     outside content Undo and reset behavior.
   - `RetakesPanel.tsx` — controlled Part-N recommendation UI plus the explicit analysis trigger,
     Part-O modest severity pills, Part-P exact source-range Play action, Part-R suggested-script
-    feedback/resolution UX, Part-S successful-empty result, and Part-T aggregate partial/error
-    outcomes. It renders/counts open advice,
+    feedback/resolution UX, Part-S successful-empty result, Part-T aggregate partial/error
+    outcomes, and Part-V contextual action names, spoken timestamps, live announcements, and focus
+    recovery after closing a card. It renders/counts open advice,
     humanizes every severity, displays original-source ranges and optional exact-copy script blocks,
     forwards playback/dismiss/resolve actions, and distinguishes a proven zero-result completion
     from merely having no visible open cards without touching the EDL.
     `RetakesPanel.test.tsx` locks all three severity presentations, exact playback/copy values,
     workflow callbacks, controlled feedback, compact rendering, optionality, exact empty-state copy,
-    and retryable partial/error presentation; App's regression suite mocks external boundaries and
+    retryable partial/error presentation, accessible names/status associations, and focus fallbacks;
+    App's regression suite mocks external boundaries and
     locks complete state/play/copy/resolve/empty/partial/failure integration offline.
   - `RetakeTimelineTrack.tsx` — isolated Part-Q original-source marker lane. It renders only current
     open recommendations, positions compact buttons from source start/duration, exposes ephemeral
     pressed selection, and forwards exact select/seek actions without any parent drag/click surface.
+    Part V adds spoken range/action names, a scoped focus target, and a visible selection shape cue.
     `RetakeTimelineTrack.test.tsx` locks geometry, ordering, filtering, selection/callbacks, safe
     endpoints, invalid-duration behavior, and interaction isolation; App coverage locks freshness,
     source seek, dismissal, and EDL/history isolation.

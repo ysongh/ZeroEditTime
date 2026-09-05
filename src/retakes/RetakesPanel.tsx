@@ -2,6 +2,7 @@
 // controlled view: App owns analysis, advisory state, and bounded source
 // playback; the sibling Part-Q track owns markers, Part R completes the
 // suggested-script/resolved workflow, and Part T supplies aggregate outcomes.
+// Part V adds contextual names, announcements, and keyboard focus handling.
 
 import type { CSSProperties } from 'react'
 import type {
@@ -12,6 +13,10 @@ import type {
   RetakeRecommendation,
   RetakeSeverity,
 } from './recommendation'
+import {
+  formatRetakeSourceRangeForSpeech,
+  formatRetakeSourceTime,
+} from './sourceTime'
 
 export type RetakeScriptCopyStatus = 'copying' | 'copied' | 'error'
 
@@ -85,19 +90,29 @@ const SEVERITY_PRESENTATION = {
   Record<RetakeSeverity, { label: string; style: CSSProperties }>
 >
 
-/** Format an ORIGINAL-SOURCE millisecond position for compact display. */
-function formatRetakeSourceTime(sourceMs: number): string {
-  const totalSeconds = Math.max(0, Math.floor(sourceMs / 1_000))
-  const seconds = String(totalSeconds % 60).padStart(2, '0')
-  const totalMinutes = Math.floor(totalSeconds / 60)
-  const minutes = String(totalMinutes % 60).padStart(2, '0')
-  const hours = Math.floor(totalMinutes / 60)
-  return hours === 0 ? `${minutes}:${seconds}` : `${hours}:${minutes}:${seconds}`
-}
-
 function recommendationSummary(openCount: number): string {
   if (openCount === 0) return '0 open recommendations.'
   return `${openCount} section${openCount === 1 ? '' : 's'} may be worth recording again.`
+}
+
+/** Keep keyboard navigation in the panel when its focused card is removed. */
+function focusAfterRemovingCard(button: HTMLButtonElement): void {
+  if (button.ownerDocument.activeElement !== button) return
+
+  const item = button.closest('li')
+  const panel = button.closest('section')
+  const target =
+    item?.nextElementSibling?.querySelector<HTMLButtonElement>(
+      'button[data-retake-play]',
+    ) ??
+    item?.previousElementSibling?.querySelector<HTMLButtonElement>(
+      'button[data-retake-play]',
+    ) ??
+    panel?.querySelector<HTMLButtonElement>(
+      'button[data-retake-analyze]:not(:disabled)',
+    ) ??
+    panel?.querySelector<HTMLHeadingElement>('h2')
+  target?.focus()
 }
 
 export default function RetakesPanel({
@@ -132,7 +147,11 @@ export default function RetakesPanel({
   const errorMessage = analysisError?.trim() || 'Try again.'
 
   return (
-    <section style={PANEL_STYLE} aria-labelledby="retakes-panel-heading">
+    <section
+      className="retakes-panel"
+      style={PANEL_STYLE}
+      aria-labelledby="retakes-panel-heading"
+    >
       <div
         style={{
           display: 'flex',
@@ -143,42 +162,45 @@ export default function RetakesPanel({
         }}
       >
         <div>
-          <h2 id="retakes-panel-heading" style={{ margin: 0 }}>
+          <h2 id="retakes-panel-heading" tabIndex={-1} style={{ margin: 0 }}>
             Retakes
           </h2>
-          {showSuccessfulEmptyState ? (
-            <div style={{ marginTop: 6 }}>
-              <p
-                style={{
-                  color: 'var(--text-h)',
-                  fontSize: 14,
-                  fontWeight: 600,
-                }}
-              >
-                No retakes recommended
+          <div role="status" aria-live="polite" aria-atomic="true">
+            {showSuccessfulEmptyState ? (
+              <div style={{ marginTop: 6 }}>
+                <p
+                  style={{
+                    color: 'var(--text-h)',
+                    fontSize: 14,
+                    fontWeight: 600,
+                  }}
+                >
+                  No retakes recommended
+                </p>
+                <p style={{ marginTop: 3, fontSize: 14 }}>
+                  The sections we checked appear fixable through normal editing.
+                </p>
+              </div>
+            ) : (
+              <p style={{ marginTop: 4, fontSize: 14 }}>
+                {recommendationSummary(openRecommendations.length)}
               </p>
-              <p style={{ marginTop: 3, fontSize: 14, opacity: 0.75 }}>
-                The sections we checked appear fixable through normal editing.
+            )}
+            {isAnalyzing && (
+              <p style={{ marginTop: 4, fontSize: 13 }}>
+                {analysisProgress === undefined
+                  ? 'Checking for retakes…'
+                  : `Checked ${checkedCount} of ${analysisProgress.total} sections…`}
               </p>
-            </div>
-          ) : (
-            <p style={{ marginTop: 4, fontSize: 14, opacity: 0.75 }}>
-              {recommendationSummary(openRecommendations.length)}
-            </p>
-          )}
-          {isAnalyzing && analysisProgress !== undefined && (
-            <p role="status" style={{ marginTop: 4, fontSize: 13 }}>
-              Checked {checkedCount} of {analysisProgress.total}{' '}
-              sections…
-            </p>
-          )}
-          {showPartialResult && (
-            <p role="status" style={{ marginTop: 4, fontSize: 13 }}>
-              Checked {analysisProgress.total} sections.{' '}
-              {analysisProgress.completed} completed; {failedCount} could not
-              be analyzed.
-            </p>
-          )}
+            )}
+            {showPartialResult && (
+              <p style={{ marginTop: 4, fontSize: 13 }}>
+                Checked {analysisProgress.total} sections.{' '}
+                {analysisProgress.completed} completed; {failedCount} could not
+                be analyzed.
+              </p>
+            )}
+          </div>
           {analysisStatus === 'error' && (
             <div
               role="alert"
@@ -191,6 +213,8 @@ export default function RetakesPanel({
         </div>
         <button
           type="button"
+          data-retake-analyze
+          aria-label={isAnalyzing ? 'Checking for retakes' : undefined}
           disabled={isAnalyzing}
           onClick={() => void onAnalyze()}
         >
@@ -216,6 +240,12 @@ export default function RetakesPanel({
               recommendation.startSourceMs,
             )
             const end = formatRetakeSourceTime(recommendation.endSourceMs)
+            const spokenRange = formatRetakeSourceRangeForSpeech(
+              recommendation.startSourceMs,
+              recommendation.endSourceMs,
+            )
+            const actionContext = `${recommendation.title}. ${spokenRange}.`
+            const cardId = `retake-card-${encodeURIComponent(recommendation.id)}`
             const suggestedScript = recommendation.suggestedScript
             const copyStatus =
               copyFeedback?.recommendationId === recommendation.id
@@ -224,13 +254,14 @@ export default function RetakesPanel({
             return (
               <li key={recommendation.id}>
                 <article
+                  aria-labelledby={`${cardId}-heading`}
                   style={{
                     padding: 10,
                     border: '1px solid var(--border)',
                     borderRadius: 6,
                   }}
                 >
-                  <p style={{ fontSize: 13, opacity: 0.75 }}>
+                  <p style={{ fontSize: 13 }}>
                     <span
                       style={{
                         ...SEVERITY_BADGE_STYLE,
@@ -241,13 +272,18 @@ export default function RetakesPanel({
                     </span>
                     {' · '}
                     <span
+                      aria-hidden="true"
                       title={`Original source time: ${(recommendation.startSourceMs / 1_000).toFixed(3)}s–${(recommendation.endSourceMs / 1_000).toFixed(3)}s`}
                       style={{ fontVariantNumeric: 'tabular-nums' }}
                     >
                       {start} – {end}
                     </span>
+                    <span className="retake-sr-only">
+                      {spokenRange}.
+                    </span>
                   </p>
                   <h3
+                    id={`${cardId}-heading`}
                     style={{
                       margin: '4px 0 0',
                       color: 'var(--text-h)',
@@ -292,6 +328,8 @@ export default function RetakesPanel({
                       >
                         <button
                           type="button"
+                          aria-label={`Copy script for ${actionContext}`}
+                          aria-describedby={`${cardId}-copy-status ${cardId}-copy-error`}
                           disabled={copyStatus === 'copying'}
                           onClick={() =>
                             void onCopyScript(
@@ -302,21 +340,29 @@ export default function RetakesPanel({
                         >
                           Copy script
                         </button>
-                        {copyStatus === 'copying' && (
-                          <span role="status" style={{ fontSize: 13 }}>
-                            Copying…
-                          </span>
-                        )}
-                        {copyStatus === 'copied' && (
-                          <span role="status" style={{ fontSize: 13 }}>
-                            Copied.
-                          </span>
-                        )}
-                        {copyStatus === 'error' && (
-                          <span role="alert" style={{ fontSize: 13 }}>
-                            Couldn’t copy script. Try again.
-                          </span>
-                        )}
+                        <span
+                          id={`${cardId}-copy-status`}
+                          role="status"
+                          aria-live="polite"
+                          aria-atomic="true"
+                          style={{ fontSize: 13 }}
+                        >
+                          {copyStatus === 'copying'
+                            ? 'Copying…'
+                            : copyStatus === 'copied'
+                              ? 'Copied.'
+                              : ''}
+                        </span>
+                        <span
+                          id={`${cardId}-copy-error`}
+                          role="alert"
+                          aria-atomic="true"
+                          style={{ fontSize: 13 }}
+                        >
+                          {copyStatus === 'error'
+                            ? 'Couldn’t copy script. Try again.'
+                            : ''}
+                        </span>
                       </div>
                     </div>
                   )}
@@ -331,6 +377,8 @@ export default function RetakesPanel({
                   >
                     <button
                       type="button"
+                      data-retake-play
+                      aria-label={`Play ${actionContext}`}
                       onClick={() =>
                         onPlaySourceRange(
                           recommendation.startSourceMs,
@@ -342,13 +390,21 @@ export default function RetakesPanel({
                     </button>
                     <button
                       type="button"
-                      onClick={() => onDismiss(recommendation.id)}
+                      aria-label={`Dismiss ${actionContext}`}
+                      onClick={(event) => {
+                        focusAfterRemovingCard(event.currentTarget)
+                        onDismiss(recommendation.id)
+                      }}
                     >
                       Dismiss
                     </button>
                     <button
                       type="button"
-                      onClick={() => onResolve(recommendation.id)}
+                      aria-label={`Mark as re-recorded: ${actionContext}`}
+                      onClick={(event) => {
+                        focusAfterRemovingCard(event.currentTarget)
+                        onResolve(recommendation.id)
+                      }}
                     >
                       Mark as re-recorded
                     </button>

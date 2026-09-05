@@ -2,6 +2,7 @@ import {
   Children,
   isValidElement,
   type CSSProperties,
+  type MouseEvent,
   type ReactElement,
   type ReactNode,
 } from 'react'
@@ -35,9 +36,16 @@ const SECOND_RECOMMENDATION: RetakeRecommendation = {
 }
 
 type HostProps = {
+  'aria-atomic'?: string
+  'aria-describedby'?: string
+  'aria-hidden'?: string
+  'aria-label'?: string
+  'aria-labelledby'?: string
+  'aria-live'?: string
   children?: ReactNode
   disabled?: boolean
-  onClick?: () => void
+  id?: string
+  onClick?: (event: Pick<MouseEvent<HTMLButtonElement>, 'currentTarget'>) => void
   role?: string
   style?: CSSProperties
   title?: string
@@ -71,6 +79,26 @@ function findButton(view: ReactNode, label: string): ReactElement<HostProps> {
     throw new Error(`Could not find button "${label}".`)
   }
   return button
+}
+
+function clickButton(
+  button: ReactElement<HostProps>,
+  currentTarget = {
+    ownerDocument: { activeElement: null },
+  } as HTMLButtonElement,
+): void {
+  button.props.onClick?.({ currentTarget })
+}
+
+function accessibleTextOf(node: ReactNode): string {
+  if (!isValidElement(node)) {
+    if (typeof node === 'string' || typeof node === 'number') return String(node)
+    return Children.toArray(node).map(accessibleTextOf).join('')
+  }
+  const element = node as ReactElement<HostProps>
+  return element.props['aria-hidden'] === 'true'
+    ? ''
+    : accessibleTextOf(element.props.children)
 }
 
 function renderPanel(
@@ -180,18 +208,14 @@ describe('RetakesPanel', () => {
       onCopyScript,
     })
 
-    findButton(view, 'Check for retakes').props.onClick?.()
-    findHosts(view, 'button')
-      .filter((button) => textOf(button.props.children) === 'Play')[0]
-      .props.onClick?.()
-    findHosts(view, 'button')
-      .filter((button) => textOf(button.props.children) === 'Dismiss')[0]
-      .props.onClick?.()
+    clickButton(findButton(view, 'Check for retakes'))
+    clickButton(findButton(view, 'Play'))
+    clickButton(findButton(view, 'Dismiss'))
     const resolveButtons = findHosts(view, 'button').filter(
       (button) => textOf(button.props.children) === 'Mark as re-recorded',
     )
-    resolveButtons.forEach((button) => button.props.onClick?.())
-    findButton(view, 'Copy script').props.onClick?.()
+    resolveButtons.forEach((button) => clickButton(button))
+    clickButton(findButton(view, 'Copy script'))
 
     expect(onAnalyze).toHaveBeenCalledOnce()
     expect(onPlaySourceRange).toHaveBeenCalledWith(
@@ -224,6 +248,152 @@ describe('RetakesPanel', () => {
       ),
     ).toHaveLength(1)
     expect(resolveButtons).toHaveLength(2)
+  })
+
+  it('distinguishes repeated card titles by readable source ranges in every action name', () => {
+    const view = renderPanel({
+      recommendations: [
+        RECOMMENDATION,
+        {
+          ...SECOND_RECOMMENDATION,
+          title: RECOMMENDATION.title,
+          suggestedScript: 'Another clean sentence.',
+        },
+      ],
+    })
+    const articles = findHosts(view, 'article')
+    const sourceRanges = [
+      'Original source time: from 41.25 seconds to 49.9 seconds',
+      'Original source time: from 1 minute 18.25 seconds to 1 minute 25.9 seconds',
+    ]
+
+    for (const [index, article] of articles.entries()) {
+      const heading = findHosts(article, 'h3')[0]
+      expect(article.props['aria-labelledby']).toBe(heading.props.id)
+      expect(textOf(heading)).toBe(RECOMMENDATION.title)
+      for (const button of findHosts(article, 'button')) {
+        expect(button.props['aria-label']).toContain(textOf(button))
+        expect(button.props['aria-label']).toContain(RECOMMENDATION.title)
+        expect(button.props['aria-label']).toContain(sourceRanges[index])
+      }
+      const accessibleText = accessibleTextOf(article)
+      expect(accessibleText).toContain(sourceRanges[index])
+      expect(accessibleText).not.toMatch(/\d{2}:\d{2}/)
+      expect(accessibleText.match(/Original source time/g)).toHaveLength(1)
+    }
+    const names = articles.flatMap((article) =>
+      findHosts(article, 'button').map((button) => button.props['aria-label']),
+    )
+    expect(new Set(names).size).toBe(names.length)
+    expect(new Set(articles.map((article) => article.props['aria-labelledby'])).size).toBe(2)
+  })
+
+  it('keeps copy announcements associated with their card across feedback changes and reordering', () => {
+    const recommendations = [
+      RECOMMENDATION,
+      { ...SECOND_RECOMMENDATION, suggestedScript: 'Use one clean sentence.' },
+    ]
+    const expectedFeedback = [
+      [null, '', ''],
+      ['copying', 'Copying…', ''],
+      ['copied', 'Copied.', ''],
+      ['error', '', 'Couldn’t copy script. Try again.'],
+    ] as const
+    let initialDescription: string | undefined
+
+    for (const [status, successText, errorText] of expectedFeedback) {
+      const view = renderPanel({
+        recommendations: status === 'error' ? [...recommendations].reverse() : recommendations,
+        copyFeedback: status === null ? null : {
+          recommendationId: RECOMMENDATION.id,
+          status,
+        },
+      })
+      const articles = findHosts(view, 'article')
+      const card = articles.find((article) =>
+        textOf(findHosts(article, 'h3')[0]) === RECOMMENDATION.title,
+      )!
+      const otherCard = articles.find((article) => article !== card)!
+      const description = findButton(card, 'Copy script').props['aria-describedby']
+      initialDescription ??= description
+      expect(description).toBe(initialDescription)
+      const ids = description!.split(' ')
+      const feedback = ids.map((id) =>
+        findHosts(card, 'span').find((span) => span.props.id === id),
+      )
+      expect(feedback[0]?.props).toMatchObject({
+        role: 'status',
+        'aria-live': 'polite',
+        'aria-atomic': 'true',
+      })
+      expect(feedback[1]?.props).toMatchObject({ role: 'alert', 'aria-atomic': 'true' })
+      expect(feedback.map(textOf)).toEqual([successText, errorText])
+      expect(findButton(otherCard, 'Copy script').props['aria-describedby']).not.toBe(description)
+      expect(
+        findHosts(otherCard, 'span').filter((span) => span.props.role !== undefined).map(textOf),
+      ).toEqual(['', ''])
+    }
+  })
+
+  it.each([
+    { target: 'next', next: true, previous: true, analyze: true },
+    { target: 'previous', next: false, previous: true, analyze: true },
+    { target: 'analyze', next: false, previous: false, analyze: true },
+    { target: 'heading', next: false, previous: false, analyze: false },
+  ] as const)('moves focus to $target when the focused card is removed', (scenario) => {
+    for (const action of ['Dismiss', 'Mark as re-recorded']) {
+      const targets = {
+        next: { focus: vi.fn() },
+        previous: { focus: vi.fn() },
+        analyze: { focus: vi.fn() },
+        heading: { focus: vi.fn() },
+      }
+      const item = {
+        nextElementSibling: scenario.next ? { querySelector: () => targets.next } : null,
+        previousElementSibling: scenario.previous ? { querySelector: () => targets.previous } : null,
+      }
+      const panel = {
+        querySelector: (selector: string) => selector === 'h2'
+          ? targets.heading
+          : scenario.analyze ? targets.analyze : null,
+      }
+      const ownerDocument: { activeElement: unknown } = { activeElement: null }
+      const currentTarget = {
+        ownerDocument,
+        closest: (selector: string) => selector === 'li' ? item : panel,
+      } as unknown as HTMLButtonElement
+      ownerDocument.activeElement = currentTarget
+      const onRemove = vi.fn(() => {
+        // Focus must leave the card before its owner removes it.
+        expect(targets[scenario.target].focus).toHaveBeenCalledOnce()
+      })
+      const view = renderPanel({ onDismiss: onRemove, onResolve: onRemove })
+
+      clickButton(findButton(view, action), currentTarget)
+
+      expect(onRemove).toHaveBeenCalledWith(RECOMMENDATION.id)
+      for (const [name, target] of Object.entries(targets)) {
+        expect(target.focus).toHaveBeenCalledTimes(name === scenario.target ? 1 : 0)
+      }
+    }
+  })
+
+  it('does not move unrelated focus when an unfocused action removes a card', () => {
+    const closest = vi.fn()
+    const currentTarget = {
+      ownerDocument: { activeElement: { focus: vi.fn() } },
+      closest,
+    } as unknown as HTMLButtonElement
+    const onDismiss = vi.fn()
+    const onResolve = vi.fn()
+    const view = renderPanel({ onDismiss, onResolve })
+
+    clickButton(findButton(view, 'Dismiss'), currentTarget)
+    clickButton(findButton(view, 'Mark as re-recorded'), currentTarget)
+
+    expect(onDismiss).toHaveBeenCalledWith(RECOMMENDATION.id)
+    expect(onResolve).toHaveBeenCalledWith(RECOMMENDATION.id)
+    expect(closest).not.toHaveBeenCalled()
   })
 
   it('shows controlled copy progress, success, and retryable failure', () => {
@@ -301,10 +471,36 @@ describe('RetakesPanel', () => {
       disabled: true,
       type: 'button',
     })
-    const status = findHosts(view, 'p').find(
+    const status = findHosts(view, 'div').find(
       (element) => element.props.role === 'status',
     )
-    expect(textOf(status)).toBe('Checked 3 of 5 sections…')
+    expect(textOf(status)).toContain('Checked 3 of 5 sections…')
+  })
+
+  it('announces initial, checking, completed, and partial outcomes through the summary live region', () => {
+    const cases: [Partial<RetakesPanelProps>, string][] = [
+      [{ recommendations: [], analysisStatus: 'idle' }, '0 open recommendations.'],
+      [{ analysisStatus: 'analyzing' }, 'Checking for retakes…'],
+      [{ recommendations: [RECOMMENDATION] }, '1 section may be worth recording again.'],
+      [{ recommendations: [], hasSuccessfulEmptyAnalysis: true }, 'No retakes recommended'],
+      [
+        { analysisProgress: { completed: 2, failed: 1, total: 3 } },
+        'Checked 3 sections. 2 completed; 1 could not be analyzed.',
+      ],
+    ]
+
+    for (const [patch, expected] of cases) {
+      const view = renderPanel(patch)
+      const summaries = findHosts(view, 'div').filter(
+        (element) => element.props.role === 'status',
+      )
+      expect(summaries).toHaveLength(1)
+      expect(summaries[0].props).toMatchObject({
+        'aria-live': 'polite',
+        'aria-atomic': 'true',
+      })
+      expect(textOf(summaries[0])).toContain(expected)
+    }
   })
 
   it('reports partial success while retaining valid recommendations', () => {

@@ -30,13 +30,16 @@ function recommendation(
 }
 
 type HostProps = {
+  'aria-hidden'?: string
   'aria-label'?: string
   'aria-pressed'?: boolean
+  className?: string
   children?: ReactNode
   onClick?: () => void
   role?: string
   style?: CSSProperties
   title?: string
+  tabIndex?: number
   type?: string
 }
 
@@ -103,7 +106,7 @@ describe('RetakeTimelineTrack', () => {
     ).toBeNull()
   })
 
-  it('selects before seeking and exposes modest pressed state', () => {
+  it('selects before seeking and exposes pressed state without relying on color', () => {
     const calls: string[] = []
     const onSelectRecommendation = vi.fn((id: string) => {
       calls.push(`select:${id}`)
@@ -120,6 +123,8 @@ describe('RetakeTimelineTrack', () => {
 
     expect(markers[0].props['aria-pressed']).toBe(false)
     expect(markers[1].props['aria-pressed']).toBe(true)
+    expect(findHosts(markers[0], 'span')[0].props.children).toBe('△')
+    expect(findHosts(markers[1], 'span')[0].props.children).toBe('▲')
     expect(markers[1].props.style).toMatchObject({
       background: 'var(--accent-bg)',
       border: '1px solid var(--accent)',
@@ -129,6 +134,27 @@ describe('RetakeTimelineTrack', () => {
     expect(calls).toEqual(['select:second', 'seek:75000'])
     expect(onSelectRecommendation).toHaveBeenCalledWith('second')
     expect(onSeekSourceMs).toHaveBeenCalledWith(75_000)
+  })
+
+  it('gives native keyboard controls descriptive seek names with exact spoken source ranges', () => {
+    const view = renderTrack({
+      recommendations: [
+        {
+          ...recommendation('precise', 41_250),
+          endSourceMs: 49_900,
+        },
+      ],
+    })
+    const [marker] = findHosts(view, 'button')
+
+    expect(marker.props.type).toBe('button')
+    expect(marker.props.tabIndex).toBeUndefined()
+    expect(marker.props.className).toBe('retake-timeline-marker')
+    expect(marker.props['aria-label']).toBe(
+      'Seek to Recommendation precise. Original source time: from 41.25 seconds to 49.9 seconds.',
+    )
+    expect(marker.props.title).toBe('Recommendation precise · 00:41–00:49')
+    expect(findHosts(marker, 'span')[0].props['aria-hidden']).toBe('true')
   })
 
   it('keeps endpoint markers inside the rail and rejects invalid duration', () => {
