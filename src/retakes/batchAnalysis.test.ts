@@ -1,6 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Transcript } from '../transcript/types'
-import type { RetakeAnalysisResult } from './analysis'
+import {
+  RETAKE_ANALYSIS_TOOL_NAME,
+  type RetakeAnalysisResult,
+} from './analysis'
 import {
   analyzeRetakes,
   clearRetakeAnalysisSessionCaches,
@@ -9,6 +12,7 @@ import {
 import type { RetakeAnalysisContext } from './context'
 import { MAX_RETAKE_ANALYSIS_CANDIDATES } from './costControls'
 import { getRetakeRecommendationFreshness } from './freshness'
+import * as nearbyTakes from './nearbyTakes'
 
 const FAILED_DASHBOARD = [
   'The',
@@ -64,6 +68,18 @@ const NEGATIVE_RESULT: RetakeAnalysisResult = {
   needsRetake: false,
   explanation: 'Editing can produce a clean result.',
   confidence: 0.91,
+}
+
+function modelReply(input: unknown): Response {
+  return Response.json({
+    content: [{
+      type: 'tool_use',
+      id: 'toolu_result',
+      name: RETAKE_ANALYSIS_TOOL_NAME,
+      input,
+    }],
+    stop_reason: 'tool_use',
+  })
 }
 
 describe('analyzeRetakes', () => {
@@ -827,5 +843,125 @@ describe('analyzeRetakes', () => {
     )
     expect(calls).toBe(1)
     expect(transcript).toEqual(before)
+  })
+})
+
+describe('analyzeRetakes with the default API adapter', () => {
+  beforeEach(() => {
+    clearRetakeAnalysisSessionCaches()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    clearRetakeAnalysisSessionCaches()
+  })
+
+  it('never reaches the transport for clean or locally repairable speech', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new Error('Unexpected network request.'),
+    )
+
+    for (const transcript of [
+      sequential(...CLEAN_DASHBOARD),
+      sequential(...FAILED_DASHBOARD, ...CLEAN_DASHBOARD),
+    ]) {
+      await expect(analyzeRetakes(transcript, 20_000)).resolves.toEqual({
+        candidateCount: 0,
+        analyzedCount: 0,
+        recommendations: [],
+      })
+    }
+
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('caps actual relay requests before analyzing an oversized candidate set', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () => modelReply(NEGATIVE_RESULT),
+    )
+    const transcript = sequential(
+      ...Array.from(
+        { length: MAX_RETAKE_ANALYSIS_CANDIDATES + 2 },
+        () => FAILED_DASHBOARD,
+      ).flat(),
+    )
+
+    const result = await analyzeRetakes(transcript, 100_000)
+
+    expect(fetchMock).toHaveBeenCalledTimes(MAX_RETAKE_ANALYSIS_CANDIDATES)
+    expect(fetchMock.mock.calls.every(([url]) => url === '/api/agent')).toBe(true)
+    expect(result).toEqual({
+      candidateCount: MAX_RETAKE_ANALYSIS_CANDIDATES,
+      analyzedCount: MAX_RETAKE_ANALYSIS_CANDIDATES,
+      recommendations: [],
+    })
+  })
+
+  it('deduplicates before the relay and reuses the default adapter cache across runs', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () => modelReply(POSITIVE_RESULT),
+    )
+    const transcript = sequential(...FAILED_DASHBOARD)
+    const candidates = nearbyTakes.buildScreenedRetakeCandidates(transcript)
+    expect(candidates).toHaveLength(1)
+    // Normal screening emits distinct sentence envelopes. Supply duplicates at
+    // that boundary to exercise selection through the real batch and API path.
+    vi.spyOn(nearbyTakes, 'buildScreenedRetakeCandidates').mockReturnValue([
+      ...candidates,
+      ...structuredClone(candidates),
+      ...structuredClone(candidates),
+    ])
+
+    const first = await analyzeRetakes(transcript, 10_000, {
+      signal: new AbortController().signal,
+    })
+    const second = await analyzeRetakes(structuredClone(transcript), 10_000, {
+      signal: new AbortController().signal,
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(first).toMatchObject({ candidateCount: 1, analyzedCount: 1 })
+    expect(first.recommendations).toHaveLength(1)
+    expect(second).toEqual(first)
+    expect(second.recommendations[0]).not.toBe(first.recommendations[0])
+  })
+
+  it('retains valid relay results and retries only a malformed sibling on the next run', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockImplementationOnce(async () => modelReply({
+        ...POSITIVE_RESULT,
+        severity: 'unknown-severity',
+      }))
+      .mockImplementationOnce(async () => modelReply(POSITIVE_RESULT))
+      .mockImplementation(async () => modelReply(NEGATIVE_RESULT))
+    const transcript = sequential(...FAILED_DASHBOARD, ...FAILED_DASHBOARD)
+    const progress: RetakeBatchProgress[] = []
+
+    const partial = await analyzeRetakes(transcript, 10_000, {
+      onProgress: (event) => progress.push(event),
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(partial).toMatchObject({ candidateCount: 2, analyzedCount: 1 })
+    expect(partial.recommendations).toHaveLength(1)
+    expect(partial.recommendations[0]).toMatchObject({
+      startSourceMs: 4_000,
+      endSourceMs: 7_900,
+      reason: 'incomplete-thought',
+    })
+    expect(progress.at(-1)).toEqual({ completed: 1, failed: 1, total: 2 })
+
+    const retried = await analyzeRetakes(transcript, 10_000)
+
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(retried).toMatchObject({ candidateCount: 2, analyzedCount: 2 })
+    expect(retried.recommendations).toEqual(partial.recommendations)
+    expect(JSON.parse(String(fetchMock.mock.calls[2][1]?.body))).toMatchObject({
+      context: { candidate: { startSourceMs: 0, endSourceMs: 3_900 } },
+    })
+
+    // Both the newly successful negative and the earlier positive are cached.
+    await expect(analyzeRetakes(transcript, 10_000)).resolves.toEqual(retried)
+    expect(fetchMock).toHaveBeenCalledTimes(3)
   })
 })

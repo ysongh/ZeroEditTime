@@ -11,6 +11,7 @@ import {
   MAX_SURROUNDING_CONTEXT_CHARACTERS,
   MAX_SURROUNDING_CONTEXT_WORDS,
   buildRetakeAnalysisContext,
+  normalizeRetakeAnalysisContext,
 } from './context'
 import { buildHeuristicRetakeCandidates } from './heuristics'
 import { buildScreenedRetakeCandidates } from './nearbyTakes'
@@ -241,6 +242,66 @@ describe('buildRetakeAnalysisContext', () => {
     expect(serialized).toContain('Only the immediate sentence after.')
     expect(serialized).not.toContain('DISTANT PROLOGUE')
     expect(serialized).not.toContain('DISTANT EPILOGUE')
+  })
+
+  it('keeps a screened long-transcript request bounded and in source time through validation', () => {
+    const beforeWords = Array.from({ length: 70 }, (_, index) => `before${index}`)
+    beforeWords[69] += '.'
+    const afterWords = Array.from({ length: 70 }, (_, index) => `after${index}`)
+    afterWords[69] += '.'
+    const transcript: Transcript = {
+      words: [
+        ...wordsInRange(['PRIVATE', 'PROLOGUE.'], 0, 1),
+        ...wordsInRange(beforeWords, 8.25, 9.625),
+        ...wordsInRange(FAILED_DASHBOARD, 10.125, 12.875),
+        ...wordsInRange(afterWords, 13.125, 14.125),
+        ...wordsInRange(
+          ['Use', 'the', 'project', 'overview', 'to', 'organize', 'every', 'workspace.'],
+          14.5,
+          15.5,
+        ),
+        ...wordsInRange(['PRIVATE', 'EPILOGUE.'], 20, 21),
+      ],
+    }
+    const originalTranscript = structuredClone(transcript)
+
+    const candidates = buildScreenedRetakeCandidates(transcript)
+    expect(candidates).toHaveLength(1)
+    const originalCandidate = structuredClone(candidates[0])
+    const context = buildRetakeAnalysisContext(transcript, candidates[0])
+    const request = normalizeRetakeAnalysisContext(context)
+
+    expect(request).not.toBeNull()
+    expect(request).toEqual(context)
+    expect(request?.candidate).toEqual({
+      startSourceMs: 10_125,
+      endSourceMs: 12_875,
+      text: FAILED_DASHBOARD.join(' '),
+    })
+    expect(request?.before).toMatchObject({ truncated: true })
+    expect(request?.after).toMatchObject({ truncated: true })
+    expect(request?.before?.text).toContain('before69.')
+    expect(request?.after?.text).toContain('after0 ')
+    expect(request?.nearbyAlternateTakes).toEqual([
+      {
+        startSourceMs: 14_500,
+        endSourceMs: 15_500,
+        text: 'Use the project overview to organize every workspace.',
+      },
+    ])
+    expect(request?.signals).toEqual({
+      fillerCount: 3,
+      fillerDensity: 0.3,
+      longPauseCount: 0,
+      longestPauseMs: 0,
+      stumbleCount: 0,
+    })
+    const serialized = JSON.stringify(request)
+    expect(serialized).not.toContain('PRIVATE')
+    expect(serialized).not.toContain('before0 ')
+    expect(serialized).not.toContain('after69.')
+    expect(candidates[0]).toEqual(originalCandidate)
+    expect(transcript).toEqual(originalTranscript)
   })
 
   it('keeps the closest edge of oversized before and after context', () => {

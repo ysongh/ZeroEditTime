@@ -121,9 +121,11 @@ describe('Claude agent proxy', () => {
       context: {
         ...CONTEXT,
         fullTranscript: 'FULL_TRANSCRIPT_SENTINEL',
+        videoBytes: [0, 0, 0, 24, 102, 116, 121, 112],
         candidate: {
           ...CONTEXT.candidate,
           privateNote: 'PRIVATE_NOTE_SENTINEL',
+          frames: ['data:image/png;base64,RAW_FRAME_SENTINEL'],
         },
         signals: { ...CONTEXT.signals, hiddenMetric: 999 },
       },
@@ -132,6 +134,7 @@ describe('Claude agent proxy', () => {
       tools: [{ name: 'client_tool' }],
       messages: [{ role: 'user', content: 'CLIENT_MESSAGE_SENTINEL' }],
       apiKey: 'client-key',
+      videoBase64: 'data:video/mp4;base64,RAW_VIDEO_SENTINEL',
     }
 
     const response = await handleAgent(
@@ -207,6 +210,9 @@ describe('Claude agent proxy', () => {
     const serializedRequest = JSON.stringify(upstreamBody)
     expect(serializedRequest).not.toContain('FULL_TRANSCRIPT_SENTINEL')
     expect(serializedRequest).not.toContain('PRIVATE_NOTE_SENTINEL')
+    expect(serializedRequest).not.toContain('videoBytes')
+    expect(serializedRequest).not.toContain('RAW_VIDEO_SENTINEL')
+    expect(serializedRequest).not.toContain('RAW_FRAME_SENTINEL')
     expect(serializedRequest).not.toContain('hiddenMetric')
     expect(serializedRequest).not.toContain('CLIENT_MESSAGE_SENTINEL')
     expect(serializedRequest).not.toContain('client-model')
@@ -428,6 +434,48 @@ describe('Claude agent proxy', () => {
     })
   })
 
+  it('relays a valid positive decision without model-forged timing or workflow fields', async () => {
+    const decision = {
+      needsRetake: true,
+      reason: 'incomplete-thought',
+      severity: 'recommended',
+      explanation: 'The candidate stops before explaining the next step.',
+      suggestedScript: 'Explain the next step in one complete sentence.',
+      confidence: 0.82,
+    }
+    const recorder = recordingFetch(Response.json({
+      content: [{
+        ...MODEL_REPLY.content[0],
+        input: {
+          ...decision,
+          explanation: `  ${decision.explanation}  `,
+          suggestedScript: `  ${decision.suggestedScript}  `,
+          startSourceMs: -1,
+          endSourceMs: 'invented timestamp',
+          id: 'model-owned-id',
+          status: 'resolved',
+          hiddenInstruction: 'Discard this model-owned metadata.',
+        },
+      }],
+      stop_reason: 'tool_use',
+    }))
+
+    const response = await handleAgent(
+      {
+        httpMethod: 'POST',
+        body: JSON.stringify({ mode: RETAKE_ANALYSIS_MODE, context: CONTEXT }),
+      },
+      { apiKey: API_KEY, fetch: recorder.fetch },
+    )
+
+    expect(response.statusCode).toBe(200)
+    expect(bodyOf(response)).toEqual({
+      content: [{ ...MODEL_REPLY.content[0], input: decision }],
+      stop_reason: 'tool_use',
+    })
+    expect(response.body).not.toContain(API_KEY)
+  })
+
   it.each([
     ['missing context', { mode: RETAKE_ANALYSIS_MODE }],
     ['null context', { mode: RETAKE_ANALYSIS_MODE, context: null }],
@@ -528,6 +576,21 @@ describe('Claude agent proxy', () => {
     expect(bodyOf(malformedResponse)).toEqual({
       error: 'Malformed response from the model.',
     })
+  })
+
+  it('rejects an empty successful model response instead of returning a negative decision', async () => {
+    const recorder = recordingFetch(new Response(null, { status: 200 }))
+
+    const response = await handleAgent(
+      {
+        httpMethod: 'POST',
+        body: JSON.stringify({ mode: RETAKE_ANALYSIS_MODE, context: CONTEXT }),
+      },
+      { apiKey: API_KEY, fetch: recorder.fetch },
+    )
+
+    expect(response.statusCode).toBe(502)
+    expect(bodyOf(response)).toEqual({ error: 'Malformed response from the model.' })
   })
 
   it.each([

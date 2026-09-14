@@ -938,7 +938,7 @@ empty folders for future phases.
   and App regressions cover pre/in-flight cancellation, signal forwarding, queued-work and cache
   suppression, transcript/source replacement, newer-result authority, and old-finally ownership,
   with EDL/history unchanged. Part U adds no cancel button or broad accessibility audit (Part V).
-- **Phase 11, Part V (done; stop here):** Retakes-panel actions and source-time markers keep
+- **Phase 11, Part V (done):** Retakes-panel actions and source-time markers keep
   native button keyboard behavior and now have descriptive names containing their action,
   recommendation title, and exact spoken source range. The shared `sourceTime.ts` keeps compact
   visual clocks while spelling out hours, minutes, and fractional seconds for assistive technology;
@@ -954,7 +954,22 @@ empty folders for future phases.
   a filled triangle alongside `aria-pressed`, so state has a non-color cue. Focused offline tests
   cover names, spoken timestamp precision/boundaries, native controls, announcement associations,
   and focus fallback ordering. These tests verify markup and controller behavior, not a real
-  browser/screen-reader audit. Part W's comprehensive test audit remains the next step.
+  browser/screen-reader audit. Part W below audits the complete automated test matrix.
+- **Phase 11, Part W (done; stop here):** `docs/phase-11-test-coverage.md` maps all 75 requested
+  checks to existing and added offline Vitest evidence. New integration cases carry actual local
+  screening through bounded context validation, exercise the default batch/API adapter with mocked
+  fetch (zero calls, real request cap, duplicate/cache reuse, malformed sibling recovery/selective
+  retry), and cover malformed browser JSON, empty upstream responses, forged model timing/workflow,
+  and raw-media exclusion at both request boundaries. App regressions now include stale success
+  and error after a newer result has completed, plus deep transcript/export-input preservation
+  across advisory actions. The latter carries real ExportButton props through pure caption/SRT,
+  overlay projection, and audio-cleanup graph builders to lock duration, source/output timing,
+  and the full export argument array. Earlier detector, editor, proxy, caption, overlay, cleanup,
+  and export regressions remain in the suite. All model/network calls exercised by these tests are
+  mocked; no tests are placed under `netlify/functions`, and Part W changes no production behavior.
+  The audit distinguishes local candidate retention/mocked decisions from live-model semantic
+  accuracy and static/controller checks from real recording/browser/encode verification. Part X's
+  manual verification checklist is the next step.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1245,12 +1260,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part V. This folder
+- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part W. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
   state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, the
   Part-Q marker lane, Part-R script/workflow UX, Part-S successful-empty presentation, Part-T
-  partial/error policy, Part-U cancellation/latest-wins handling, and Part-V accessibility;
+  partial/error policy, Part-U cancellation/latest-wins handling, Part-V accessibility, and Part-W
+  test coverage;
   Parts G-H's conservative decision and replacement-script policies live in the existing server
   relay.
   - `sourceTime.ts` — shared compact source clocks and spoken source-range formatting with explicit
@@ -1581,6 +1597,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     channel/layout/loudness/cleanup/mapping/generic fatal matrices, friendly staging and output-read
     failures, no fatal retry/note/cache mutation, and raw-diagnostic cause preservation. Every
     engine/runtime dependency remains mocked.
+- `docs/phase-11-test-coverage.md` — Part W's mapping of all 75 requested checks to offline Vitest
+  evidence, including earlier regression suites and new boundary/integration tests. It records the
+  limits of mocked model/controller/export checks; it is not Part X's manual recording checklist.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,

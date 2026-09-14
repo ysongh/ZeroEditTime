@@ -9,9 +9,18 @@ import App from './App'
 import Timeline from './Timeline'
 import CaptionList from './captions/CaptionList'
 import CaptionOverlay from './captions/CaptionOverlay'
-import { applyRemovedRange } from './edl/edl'
+import { buildSrt, prepareCaptionsForExport } from './captions/captions'
+import { applyRemovedRange, totalKeptDuration } from './edl/edl'
 import type { Caption, EDL } from './edl/types'
 import ExportButton from './export/ExportButton'
+import { buildAudioCleanupPlan } from './export/audioCleanupPlan'
+import { DEFAULT_AUDIO_CLEANUP_SETTINGS } from './export/audioCleanupSettings'
+import { buildExportArgs } from './export/ffmpeg'
+import {
+  buildImageOverlayFilterGraph,
+  buildImageOverlayRenderPlanForEdl,
+} from './export/imageOverlays'
+import type { ImageOverlay, OverlayAsset } from './overlays/types'
 import RetakesPanel, {
   type RetakesPanelProps,
 } from './retakes/RetakesPanel'
@@ -132,6 +141,7 @@ type TimelineProps = NodeProps & { edl: EDL; playhead: number }
 
 type TranscriptProps = NodeProps & {
   edl: EDL
+  transcript: Transcript
   onDeleteRange: (start: number, end: number) => void
 }
 
@@ -141,7 +151,12 @@ type CaptionListProps = NodeProps & {
 }
 
 type CaptionOverlayProps = NodeProps & { captions: Caption[] }
-type ExportButtonProps = NodeProps & { edl: EDL; file: File | null }
+type ExportButtonProps = NodeProps & {
+  edl: EDL
+  file: File | null
+  overlayAssets: readonly OverlayAsset[]
+  imageOverlays: readonly ImageOverlay[]
+}
 
 function findNode(
   node: ReactNode,
@@ -226,12 +241,15 @@ function editorReducerRecord(): ReducerRecord {
 function deferredValue<T>(): {
   promise: Promise<T>
   resolve: (value: T) => void
+  reject: (reason: unknown) => void
 } {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: unknown) => void
+  const promise = new Promise<T>((done, fail) => {
     resolve = done
+    reject = fail
   })
-  return { promise, resolve }
+  return { promise, resolve, reject }
 }
 
 function ranges(edl: EDL): Array<[number, number]> {
@@ -460,7 +478,31 @@ describe('App regression wiring', () => {
     if (initialEdl === null) throw new Error('Expected an initialized EDL.')
     editor.dispatch({
       type: 'commit-edl',
-      edl: applyRemovedRange(initialEdl, 0.5, 5),
+      edl: applyRemovedRange({
+        ...initialEdl,
+        captions: [{ id: 'caption', start: 0, end: 6, text: 'Existing caption.' }],
+      }, 0.5, 5),
+    })
+    editor.dispatch({
+      type: 'commit-overlays',
+      action: {
+        type: 'add-overlay-asset',
+        asset: {
+          id: 'image', kind: 'image', name: 'image.png', mimeType: 'image/png',
+          width: 640, height: 480, src: 'blob:image',
+        },
+      },
+    })
+    editor.dispatch({
+      type: 'commit-overlays',
+      action: {
+        type: 'add-image-overlay',
+        overlay: {
+          id: 'overlay', assetId: 'image', startSourceMs: 0, endSourceMs: 7_000,
+          x: 0, y: 0, width: 0.5, height: 0.5, fit: 'contain', opacity: 1,
+          zIndex: 0, fadeInMs: 100, fadeOutMs: 200,
+        },
+      },
     })
     view = renderApp()
     let panel = findComponent<RetakesPanelProps>(
@@ -475,6 +517,60 @@ describe('App regression wiring', () => {
       [0, 0.5],
       [5, 10],
     ])
+
+    // Carry the actual App export props through the real pure caption,
+    // overlay, and audio-cleanup builders. Advice overlaps a removed source
+    // range; neither its existence nor workflow may alter these outputs.
+    const transcriptBefore = structuredClone(transcript)
+    const exportPropsBefore = findComponent<ExportButtonProps>(
+      view, ExportButton, 'export button',
+    ).props
+    const exportInputsBefore = structuredClone(exportPropsBefore)
+    function exportSnapshot(props: ExportButtonProps) {
+      const captions = prepareCaptionsForExport(props.edl.captions, props.edl)
+      const overlays = buildImageOverlayRenderPlanForEdl(
+        props.edl, props.imageOverlays, props.overlayAssets,
+      )
+      const imageOverlayGraph = buildImageOverlayFilterGraph(
+        overlays, props.overlayAssets,
+        { frameWidth: props.edl.source.width!, frameHeight: props.edl.source.height! },
+      )
+      return {
+        duration: totalKeptDuration(props.edl),
+        captions,
+        srt: buildSrt(captions),
+        overlays,
+        args: buildExportArgs(props.edl.segments, 'input.mp4', 'output.mp4', {
+          srtFile: 'captions.srt',
+          imageOverlayGraph,
+          audioCleanup: buildAudioCleanupPlan(DEFAULT_AUDIO_CLEANUP_SETTINGS),
+        }),
+      }
+    }
+    const exportBefore = exportSnapshot(exportPropsBefore)
+    expect(exportBefore.duration).toBe(5.5)
+    expect(exportBefore.captions).toMatchObject([{ start: 0, end: 1.5 }])
+    expect(exportBefore.overlays).toMatchObject([
+      { outputStartMs: 0, outputEndMs: 500 },
+      { outputStartMs: 500, outputEndMs: 2_500 },
+    ])
+    expect(exportBefore.args.join(' ')).toContain('afftdn=')
+    expect(exportBefore.args.join(' ')).toContain('subtitles=')
+    function expectRetakesOnly() {
+      const currentView = renderApp()
+      const props = findComponent<ExportButtonProps>(
+        currentView, ExportButton, 'export button',
+      ).props
+      expect(props).toEqual(exportInputsBefore)
+      expect(props.edl).toBe(edlBefore)
+      expect(props.imageOverlays).toBe(exportPropsBefore.imageOverlays)
+      expect(exportSnapshot(props)).toEqual(exportBefore)
+      expect(transcript).toEqual(transcriptBefore)
+      expect(findComponent<TranscriptProps>(
+        currentView, TranscriptView, 'transcript',
+      ).props.transcript).toBe(transcript)
+      expect(state().history).toBe(historyBefore)
+    }
 
     const pending = panel.props.onAnalyze()
     view = renderApp()
@@ -510,6 +606,7 @@ describe('App regression wiring', () => {
       analysisProgress: { completed: 1, total: 1 },
       hasSuccessfulEmptyAnalysis: false,
     })
+    expectRetakesOnly()
 
     const media: VideoLike = {
       currentSrc: 'blob:source',
@@ -628,6 +725,7 @@ describe('App regression wiring', () => {
     expect(clipboardWrite).toHaveBeenCalledWith(
       recommendation.suggestedScript,
     )
+    expectRetakesOnly()
 
     clipboardWrite.mockRejectedValueOnce(new Error('Clipboard denied.'))
     await panel.props.onCopyScript(
@@ -690,6 +788,7 @@ describe('App regression wiring', () => {
     expect(media.currentSrc).toBe('blob:source')
     expect(state().edl).toBe(edlBefore)
     expect(state().history).toBe(historyBefore)
+    expectRetakesOnly()
 
     editor.dispatch({
       type: 'update-retakes',
@@ -708,6 +807,7 @@ describe('App regression wiring', () => {
     expect(state().retakes.retakeRecommendations[0].status).toBe(
       'dismissed',
     )
+    expectRetakesOnly()
     view = renderApp()
     retakeTrack = findComponent<RetakeTimelineTrackProps>(
       view,
@@ -779,6 +879,7 @@ describe('App regression wiring', () => {
       retakeRecommendations: [{ status: 'open' }],
     })
     expect(panel.props.analysisError).toBe('Retake request failed.')
+    expectRetakesOnly()
     expect(panel.props.analysisProgress).toEqual({
       completed: 0,
       failed: 2,
@@ -1149,6 +1250,84 @@ describe('App regression wiring', () => {
     expect(state().edl).toBe(edlBefore)
     expect(state().history).toBe(historyBefore)
   })
+
+  it.each(['success', 'error'] as const)(
+    'ignores an old %s after the newer transcript analysis has completed',
+    async (outcome) => {
+      const oldAnalysis = deferredValue<RetakeBatchResult>()
+      let oldOptions: RetakeBatchOptions | undefined
+      const firstTranscript: Transcript = {
+        words: [{ text: 'First version.', start: 0, end: 1 }],
+      }
+      const secondTranscript: Transcript = {
+        words: [{ text: 'Second version.', start: 0, end: 1 }],
+      }
+      harness.extractAudio.mockResolvedValue(new Blob(['audio']))
+      harness.transcribe
+        .mockResolvedValueOnce(firstTranscript)
+        .mockResolvedValueOnce(secondTranscript)
+      harness.analyzeRetakes.mockImplementationOnce((
+        _transcript: Transcript,
+        _durationMs: number,
+        options: RetakeBatchOptions,
+      ) => {
+        oldOptions = options
+        return oldAnalysis.promise
+      }).mockResolvedValueOnce({
+        candidateCount: 2,
+        analyzedCount: 2,
+        recommendations: [],
+      })
+
+      let view = selectSource({ name: 'source.mp4' } as File, 'blob:source', 10)
+      await findButton(view, 'Transcribe').props.onClick?.()
+      view = renderApp()
+      const oldPending = findComponent<RetakesPanelProps>(
+        view, RetakesPanel, 'retakes panel',
+      ).props.onAnalyze()
+
+      await findButton(view, 'Transcribe').props.onClick?.()
+      expect(oldOptions?.signal?.aborted).toBe(true)
+      view = renderApp()
+      await findComponent<RetakesPanelProps>(
+        view, RetakesPanel, 'retakes panel',
+      ).props.onAnalyze()
+      const completedState = editorReducerRecord().state
+
+      // The mock intentionally ignores abort. Both its late progress callback
+      // and its eventual success/error must preserve the newer completion.
+      oldOptions?.onProgress?.({ completed: 0, failed: 1, total: 1 })
+      if (outcome === 'error') {
+        oldAnalysis.reject(new Error('Old request failed after the new result.'))
+      } else {
+        oldAnalysis.resolve({
+          candidateCount: 1,
+          analyzedCount: 1,
+          recommendations: [{
+            id: 'old-result', startSourceMs: 0, endSourceMs: 1_000,
+            reason: 'incomplete-thought', severity: 'recommended',
+            title: 'Old result', explanation: 'Advice from the old transcript.',
+            confidence: 0.9, status: 'open',
+          }],
+        })
+      }
+      await oldPending
+      expect(editorReducerRecord().state).toBe(completedState)
+      expect(harness.analyzeRetakes).toHaveBeenNthCalledWith(
+        2, secondTranscript, 10_000, expect.any(Object),
+      )
+      view = renderApp()
+      expect(findComponent<RetakesPanelProps>(
+        view, RetakesPanel, 'retakes panel',
+      ).props).toMatchObject({
+        recommendations: [],
+        analysisStatus: 'complete',
+        analysisProgress: { completed: 2, total: 2 },
+        analysisError: undefined,
+        hasSuccessfulEmptyAnalysis: true,
+      })
+    },
+  )
 
   it('aborts and ignores an analysis that outlives its source document', async () => {
     const firstFile = { name: 'first.mp4' } as File

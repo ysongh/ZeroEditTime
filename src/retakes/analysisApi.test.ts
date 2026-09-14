@@ -43,13 +43,16 @@ function modelReply(input: unknown): Response {
 }
 
 describe('analyzeRetakeContext', () => {
-  it('posts only one bounded context through the existing secret-free relay', async () => {
+  it('posts only bounded transcript context, excluding media and secrets, through the relay', async () => {
     const input = {
       ...CONTEXT,
       fullTranscript: 'FULL_TRANSCRIPT_SENTINEL',
+      videoBytes: [0, 0, 0, 24, 102, 116, 121, 112],
+      videoBase64: 'data:video/mp4;base64,RAW_VIDEO_SENTINEL',
       candidate: {
         ...CONTEXT.candidate,
         privateNote: 'PRIVATE_NOTE_SENTINEL',
+        frames: ['data:image/png;base64,RAW_FRAME_SENTINEL'],
       },
       signals: { ...CONTEXT.signals, hiddenMetric: 42 },
     } as RetakeAnalysisContext
@@ -99,6 +102,8 @@ describe('analyzeRetakeContext', () => {
     expect(String(requestedInit?.body)).not.toContain(
       'PRIVATE_NOTE_SENTINEL',
     )
+    expect(String(requestedInit?.body)).not.toContain('RAW_VIDEO_SENTINEL')
+    expect(String(requestedInit?.body)).not.toContain('RAW_FRAME_SENTINEL')
     expect(input).toEqual(before)
   })
 
@@ -209,9 +214,12 @@ describe('analyzeRetakeContext', () => {
     )
   })
 
-  it('rejects an empty successful response body', async () => {
+  it.each([
+    ['an empty', null],
+    ['a malformed JSON', '{"content":'],
+  ])('rejects %s successful response body', async (_name, body) => {
     const fetchImpl: FetchLike = async () =>
-      new Response(null, { status: 200 })
+      new Response(body, { status: 200 })
 
     await expect(analyzeRetakeContext(CONTEXT, fetchImpl)).rejects.toThrow(
       'Received a malformed response from the agent.',

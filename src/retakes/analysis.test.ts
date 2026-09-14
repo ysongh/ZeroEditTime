@@ -21,7 +21,11 @@ describe('normalizeRetakeAnalysisResult', () => {
     const input = {
       ...VALID_POSITIVE,
       ignored: 'model-owned metadata',
+      startSourceMs: -1,
+      endSourceMs: 'invented timestamp',
+      status: 'resolved',
     }
+    const before = structuredClone(input)
 
     const normalized = normalizeRetakeAnalysisResult(input)
 
@@ -34,10 +38,8 @@ describe('normalizeRetakeAnalysisResult', () => {
       confidence: 0.84,
     })
     expect(normalized).not.toBe(input)
-    expect(input).toEqual({
-      ...VALID_POSITIVE,
-      ignored: 'model-owned metadata',
-    })
+    // Source timing and workflow state belong to the client, never the model.
+    expect(input).toEqual(before)
   })
 
   it.each(RETAKE_REASONS)('accepts the %s reason', (reason) => {
