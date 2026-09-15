@@ -64,6 +64,17 @@ interface RankedNearbySentence {
   sentenceDistance: number
 }
 
+/** Per-call index, never cached across mutable transcript inputs or sessions. */
+interface SentenceIndex {
+  byRange: Map<string, SentenceView>
+  byPosition: Map<number, SentenceView>
+  hasOrderedWords: boolean
+}
+
+function rangeKey(range: NearbyTakeMetadata | RetakeCandidate): string {
+  return `${range.startSourceMs}:${range.endSourceMs}`
+}
+
 function isValidWord(word: Word): boolean {
   return (
     Number.isFinite(word.start) &&
@@ -107,6 +118,23 @@ function buildSentenceViews(transcript: Transcript): SentenceView[] {
       ]
     },
   )
+}
+
+function buildSentenceIndex(transcript: Transcript): SentenceIndex {
+  const byRange = new Map<string, SentenceView>()
+  const byPosition = new Map<number, SentenceView>()
+  for (const sentence of buildSentenceViews(transcript)) {
+    const key = rangeKey(sentence)
+    // Preserve the original first-matching-sentence behavior for duplicate bounds.
+    if (!byRange.has(key)) byRange.set(key, sentence)
+    byPosition.set(sentence.sentenceIndex, sentence)
+  }
+  const hasOrderedWords = transcript.words.every(
+    (word, index) =>
+      isValidWord(word) &&
+      (index === 0 || word.start >= transcript.words[index - 1].end),
+  )
+  return { byRange, byPosition, hasOrderedWords }
 }
 
 function overlapsSourceMs(range: Range, candidate: RetakeCandidate): boolean {
@@ -204,11 +232,7 @@ function sharedOpeningLength(
   return count
 }
 
-function candidateCoreWords(
-  transcript: Transcript,
-  candidate: RetakeCandidate,
-): Word[] {
-  const candidateWords = wordsInsideCandidate(transcript, candidate)
+function candidateCoreWords(candidateWords: Word[]): Word[] {
   const localTranscript = { words: candidateWords }
   const removableRanges = [
     ...findFillerSpans(localTranscript),
@@ -257,28 +281,26 @@ function nearbyTakeValue(sentence: SentenceView): NearbyCleanTake {
 }
 
 function rankedNearbySentences(
-  transcript: Transcript,
+  index: SentenceIndex,
   candidate: RetakeCandidate,
 ): RankedNearbySentence[] {
-  const sentences = buildSentenceViews(transcript)
-  const candidateSentence = sentences.find(
-    (sentence) =>
-      sentence.startSourceMs === candidate.startSourceMs &&
-      sentence.endSourceMs === candidate.endSourceMs,
-  )
+  const candidateSentence = index.byRange.get(rangeKey(candidate))
   if (candidateSentence === undefined) return []
 
   const nearby: RankedNearbySentence[] = []
-  for (const sentence of sentences) {
-    const sentenceDistance = Math.abs(
-      sentence.sentenceIndex - candidateSentence.sentenceIndex,
+  // Inspect only the four possible neighbors, keeping invalid-sentence holes
+  // in the original positions instead of widening the search window.
+  for (
+    let offset = -MAX_NEARBY_SENTENCE_DISTANCE;
+    offset <= MAX_NEARBY_SENTENCE_DISTANCE;
+    offset++
+  ) {
+    if (offset === 0) continue
+    const sentence = index.byPosition.get(
+      candidateSentence.sentenceIndex + offset,
     )
-    if (
-      sentenceDistance === 0 ||
-      sentenceDistance > MAX_NEARBY_SENTENCE_DISTANCE
-    ) {
-      continue
-    }
+    if (sentence === undefined) continue
+    const sentenceDistance = Math.abs(offset)
 
     const gapMs = sourceGapMs(candidate, sentence)
     if (gapMs === null || gapMs > MAX_NEARBY_TAKE_GAP_MS) continue
@@ -303,7 +325,7 @@ export function findNearbyTakeWindows(
   transcript: Transcript,
   candidate: RetakeCandidate,
 ): NearbyTakeWindow[] {
-  return rankedNearbySentences(transcript, candidate).map(
+  return rankedNearbySentences(buildSentenceIndex(transcript), candidate).map(
     ({ sentence, sentenceDistance }) => ({
       ...nearbyTakeValue(sentence),
       sentenceDistance,
@@ -320,12 +342,20 @@ export function findNearbyCleanTakes(
   transcript: Transcript,
   candidate: RetakeCandidate,
 ): NearbyCleanTake[] {
-  const coreWords = candidateCoreWords(transcript, candidate)
+  const coreWords = candidateCoreWords(wordsInsideCandidate(transcript, candidate))
   if (normalizedTokens(coreWords).length < MIN_RELATED_OPENING_WORD_COUNT) {
     return []
   }
 
-  return rankedNearbySentences(transcript, candidate)
+  return cleanTakesForCoreWords(buildSentenceIndex(transcript), candidate, coreWords)
+}
+
+function cleanTakesForCoreWords(
+  index: SentenceIndex,
+  candidate: RetakeCandidate,
+  coreWords: Word[],
+): NearbyCleanTake[] {
+  return rankedNearbySentences(index, candidate)
     .filter(
       ({ sentence }) =>
         isLocallyCleanTake(sentence.words) &&
@@ -431,7 +461,13 @@ export function isRepairableByStumbleRemoval(
   transcript: Transcript,
   candidate: RetakeCandidate,
 ): boolean {
-  const candidateWords = wordsInsideCandidate(transcript, candidate)
+  return isRepairableCandidateWords(wordsInsideCandidate(transcript, candidate), candidate)
+}
+
+function isRepairableCandidateWords(
+  candidateWords: Word[],
+  candidate: RetakeCandidate,
+): boolean {
   const detectedSpans = findStumbleSpans({ words: candidateWords }).filter(
     (range) => overlapsSourceMs(range, candidate),
   )
@@ -466,11 +502,21 @@ export function suppressCandidatesWithNearbyCleanTakes(
   transcript: Transcript,
   candidates: readonly RetakeCandidate[],
 ): RetakeCandidate[] {
-  return candidates.filter(
-    (candidate) =>
-      !isRepairableByStumbleRemoval(transcript, candidate) &&
-      findNearbyCleanTake(transcript, candidate) === null,
-  )
+  if (candidates.length === 0) return []
+  const index = buildSentenceIndex(transcript)
+  return candidates.filter((candidate) => {
+    const sentence = index.byRange.get(rangeKey(candidate))
+    // With valid non-overlapping word timings, an exact sentence envelope
+    // already contains every word the original full-transcript filter selects.
+    // Arbitrary candidate bounds or unusual timings retain that safe fallback.
+    const words = index.hasOrderedWords && sentence !== undefined
+      ? sentence.words
+      : wordsInsideCandidate(transcript, candidate)
+    if (isRepairableCandidateWords(words, candidate)) return false
+    const coreWords = candidateCoreWords(words)
+    return normalizedTokens(coreWords).length < MIN_RELATED_OPENING_WORD_COUNT ||
+      cleanTakesForCoreWords(index, candidate, coreWords).length === 0
+  })
 }
 
 /** Part C candidate generation composed with the Part D suppression pass. */

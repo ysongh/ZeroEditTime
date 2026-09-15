@@ -1,4 +1,4 @@
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { ChangeEvent, SyntheticEvent } from 'react'
 import Timeline from './Timeline'
 import TranscriptView from './transcript/Transcript'
@@ -888,17 +888,26 @@ function App() {
           (asset) => asset.id === selectedImageOverlay.assetId,
         )
 
-  const currentRetakeRecommendations =
-    transcript === null
-      ? []
-      : removeStaleRetakeRecommendations(
-          transcript,
-          retakes.retakeRecommendations,
-        )
-  const openCurrentRetakeRecommendations =
-    currentRetakeRecommendations.filter(
+  // Freshness rebuilds local candidates and their source evidence. Keep that
+  // work off ordinary playback/edit/progress renders: only immutable source
+  // transcript or advice changes can affect it, never the EDL or playhead.
+  // With no advice yet, there is nothing to validate (or screen implicitly).
+  const currentRetakeRecommendations = useMemo(
+    () =>
+      transcript === null || retakes.retakeRecommendations.length === 0
+        ? []
+        : removeStaleRetakeRecommendations(
+            transcript,
+            retakes.retakeRecommendations,
+          ),
+    [transcript, retakes.retakeRecommendations],
+  )
+  const openCurrentRetakeRecommendations = useMemo(
+    () => currentRetakeRecommendations.filter(
       (recommendation) => recommendation.status === 'open',
-    )
+    ),
+    [currentRetakeRecommendations],
+  )
   const hasSuccessfulEmptyRetakeAnalysis =
     transcript !== null &&
     edl !== null &&

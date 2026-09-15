@@ -11,6 +11,7 @@ import {
 } from './batchAnalysis'
 import type { RetakeAnalysisContext } from './context'
 import { MAX_RETAKE_ANALYSIS_CANDIDATES } from './costControls'
+import * as costControls from './costControls'
 import { getRetakeRecommendationFreshness } from './freshness'
 import * as nearbyTakes from './nearbyTakes'
 
@@ -854,6 +855,28 @@ describe('analyzeRetakes with the default API adapter', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     clearRetakeAnalysisSessionCaches()
+  })
+
+  it('skips local screening, cache creation, progress, and transport when already cancelled', async () => {
+    const controller = new AbortController()
+    const cancellation = new DOMException('Analysis superseded.', 'AbortError')
+    controller.abort(cancellation)
+    const screen = vi.spyOn(nearbyTakes, 'buildScreenedRetakeCandidates')
+    const createCache = vi.spyOn(costControls, 'createRetakeAnalysisSessionCache')
+    const onProgress = vi.fn()
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new Error('Unexpected network request.'),
+    )
+
+    await expect(analyzeRetakes(sequential(...FAILED_DASHBOARD), 10_000, {
+      signal: controller.signal,
+      onProgress,
+    })).rejects.toBe(cancellation)
+
+    expect(screen).not.toHaveBeenCalled()
+    expect(createCache).not.toHaveBeenCalled()
+    expect(onProgress).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('never reaches the transport for clean or locally repairable speech', async () => {

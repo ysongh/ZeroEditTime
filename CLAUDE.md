@@ -955,7 +955,7 @@ empty folders for future phases.
   cover names, spoken timestamp precision/boundaries, native controls, announcement associations,
   and focus fallback ordering. These tests verify markup and controller behavior, not a real
   browser/screen-reader audit. Part W below audits the complete automated test matrix.
-- **Phase 11, Part W (done; stop here):** `docs/phase-11-test-coverage.md` maps all 75 requested
+- **Phase 11, Part W (done):** `docs/phase-11-test-coverage.md` maps all 75 requested
   checks to existing and added offline Vitest evidence. New integration cases carry actual local
   screening through bounded context validation, exercise the default batch/API adapter with mocked
   fetch (zero calls, real request cap, duplicate/cache reuse, malformed sibling recovery/selective
@@ -968,8 +968,33 @@ empty folders for future phases.
   and export regressions remain in the suite. All model/network calls exercised by these tests are
   mocked; no tests are placed under `netlify/functions`, and Part W changes no production behavior.
   The audit distinguishes local candidate retention/mocked decisions from live-model semantic
-  accuracy and static/controller checks from real recording/browser/encode verification. Part X's
-  manual verification checklist is the next step.
+  accuracy and static/controller checks from real recording/browser/encode verification.
+- **Phase 11, Part X (checklist done; manual runs pending):**
+  `docs/phase-11-manual-verification.md` defines real-recording setup, an unexecuted result ledger,
+  and checks for clean speech, a usable second take, repeated failures with no clean take,
+  incomplete thoughts, repairable versus awkward filler-heavy sections, source-time Play/seek
+  before and after EDL cuts, and faithful suggested scripts. It includes advisory card-workflow
+  and keyboard/screen-reader spot checks. The guide distinguishes actual transcript evidence,
+  local screening, and bounded model review; semantic-only incomplete thoughts can currently be
+  missed and must be recorded as failures rather than waived. Audio-quality detection is explicitly
+  N/A because no measured audio/confidence signals exist; conditional future listening criteria do
+  not add a detector. All real-recording/browser/model results remain NOT RUN or blank, with no
+  claimed quality pass. Part X changes documentation only.
+- **Phase 11, Part Y (done; stop here):** App memoizes current/open retake advice by immutable
+  source-transcript and recommendation-list identities and skips freshness work when no advice
+  exists. Playback, EDL/transcript deletions, overlays, selection, captions, export, and progress
+  updates no longer rebuild retake screening/fingerprints; actual source/advice replacement still
+  revalidates. The no-DOM App harness now models memo/effect dependencies and uses call-through
+  screening spies to lock reuse, invalidation, and explicit-only model invocation across those
+  actions. Local nearby-take suppression shares one per-call sentence index, checks at most four
+  neighbors, and reuses exact sentence words for valid ordered non-overlapping timestamps; custom
+  bounds/unusual timings retain the original filter behavior. Tests lock work counts, fallback
+  equivalence, and fresh indexes between calls. Already-aborted batches now skip screening, cache
+  creation, progress, and network after cheap validation. Existing ten-candidate/two-worker caps,
+  bounded contexts, 50-entry page-session cache, and section-count progress remain unchanged; no
+  token counts, automatic analysis, new dependencies, or detection-policy changes are added.
+  `docs/phase-11-performance.md` records evidence and illustrative offline screening measurements,
+  not a browser or real-recording pass. Part Z remains pending.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1086,13 +1111,17 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   renders `OverlayTimelineTrack` on the full source scale; it selects/seeks ephemerally and sends
   one final timing patch through that callback per completed drag or trim. Phase 11 Part U owns an
   active retake-analysis token/controller, aborts it when its source transcript is replaced or the
-  App unmounts, and admits lifecycle/result writes only from the current token.
+  App unmounts, and admits lifecycle/result writes only from the current token. Part Y memoizes
+  retake freshness/open-list derivation on source transcript and recommendation identities so
+  ordinary playback/edit/progress renders do not repeat that local screening work.
 - `src/App.test.tsx` — Part-V persistent no-DOM controller harness covering file selection and
   URL replacement, engine preload, metadata/EDL initialization, reversed trims and Undo, middle
   deletion with playback gap skipping/final stop, transcript deletion safeguards, and the shared
   caption generate/edit/preview/export/Undo path. Phase 11 coverage also locks the retake panel,
   source preview/markers, workflow state, partial/empty outcomes, and Part-U latest-wins request
-  ownership. Native decoding and playback remain manual.
+  ownership. Part Y's dependency-aware memo/effect harness and call-through screening spies lock
+  reuse through ordinary editor actions and export, explicit-only model calls, and source/advice
+  invalidation. Native decoding and playback remain manual.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/Timeline.test.tsx` — Part-V source-time regression coverage for kept-range, selection, and
@@ -1260,13 +1289,14 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake analysis is complete through Part W. This folder
+- `src/retakes/` — Phase 11 advisory retake implementation is complete through Part Y; Part X's
+  real-recording checklist remains unexecuted. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
   state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, the
   Part-Q marker lane, Part-R script/workflow UX, Part-S successful-empty presentation, Part-T
   partial/error policy, Part-U cancellation/latest-wins handling, Part-V accessibility, and Part-W
-  test coverage;
+  test coverage plus Part-Y local screening/cancellation performance guards;
   Parts G-H's conservative decision and replacement-script policies live in the existing server
   relay.
   - `sourceTime.ts` — shared compact source clocks and spoken source-range formatting with explicit
@@ -1297,9 +1327,12 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     reuses detector timing/normalization policy, searches bounded neighboring sentences in both
     directions, recognizes only exact cleaned wording for external hard suppression, can prove an
     internal clean final take only from a substantial opening restart chain, and exposes generic
-    source windows (without a clean/semantic claim) for bounded later context.
+    source windows (without a clean/semantic claim) for bounded later context. Part Y reuses a
+    per-call sentence index across suppression candidates, bounded neighboring-position lookups,
+    and sentence words on valid ordered timings while preserving unusual-input filtering.
   - `nearbyTakes.test.ts` — offline clean-take direction/proximity/source-range, local-cleanliness,
     internal restart-chain, false-match, determinism, malformed-timing, and purity coverage.
+    Part Y adds deterministic large-pass work counts, safe fallback, and per-call index checks.
   - `context.ts` — pure Part-E candidate-to-model-context shaping plus Part-F runtime request
     validation. It retains original-source ranges, reuses adjacent sentence and bounded
     distance-two source-window metadata, whitelists signals, caps every optional text window and
@@ -1327,7 +1360,7 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     session, and remains independent of React/editor state. Part U forwards caller cancellation,
     stops dequeuing after abort, and excludes late results from recommendations, cache, and progress
     while preserving isolated Part-T candidate failures; `batchAnalysis.test.ts` covers that
-    boundary offline.
+    boundary offline. Part Y checks pre-aborted calls before screening or session-cache creation.
   - `costControls.ts` — pure Part-J pre-request validation, heavy-overlap deduplication,
     qualifying-signal priority, and strongest-ten selection plus versioned bounded-context keys and
     a copied 50-entry LRU result cache. Part K optionally partitions equivalent model contexts by
@@ -1600,6 +1633,13 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
 - `docs/phase-11-test-coverage.md` — Part W's mapping of all 75 requested checks to offline Vitest
   evidence, including earlier regression suites and new boundary/integration tests. It records the
   limits of mocked model/controller/export checks; it is not Part X's manual recording checklist.
+- `docs/phase-11-manual-verification.md` — Part X's unexecuted real-recording checklist and result
+  ledger for recommendation quality, clean alternatives, missed thoughts, filler-heavy speech,
+  conditional audio detection, source-time navigation across cuts, scripts, and advisory workflow.
+  Documents local-screening limits and explicit PASS/FAIL/BLOCKED/NOT RUN/N/A reporting; no live
+  recording, browser, clipboard, screen-reader, or model-quality result is claimed.
+- `docs/phase-11-performance.md` — Part Y's performance/cost safeguards, deterministic regression
+  evidence, illustrative offline screening timings, and explicitly unrun browser follow-up.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,

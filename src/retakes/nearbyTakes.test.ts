@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import * as sentenceGrouping from '../transcript/sentences'
 import type { Transcript, Word } from '../transcript/types'
 import { buildHeuristicRetakeCandidates } from './heuristics'
 import {
@@ -11,6 +12,7 @@ import {
   buildScreenedRetakeCandidates,
   findNearbyCleanTake,
   findNearbyCleanTakes,
+  findNearbyTakeWindows,
   isRepairableByStumbleRemoval,
   suppressCandidatesWithNearbyCleanTakes,
 } from './nearbyTakes'
@@ -74,6 +76,111 @@ const CLEAN_DASHBOARD = [
 ] as const
 
 describe('nearby clean-take suppression', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('indexes sentences once and reuses their words across a large screening pass', () => {
+    const transcript: Transcript = {
+      words: Array.from({ length: 300 }, (_, sentence) =>
+        FAILED_DASHBOARD.map((text, word) => ({
+          text: word === FAILED_DASHBOARD.length - 1
+            ? `projects${sentence}...`
+            : text,
+          start: sentence * 10 + word * 0.25,
+          end: sentence * 10 + word * 0.25 + 0.2,
+        })),
+      ).flat(),
+    }
+    const candidates = buildHeuristicRetakeCandidates(transcript)
+    expect(candidates).toHaveLength(300)
+    const group = vi.spyOn(sentenceGrouping, 'groupSentences')
+    const fullWordFilter = vi.spyOn(transcript.words, 'filter')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new Error('Local screening must not make a network request.'),
+    )
+
+    const result = suppressCandidatesWithNearbyCleanTakes(transcript, candidates)
+
+    expect(result).toEqual(candidates)
+    expect(result).not.toBe(candidates)
+    expect(group).toHaveBeenCalledExactlyOnceWith(transcript.words)
+    expect(fullWordFilter).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does no indexing work when there are no candidates to screen', () => {
+    const group = vi.spyOn(sentenceGrouping, 'groupSentences')
+    expect(suppressCandidatesWithNearbyCleanTakes(sequential('Clear.'), [])).toEqual([])
+    expect(group).not.toHaveBeenCalled()
+  })
+
+  it.each(['overlap', 'unordered', 'custom-range'] as const)(
+    'preserves full-word filtering for %s inputs',
+    (variant) => {
+      const transcript = sequential(...FAILED_DASHBOARD, ...CLEAN_DASHBOARD)
+      const candidate = onlyCandidate(transcript)
+      if (variant === 'overlap') {
+        transcript.words[1].start = transcript.words[0].end - 0.1
+      } else if (variant === 'unordered') {
+        const first = transcript.words[1]
+        const second = transcript.words[2]
+        const timing = { start: first.start, end: first.end }
+        first.start = second.start
+        first.end = second.end
+        second.start = timing.start
+        second.end = timing.end
+      } else {
+        candidate.startSourceMs += 100
+      }
+      const expected = !isRepairableByStumbleRemoval(transcript, candidate) &&
+        findNearbyCleanTake(transcript, candidate) === null
+        ? [candidate]
+        : []
+      const fullWordFilter = vi.spyOn(transcript.words, 'filter')
+
+      expect(suppressCandidatesWithNearbyCleanTakes(transcript, [candidate])).toEqual(expected)
+      expect(fullWordFilter).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it('rebuilds the local index on each invocation instead of retaining changed text', () => {
+    const transcript = sequential(...FAILED_DASHBOARD, ...CLEAN_DASHBOARD)
+    const candidate = onlyCandidate(transcript)
+    expect(suppressCandidatesWithNearbyCleanTakes(transcript, [candidate])).toEqual([])
+
+    transcript.words[transcript.words.length - 1].text = 'projects...'
+
+    expect(suppressCandidatesWithNearbyCleanTakes(transcript, [candidate])).toEqual([candidate])
+  })
+
+  it('keeps invalid sentence positions inside the nearby-distance limit', () => {
+    const candidate = onlyCandidate(sequential(...FAILED_DASHBOARD))
+    const transcript = sequential(
+      ...FAILED_DASHBOARD, 'Sorry.', 'Again.', ...CLEAN_DASHBOARD,
+    )
+    transcript.words[FAILED_DASHBOARD.length].start = Number.NaN
+    transcript.words[FAILED_DASHBOARD.length + 1].start = Number.NaN
+
+    // Dropping invalid views must not move this distance-three clean take
+    // into the allowed distance-two window, even though its time gap is close.
+    expect(findNearbyTakeWindows(transcript, candidate)).toEqual([])
+    expect(suppressCandidatesWithNearbyCleanTakes(transcript, [candidate])).toEqual([candidate])
+  })
+
+  it('uses the first sentence position when source envelopes are duplicated', () => {
+    const transcript = sequential(...FAILED_DASHBOARD, 'Sorry.', ...CLEAN_DASHBOARD)
+    const candidate = onlyCandidate(transcript)
+    transcript.words.push(
+      ...transcript.words.slice(0, FAILED_DASHBOARD.length).map((word) => ({ ...word })),
+    )
+
+    expect(findNearbyTakeWindows(transcript, candidate).map(
+      ({ text, sentenceDistance }) => ({ text, sentenceDistance }),
+    )).toEqual([
+      { text: 'Sorry.', sentenceDistance: 1 },
+      { text: 'The dashboard lets you manage all projects.', sentenceDistance: 2 },
+    ])
+  })
+
   it('uses conservative, documented local limits', () => {
     expect(MAX_NEARBY_TAKE_GAP_MS).toBe(3_000)
     expect(MAX_NEARBY_SENTENCE_DISTANCE).toBe(2)

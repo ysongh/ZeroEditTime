@@ -195,13 +195,17 @@ export async function analyzeRetakes(
     throw new Error('Cannot analyze retakes without a valid source duration.')
   }
 
+  // Known-cancelled work must not even screen the transcript or create a
+  // session cache. Keep the inexpensive input checks above deterministic.
+  const signal = options.signal
+  signal?.throwIfAborted()
+
   const candidates = selectRetakeCandidatesForAnalysis(
     buildScreenedRetakeCandidates(availableTranscript),
   )
   const total = candidates.length
   const analyzeContext =
     options.analyzeContext ?? DEFAULT_RETAKE_CONTEXT_ANALYZER
-  const signal = options.signal
   const cache = sessionCacheFor(analyzeContext)
   const recommendations: Array<RetakeRecommendation | null> = Array.from(
     { length: total },

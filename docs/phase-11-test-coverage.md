@@ -8,7 +8,8 @@ the deployed functions directory.
 
 The coverage below includes earlier parts and the Part W additions. It does not
 claim live-model accuracy, browser accessibility, playback/encoding quality, or
-verification with real recordings. Those require the subsequent manual step.
+verification with real recordings. Use the [Part X manual checklist](phase-11-manual-verification.md)
+to record those real-world observations separately.
 
 ## Candidate generation and context
 
