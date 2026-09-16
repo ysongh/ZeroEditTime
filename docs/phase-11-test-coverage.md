@@ -102,3 +102,18 @@ separately exercises all request text/word/alternate caps and field whitelists.
 Existing tests continue to run as part of the full suite. Export checks above use
 pure builders and mocked runtime boundaries; they do not encode media or substitute
 for listening to and viewing a real exported recording.
+
+## Part Z compatibility additions
+
+[App.test.tsx](../src/App.test.tsx) adds two legacy-history permutations (dismissed
+and resolved advice) plus a real ExportButton encoder-handoff comparison across
+absent/open/dismissed/resolved/error advice with non-default audio cleanup.
+Content-only history created before analysis retains its existing shape; Undo
+and a delayed editing-agent callback preserve the latest advisory workflow.
+Editor Reset retains source advice, while source replacement restores empty/idle
+defaults. The export comparison retains source bytes/identity, kept duration,
+captions, overlays, and cleanup inputs, complementing Part W's pure filter-graph
+checks. Encoding and browser download remain mocked, not real-video verification.
+
+See the [final handoff](phase-11-handoff.md) for the complete implementation,
+compatibility boundary, verification results, and remaining manual work.

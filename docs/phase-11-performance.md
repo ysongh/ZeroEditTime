@@ -60,4 +60,5 @@ requests and transcription uploads from retake requests.
 
 Record observed responsiveness or long tasks and their reproduction steps; do not
 infer a browser pass from the offline timing table. Real-recording quality checks
-from Part X and the separate Part Z backward-compatibility review remain pending.
+from Part X remain pending. Part Z's automated backward-compatibility evidence is
+recorded separately in the [Phase 11 handoff](phase-11-handoff.md#backward-compatibility-part-z).

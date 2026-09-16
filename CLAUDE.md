@@ -980,7 +980,7 @@ empty folders for future phases.
   N/A because no measured audio/confidence signals exist; conditional future listening criteria do
   not add a detector. All real-recording/browser/model results remain NOT RUN or blank, with no
   claimed quality pass. Part X changes documentation only.
-- **Phase 11, Part Y (done; stop here):** App memoizes current/open retake advice by immutable
+- **Phase 11, Part Y (done):** App memoizes current/open retake advice by immutable
   source-transcript and recommendation-list identities and skips freshness work when no advice
   exists. Playback, EDL/transcript deletions, overlays, selection, captions, export, and progress
   updates no longer rebuild retake screening/fingerprints; actual source/advice replacement still
@@ -994,7 +994,23 @@ empty folders for future phases.
   bounded contexts, 50-entry page-session cache, and section-count progress remain unchanged; no
   token counts, automatic analysis, new dependencies, or detection-policy changes are added.
   `docs/phase-11-performance.md` records evidence and illustrative offline screening measurements,
-  not a browser or real-recording pass. Part Z remains pending.
+  not a browser or real-recording pass.
+- **Phase 11, Part Z (done; stop here):** compatibility regressions keep retakes advisory across
+  old-style content-only Undo history and the actual ExportButton encoder handoff. App tests create
+  EDL/overlay snapshots before the first analysis, then verify dismissed/resolved advice survives
+  Undo and a delayed editing-agent callback without resurrecting obsolete overlay or retake state.
+  Editor Reset preserves source advice; source replacement restores empty/idle defaults. A real
+  ExportButton callback with non-default cleanup receives identical source bytes/identity, kept
+  segments/duration, prepared captions, projected overlays, and cleanup plans across absent, open,
+  dismissed, resolved, and error advice; only the encoder/download boundary is mocked. Existing
+  Part-W checks continue to compare the pure export filter arguments. No production behavior,
+  serializer, migration, EDL, or export code changes are needed: the app has no saved-project
+  boundary, and retakes never enter its content snapshots or export contract.
+  `docs/phase-11-handoff.md` records the complete Phase 11 file inventory, architecture, sanitized
+  request/result contracts, actual candidate/cost policy, compatibility evidence, privacy, and
+  intentional limits. The lettered implementation parts are finished; real-recording, browser,
+  live-model quality, and actual output-video comparison remain unverified and are the next
+  validation work, not a claimed manual pass or a new feature phase.
 - **Out of scope (do NOT build):** save/load (deliberately deferred), caption timing edits,
   caption add/delete/split/merge, caption styling UI, SRT import, an agent tool for editing
   caption text, and word-by-word karaoke timing; do not scaffold for them.
@@ -1121,7 +1137,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   source preview/markers, workflow state, partial/empty outcomes, and Part-U latest-wins request
   ownership. Part Y's dependency-aware memo/effect harness and call-through screening spies lock
   reuse through ordinary editor actions and export, explicit-only model calls, and source/advice
-  invalidation. Native decoding and playback remain manual.
+  invalidation. Part Z adds pre-advice content-history/late-agent compatibility and identical
+  encoder-handoff coverage across advisory states with non-default audio cleanup. Native decoding,
+  playback, and actual encoded output remain manual.
 - `src/Timeline.tsx` — one-track timeline rendered one-way from the EDL (segments, gaps,
   playhead, selection); click-to-seek maps a pixel position back to source time.
 - `src/Timeline.test.tsx` — Part-V source-time regression coverage for kept-range, selection, and
@@ -1289,14 +1307,15 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
     default/preset Add actions, removal confirmation for used assets, busy state, and visible
     errors. A source-id key/unmount guard prevents a slow decode from entering a replacement
     document.
-- `src/retakes/` — Phase 11 advisory retake implementation is complete through Part Y; Part X's
+- `src/retakes/` — Phase 11 advisory retake implementation is complete through Part Z; Part X's
   real-recording checklist remains unexecuted. This folder
   contains the Parts A–F pure/client boundaries, Part-I explicit batch runner, Part-J request cost
   controls, Part-K transcript provenance, Part-L collection normalization, Part-M advisory editor
   state, the Part-N Retakes panel, Part-O severity presentation, Part-P source playback wiring, the
   Part-Q marker lane, Part-R script/workflow UX, Part-S successful-empty presentation, Part-T
   partial/error policy, Part-U cancellation/latest-wins handling, Part-V accessibility, and Part-W
-  test coverage plus Part-Y local screening/cancellation performance guards;
+  test coverage plus Part-Y local screening/cancellation performance guards and Part-Z compatibility
+  regression protection;
   Parts G-H's conservative decision and replacement-script policies live in the existing server
   relay.
   - `sourceTime.ts` — shared compact source clocks and spoken source-range formatting with explicit
@@ -1640,6 +1659,9 @@ Run `pnpm build` to confirm changes typecheck and compile, and `pnpm test` for t
   recording, browser, clipboard, screen-reader, or model-quality result is claimed.
 - `docs/phase-11-performance.md` — Part Y's performance/cost safeguards, deterministic regression
   evidence, illustrative offline screening timings, and explicitly unrun browser follow-up.
+- `docs/phase-11-handoff.md` — complete Phase 11 file inventory, architecture, sanitized AI
+  contracts, thresholds/cost/privacy policy, Part-Z compatibility evidence, verification results,
+  and limitations. Separates offline passes from still-unrun real-recording/browser validation.
 - `docs/phase-9a-manual-verification.md` — Part M's concise human browser checklist. It defines
   fixtures and pass observations for image upload/decode, source-time preview/editor behavior,
   timeline interactions, overlay/caption export across cuts, PNG alpha, audio/lip-sync, progress,

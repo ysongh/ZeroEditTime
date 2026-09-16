@@ -8,14 +8,19 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 import Timeline from './Timeline'
+import AgentBar from './agent/AgentBar'
 import CaptionList from './captions/CaptionList'
 import CaptionOverlay from './captions/CaptionOverlay'
 import { buildSrt, prepareCaptionsForExport } from './captions/captions'
 import { applyRemovedRange, totalKeptDuration } from './edl/edl'
 import type { Caption, EDL } from './edl/types'
 import ExportButton from './export/ExportButton'
+import AudioCleanupControls from './export/AudioCleanupControls'
 import { buildAudioCleanupPlan } from './export/audioCleanupPlan'
-import { DEFAULT_AUDIO_CLEANUP_SETTINGS } from './export/audioCleanupSettings'
+import {
+  DEFAULT_AUDIO_CLEANUP_SETTINGS,
+  type AudioCleanupSettings,
+} from './export/audioCleanupSettings'
 import { buildExportArgs } from './export/ffmpeg'
 import * as exportRuntime from './export/ffmpeg'
 import {
@@ -23,6 +28,7 @@ import {
   buildImageOverlayRenderPlanForEdl,
 } from './export/imageOverlays'
 import type { ImageOverlay, OverlayAsset } from './overlays/types'
+import type { OverlayEditorState } from './overlays/editorState'
 import MediaPanel from './overlays/MediaPanel'
 import OverlayInspector from './overlays/OverlayInspector'
 import RetakesPanel, {
@@ -501,6 +507,235 @@ afterEach(() => {
 })
 
 describe('App regression wiring', () => {
+  it.each(['dismissed', 'resolved'] as const)(
+    'keeps %s advice through legacy content-only Undo and a delayed agent commit',
+    async (status) => {
+      const { transcript, recommendation } = failedTakeFixture()
+      harness.extractAudio.mockResolvedValue(new Blob(['audio']))
+      harness.transcribe.mockResolvedValue(transcript)
+      harness.analyzeRetakes.mockResolvedValue({
+        candidateCount: 1, analyzedCount: 1, recommendations: [recommendation],
+      })
+      let view = selectSource({ name: 'legacy.mp4' } as File, 'blob:legacy')
+      await findButton(view, 'Transcribe').props.onClick?.()
+      view = renderApp()
+      const editor = editorReducerRecord()
+      const state = () => editor.state as {
+        edl: EDL
+        overlays: OverlayEditorState
+        history: unknown[]
+        retakes: RetakeEditorState
+      }
+      const originalEdl = state().edl
+      expect(originalEdl).not.toHaveProperty('retakeRecommendations')
+      expect(state().retakes).toEqual({
+        retakeRecommendations: [], retakeAnalysisStatus: 'idle',
+      })
+
+      // Every snapshot predates the first analysis and has the existing
+      // content-only shape; there is no saved-project/migration API to fake.
+      findComponent<TranscriptProps>(view, TranscriptView, 'transcript')
+        .props.onDeleteRange(2, 3)
+      view = renderApp()
+      findComponent<ComponentProps<typeof MediaPanel>>(view, MediaPanel, 'media panel')
+        .props.onAddAsset({
+          id: 'image', kind: 'image', name: 'image.png', mimeType: 'image/png',
+          width: 640, height: 480, src: 'blob:image',
+        })
+      view = renderApp()
+      findComponent<ComponentProps<typeof MediaPanel>>(view, MediaPanel, 'media panel')
+        .props.onAddOverlay({
+          id: 'overlay', assetId: 'image', startSourceMs: 0, endSourceMs: 7_000,
+          x: 0, y: 0, width: 0.5, height: 0.5, fit: 'contain', opacity: 1,
+          zIndex: 0, fadeInMs: 0, fadeOutMs: 0,
+        })
+      view = renderApp()
+      expect(state().history).toHaveLength(3)
+      for (const snapshot of state().history) {
+        expect(Object.keys(snapshot as object).sort())
+          .toEqual(['edl', 'imageOverlays', 'overlayAssets'])
+      }
+      const cutEdl = state().edl
+      const legacyHistory = state().history
+      const agent = findComponent<ComponentProps<typeof AgentBar>>(view, AgentBar, 'agent bar')
+      const agentResult = deferredValue<EDL>()
+      const pendingCommit = agentResult.promise.then((next) => agent.props.onCommit(next, false))
+
+      await findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel').props.onAnalyze()
+      view = renderApp()
+      const panel = findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel')
+      expect(panel.props.recommendations).toEqual([recommendation])
+      if (status === 'dismissed') panel.props.onDismiss(recommendation.id)
+      else panel.props.onResolve(recommendation.id)
+      view = renderApp()
+      const latestRetakes = state().retakes
+      expect(latestRetakes).toMatchObject({
+        retakeAnalysisStatus: 'complete', retakeRecommendations: [{ status }],
+      })
+      expect(state().history).toBe(legacyHistory)
+
+      findButton(view, 'Undo').props.onClick?.()
+      view = renderApp()
+      expect(state().overlays.imageOverlays).toEqual([])
+      expect(state().overlays.overlayAssets).toHaveLength(1)
+      expect(state().edl).toBe(cutEdl)
+      expect(state().retakes).toBe(latestRetakes)
+      const latestOverlays = state().overlays
+
+      // This callback was captured while an overlay still existed and advice
+      // was idle. Resolving later must commit only its EDL against latest state.
+      const agentEdl = applyRemovedRange(agent.props.edl, 6, 7)
+      agentResult.resolve(agentEdl)
+      await pendingCommit
+      view = renderApp()
+      expect(state().edl).toBe(agentEdl)
+      expect(state().overlays).toBe(latestOverlays)
+      expect(state().retakes).toBe(latestRetakes)
+      expect(state().history).toHaveLength(3)
+
+      for (const expectedHistoryLength of [2, 1, 0]) {
+        findButton(view, 'Undo').props.onClick?.()
+        view = renderApp()
+        expect(state().history).toHaveLength(expectedHistoryLength)
+        expect(state().retakes).toBe(latestRetakes)
+      }
+      expect(state().edl).toBe(originalEdl)
+      expect(state().overlays).toEqual({
+        overlayAssets: [], imageOverlays: [], selectedOverlayId: null,
+      })
+      expect(findComponent<TranscriptProps>(view, TranscriptView, 'transcript')
+        .props.transcript).toBe(transcript)
+      findButton(view, 'Reset').props.onClick?.()
+      expect(state().retakes).toBe(latestRetakes)
+
+      view = selectSource({ name: 'next.mp4' } as File, 'blob:next', 12)
+      expect(state().retakes).toEqual({
+        retakeRecommendations: [], retakeAnalysisStatus: 'idle',
+      })
+      expect(state().history).toEqual([])
+      expect(ranges(state().edl)).toEqual([[0, 12]])
+      expect(() => findComponent(view, RetakesPanel, 'retakes panel'))
+        .toThrow('Could not find retakes panel.')
+    },
+  )
+
+  it('hands identical source, edit, caption, overlay, and cleanup inputs to export with or without advice', async () => {
+    const file = new File(['unchanged source bytes'], 'source.mp4', { type: 'video/mp4' })
+    const { transcript, recommendation } = failedTakeFixture()
+    harness.extractAudio.mockResolvedValue(new Blob(['audio']))
+    harness.transcribe.mockResolvedValue(transcript)
+    harness.analyzeRetakes.mockResolvedValue({
+      candidateCount: 1, analyzedCount: 1, recommendations: [recommendation],
+    })
+    let view = selectSource(file, 'blob:source')
+    await findButton(view, 'Transcribe').props.onClick?.()
+    view = renderApp()
+    const editor = editorReducerRecord()
+    const originalEdl = findComponent<TimelineProps>(view, Timeline, 'timeline').props.edl
+    editor.dispatch({
+      type: 'commit-edl',
+      edl: applyRemovedRange({
+        ...originalEdl,
+        captions: [{ id: 'caption', start: 1, end: 5, text: 'Existing caption.' }],
+      }, 2, 4),
+    })
+    findComponent<ComponentProps<typeof MediaPanel>>(view, MediaPanel, 'media panel')
+      .props.onAddAsset({
+        id: 'image', kind: 'image', name: 'image.png', mimeType: 'image/png',
+        width: 640, height: 480, src: 'blob:image',
+      })
+    view = renderApp()
+    findComponent<ComponentProps<typeof MediaPanel>>(view, MediaPanel, 'media panel')
+      .props.onAddOverlay({
+        id: 'overlay', assetId: 'image', startSourceMs: 0, endSourceMs: 7_000,
+        x: 0, y: 0, width: 0.5, height: 0.5, fit: 'contain', opacity: 0.7,
+        zIndex: 0, fadeInMs: 100, fadeOutMs: 200,
+      })
+    view = renderApp()
+    const exportProps = findComponent<ExportButtonProps>(view, ExportButton, 'export button').props
+    const contentBefore = structuredClone(exportProps)
+    const transcriptBefore = structuredClone(transcript)
+    const engine = { loaded: true, on: vi.fn(), off: vi.fn() }
+    harness.getFfmpeg.mockReturnValue(engine)
+    // Only the encoder/download boundary is mocked. App props, the real
+    // ExportButton callback, and all export-input projections remain live.
+    const encode = vi.spyOn(exportRuntime, 'runExport')
+      .mockResolvedValue(new Blob(['mp4'], { type: 'video/mp4' }))
+    const anchor = { href: '', download: '', click: vi.fn(), remove: vi.fn() }
+    vi.stubGlobal('document', {
+      createElement: vi.fn().mockReturnValue(anchor), body: { appendChild: vi.fn() },
+    })
+    const settings: AudioCleanupSettings = {
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'strong', voiceLeveling: false,
+      loudnessTargetLufs: -20, truePeakLimitDb: -3, smoothJoins: false,
+    }
+    let exportView = ExportButton(exportProps)
+    findComponent<ComponentProps<typeof AudioCleanupControls>>(
+      exportView, AudioCleanupControls, 'audio cleanup controls',
+    ).props.onChange(settings)
+
+    async function expectSameExport() {
+      view = renderApp()
+      const props = findComponent<ExportButtonProps>(view, ExportButton, 'export button').props
+      expect(props).toEqual(contentBefore)
+      expect(props.file).toBe(file)
+      expect(props.edl).toBe(exportProps.edl)
+      expect(totalKeptDuration(props.edl)).toBe(8)
+      expect(transcript).toEqual(transcriptBefore)
+      exportView = ExportButton(props)
+      expect(findComponent<ComponentProps<typeof AudioCleanupControls>>(
+        exportView, AudioCleanupControls, 'audio cleanup controls',
+      ).props.settings).toEqual(settings)
+      const nextCall = encode.mock.calls.length + 1
+      findButton(exportView, 'Export MP4').props.onClick?.()
+      await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledTimes(nextCall))
+      expect(encode).toHaveBeenNthCalledWith(
+        nextCall, engine, file, exportProps.edl.segments,
+        prepareCaptionsForExport(exportProps.edl.captions, exportProps.edl),
+        expect.any(Function),
+        {
+          renderPlan: buildImageOverlayRenderPlanForEdl(
+            exportProps.edl, exportProps.imageOverlays, exportProps.overlayAssets,
+          ),
+          assets: exportProps.overlayAssets, frameWidth: 1920, frameHeight: 1080,
+        },
+        buildAudioCleanupPlan(settings),
+      )
+      expect(encode.mock.calls[nextCall - 1][1]).toBe(file)
+      expect(encode.mock.calls[nextCall - 1][2]).toBe(exportProps.edl.segments)
+      expect(await file.text()).toBe('unchanged source bytes')
+    }
+
+    expect(findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel').props)
+      .toMatchObject({ recommendations: [], analysisStatus: 'idle' })
+    await expectSameExport()
+    await findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel').props.onAnalyze()
+    await expectSameExport()
+    let panel = findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel')
+    expect(panel.props.recommendations).toEqual([recommendation])
+    panel.props.onDismiss(recommendation.id)
+    await expectSameExport()
+    expect((editor.state as { retakes: RetakeEditorState }).retakes.retakeRecommendations[0].status)
+      .toBe('dismissed')
+    editor.dispatch({
+      type: 'update-retakes',
+      action: { type: 'set-retake-recommendations', recommendations: [recommendation] },
+    })
+    view = renderApp()
+    findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel').props.onResolve(recommendation.id)
+    await expectSameExport()
+    expect((editor.state as { retakes: RetakeEditorState }).retakes.retakeRecommendations[0].status)
+      .toBe('resolved')
+    harness.analyzeRetakes.mockRejectedValueOnce(new Error('Analysis unavailable.'))
+    panel = findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel')
+    await panel.props.onAnalyze()
+    await expectSameExport()
+    expect(findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel').props)
+      .toMatchObject({ analysisStatus: 'error', analysisError: 'Analysis unavailable.' })
+    expect(encode).toHaveBeenCalledTimes(5)
+  })
+
   it('keeps local retake screening off normal edits and runs AI only on the explicit check', async () => {
     // Call-through spies observe the actual candidate/fingerprint work, not a
     // stubbed empty result. Effects and memo dependencies run in this harness.

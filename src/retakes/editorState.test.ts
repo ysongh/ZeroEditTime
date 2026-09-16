@@ -55,10 +55,19 @@ describe('retake editor state', () => {
       'complete',
       'error',
     ])
-    expect(createRetakeEditorState()).toEqual({
+    const fresh = createRetakeEditorState()
+    const withoutRetakeMetadata = createRetakeEditorState({})
+    expect(fresh).toEqual({
       retakeRecommendations: [],
       retakeAnalysisStatus: 'idle',
     })
+    expect(withoutRetakeMetadata).toEqual(fresh)
+    expect(withoutRetakeMetadata).not.toBe(fresh)
+    expect(withoutRetakeMetadata.retakeRecommendations)
+      .not.toBe(fresh.retakeRecommendations)
+    fresh.retakeRecommendations.push(RECOMMENDATION)
+    expect(withoutRetakeMetadata.retakeRecommendations).toEqual([])
+    expect(createRetakeEditorState().retakeRecommendations).toEqual([])
     expect(
       createRetakeEditorState({
         retakeAnalysisStatus: 'obsolete' as 'idle',
