@@ -11,10 +11,16 @@
 
 import { fetchFile } from '@ffmpeg/util'
 import type { FFmpeg } from '@ffmpeg/ffmpeg'
-import { getFfmpeg, inputExtension, loadFfmpeg } from '../ffmpeg/engine'
+import {
+  getFfmpeg,
+  inputExtension,
+  loadFfmpeg,
+  withFfmpegJob,
+} from '../ffmpeg/engine'
 
 // Shared encode settings: strip video (`-vn`), downmix to mono, resample to 16 kHz.
 const COMMON_ARGS = ['-vn', '-ac', '1', '-ar', '16000']
+export const AUDIO_PREPARATION_TIMEOUT_MS = 120_000
 
 /**
  * Extract a small mono 16 kHz audio file from the source for transcription.
@@ -28,7 +34,17 @@ const COMMON_ARGS = ['-vn', '-ac', '1', '-ar', '16000']
 export async function extractAudio(file: File | string): Promise<Blob> {
   await loadFfmpeg()
   const ffmpeg = getFfmpeg()
+  return withFfmpegJob(ffmpeg, (signal) => extractWithEngine(ffmpeg, file, signal), {
+    timeoutMs: AUDIO_PREPARATION_TIMEOUT_MS,
+    message: 'Preparing audio timed out. Try again, or choose a shorter clip.',
+  })
+}
 
+async function extractWithEngine(
+  ffmpeg: FFmpeg,
+  file: File | string,
+  signal: AbortSignal,
+): Promise<Blob> {
   const name = typeof file === 'string' ? file : file.name
   const inputName = `input.${inputExtension(name)}`
 
@@ -40,32 +56,45 @@ export async function extractAudio(file: File | string): Promise<Blob> {
     logs.push(event.message)
   }
   ffmpeg.on('log', onLog)
+  const stopLogging = () => ffmpeg.off('log', onLog)
+  // Reading a source can stall before a worker message exists to reject. Stop
+  // listening immediately on timeout even if that read never settles.
+  signal.addEventListener('abort', stopLogging, { once: true })
 
   try {
-    await ffmpeg.writeFile(inputName, await fetchFile(file))
+    const bytes = await fetchFile(file)
+    signal.throwIfAborted()
+    await ffmpeg.writeFile(inputName, bytes)
+    signal.throwIfAborted()
 
     try {
-      const mp3 = await encode(ffmpeg, inputName, 'output.mp3', 'libmp3lame', ['-b:a', '64k'])
+      const mp3 = await encode(
+        ffmpeg, inputName, 'output.mp3', 'libmp3lame', ['-b:a', '64k'], signal,
+      )
       return new Blob([mp3], { type: 'audio/mpeg' })
     } catch (mp3Err) {
+      signal.throwIfAborted()
       if (!isUnknownEncoder(logs.join('\n'), 'libmp3lame')) {
         throw describeFailure(logs.join('\n'), mp3Err)
       }
       // libmp3lame unavailable in this core — retry as PCM WAV from a clean log.
       logs.length = 0
       try {
-        const wav = await encode(ffmpeg, inputName, 'output.wav', 'pcm_s16le', [])
+        const wav = await encode(
+          ffmpeg, inputName, 'output.wav', 'pcm_s16le', [], signal,
+        )
         return new Blob([wav], { type: 'audio/wav' })
       } catch (wavErr) {
         throw describeFailure(logs.join('\n'), wavErr)
       }
     }
   } finally {
-    ffmpeg.off('log', onLog)
+    signal.removeEventListener('abort', stopLogging)
+    stopLogging()
     // Best-effort VFS cleanup: a file may not exist if its encode never ran.
-    await safeDelete(ffmpeg, inputName)
-    await safeDelete(ffmpeg, 'output.mp3')
-    await safeDelete(ffmpeg, 'output.wav')
+    await safeDelete(ffmpeg, inputName, signal)
+    await safeDelete(ffmpeg, 'output.mp3', signal)
+    await safeDelete(ffmpeg, 'output.wav', signal)
   }
 }
 
@@ -76,9 +105,20 @@ async function encode(
   outputName: string,
   codec: string,
   extra: string[],
+  signal: AbortSignal,
 ): Promise<BlobPart> {
-  await ffmpeg.exec(['-i', inputName, ...COMMON_ARGS, '-c:a', codec, ...extra, outputName])
+  signal.throwIfAborted()
+  const exitCode = await ffmpeg.exec([
+    '-i', inputName, ...COMMON_ARGS, '-c:a', codec, ...extra, outputName,
+  ])
+  signal.throwIfAborted()
+  if (exitCode !== 0) {
+    throw new Error(
+      `Could not prepare audio (encoder exited with code ${exitCode}). Try another clip.`,
+    )
+  }
   const data = await ffmpeg.readFile(outputName)
+  signal.throwIfAborted()
   // A binary read is always a Uint8Array; narrow it to a valid BlobPart.
   return typeof data === 'string' ? data : (data as Uint8Array<ArrayBuffer>)
 }
@@ -100,7 +140,13 @@ function isUnknownEncoder(log: string, encoder: string): boolean {
   return log.toLowerCase().includes(`unknown encoder '${encoder.toLowerCase()}'`)
 }
 
-async function safeDelete(ffmpeg: FFmpeg, path: string): Promise<void> {
+async function safeDelete(
+  ffmpeg: FFmpeg,
+  path: string,
+  signal: AbortSignal,
+): Promise<void> {
+  // Termination already removed the old VFS. Never delete a retry's files.
+  if (signal.aborted) return
   try {
     await ffmpeg.deleteFile(path)
   } catch {

@@ -506,6 +506,180 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe('App transcription lifecycle', () => {
+  const audio = new Blob(['audio'], { type: 'audio/mpeg' })
+  const transcript: Transcript = {
+    words: [{ text: 'Current source.', start: 0, end: 1 }],
+  }
+
+  it('shows loading, preparation, and upload separately and locks before rerender', async () => {
+    const loading = deferredValue<void>()
+    const extraction = deferredValue<Blob>()
+    const upload = deferredValue<Transcript>()
+    let view = selectSource({ name: 'source.mp4' } as File, 'blob:source')
+    harness.loadFfmpeg.mockReturnValueOnce(loading.promise)
+    harness.extractAudio.mockReturnValueOnce(extraction.promise)
+    harness.transcribe.mockReturnValueOnce(upload.promise)
+    const trigger = findButton(view, 'Transcribe').props.onClick
+    const pending = trigger?.()
+    await trigger?.()
+
+    expect(harness.loadFfmpeg).toHaveBeenCalledTimes(2) // Preload + one click.
+    expect(harness.extractAudio).not.toHaveBeenCalled()
+    view = renderApp()
+    expect(findButton(view, 'Loading audio engine…').props.disabled).toBe(true)
+    expect(findNode(
+      view,
+      (element) => (element.props as { role?: string }).role === 'status',
+      'engine loading status',
+    ).props.children).toContain('31 MB')
+
+    loading.resolve()
+    await Promise.resolve()
+    view = renderApp()
+    expect(findButton(view, 'Preparing audio…').props.disabled).toBe(true)
+    expect(harness.extractAudio).toHaveBeenCalledOnce()
+    expect(harness.transcribe).not.toHaveBeenCalled()
+
+    extraction.resolve(audio)
+    await Promise.resolve()
+    view = renderApp()
+    expect(findButton(view, 'Transcribing…').props.disabled).toBe(true)
+    expect(harness.transcribe).toHaveBeenCalledWith(audio)
+    upload.resolve(transcript)
+    await pending
+    view = renderApp()
+    expect(findButton(view, 'Transcribe').props.disabled).toBe(false)
+    expect(findComponent<TranscriptProps>(view, TranscriptView, 'transcript')
+      .props.transcript).toBe(transcript)
+  })
+
+  it.each(['loading', 'preparing', 'transcribing'] as const)(
+    'shows a %s failure and allows a successful retry',
+    async (phase) => {
+      harness.extractAudio.mockResolvedValue(audio)
+      harness.transcribe.mockResolvedValue(transcript)
+      let view = selectSource({ name: 'source.mp4' } as File, 'blob:source')
+      const failedStep = phase === 'loading'
+        ? harness.loadFfmpeg
+        : phase === 'preparing' ? harness.extractAudio : harness.transcribe
+      failedStep.mockRejectedValueOnce(new Error(`${phase} timed out. Try again.`))
+
+      await findButton(view, 'Transcribe').props.onClick?.()
+      view = renderApp()
+      expect(findButton(view, 'Transcribe').props.disabled).toBe(false)
+      expect(findNode(
+        view,
+        (element) => (element.props as { role?: string }).role === 'alert',
+        'transcription error',
+      ).props.children).toBe(`${phase} timed out. Try again.`)
+      if (phase === 'loading') expect(harness.extractAudio).not.toHaveBeenCalled()
+      if (phase !== 'transcribing') expect(harness.transcribe).not.toHaveBeenCalled()
+
+      await findButton(view, 'Transcribe').props.onClick?.()
+      view = renderApp()
+      expect(findComponent<TranscriptProps>(view, TranscriptView, 'transcript')
+        .props.transcript).toBe(transcript)
+      expect(() => findNode(
+        view,
+        (element) => (element.props as { role?: string }).role === 'alert',
+        'transcription error',
+      )).toThrow('Could not find')
+    },
+  )
+
+  it.each([
+    ['loading', 'success'], ['loading', 'error'],
+    ['preparing', 'success'], ['preparing', 'error'],
+    ['transcribing', 'success'], ['transcribing', 'error'],
+  ] as const)(
+    'ignores stale %s %s after source replacement without unlocking the new request',
+    async (phase, outcome) => {
+      const stale = deferredValue<unknown>()
+      const current = deferredValue<Transcript>()
+      harness.extractAudio.mockResolvedValue(audio)
+      harness.transcribe.mockResolvedValue(transcript)
+      let view = selectSource({ name: 'first.mp4' } as File, 'blob:first')
+      const staleStep = phase === 'loading'
+        ? harness.loadFfmpeg
+        : phase === 'preparing' ? harness.extractAudio : harness.transcribe
+      staleStep.mockReturnValueOnce(stale.promise)
+      const oldPending = findButton(view, 'Transcribe').props.onClick?.()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      view = selectSource({ name: 'second.mp4' } as File, 'blob:second')
+      expect(findButton(view, 'Transcribe').props.disabled).toBe(false)
+      harness.transcribe.mockReturnValueOnce(current.promise)
+      const currentTrigger = findButton(view, 'Transcribe').props.onClick
+      const currentPending = currentTrigger?.()
+      await Promise.resolve()
+      await Promise.resolve()
+      const uploadCount = harness.transcribe.mock.calls.length
+      const extractionCount = harness.extractAudio.mock.calls.length
+
+      if (outcome === 'error') stale.reject(new Error('Old source failed.'))
+      else stale.resolve(phase === 'loading' ? undefined : phase === 'preparing'
+        ? audio : { words: [{ text: 'Old source.', start: 0, end: 1 }] })
+      await oldPending
+      await currentTrigger?.()
+      view = renderApp()
+      expect(findButton(view, 'Transcribing…').props.disabled).toBe(true)
+      expect(harness.transcribe).toHaveBeenCalledTimes(uploadCount)
+      expect(harness.extractAudio).toHaveBeenCalledTimes(extractionCount)
+      expect(() => findNode(
+        view,
+        (element) => (element.props as { role?: string }).role === 'alert',
+        'transcription error',
+      )).toThrow('Could not find')
+
+      current.resolve(transcript)
+      await currentPending
+      view = renderApp()
+      expect(findButton(view, 'Transcribe').props.disabled).toBe(false)
+      expect(findComponent<TranscriptProps>(view, TranscriptView, 'transcript')
+        .props.transcript).toBe(transcript)
+    },
+  )
+
+  it.each([
+    ['loading', 'success'], ['loading', 'error'],
+    ['preparing', 'success'], ['preparing', 'error'],
+    ['transcribing', 'success'], ['transcribing', 'error'],
+  ] as const)('ignores %s %s after unmount', async (phase, outcome) => {
+    const stale = deferredValue<unknown>()
+    harness.extractAudio.mockResolvedValue(audio)
+    harness.transcribe.mockResolvedValue(transcript)
+    const view = selectSource({ name: 'source.mp4' } as File, 'blob:source')
+    const staleStep = phase === 'loading'
+      ? harness.loadFfmpeg
+      : phase === 'preparing' ? harness.extractAudio : harness.transcribe
+    staleStep.mockReturnValueOnce(stale.promise)
+    const pending = findButton(view, 'Transcribe').props.onClick?.()
+    await Promise.resolve()
+    await Promise.resolve()
+    for (const record of harness.slots) {
+      if (record.kind === 'effect') record.cleanup?.()
+    }
+    const setters = harness.slots.flatMap((record) =>
+      record.kind === 'state' ? [record.setter] : [],
+    )
+    setters.forEach((setter) => setter.mockClear())
+    editorReducerRecord().dispatch.mockClear()
+    const uploadCount = harness.transcribe.mock.calls.length
+    const extractionCount = harness.extractAudio.mock.calls.length
+
+    if (outcome === 'error') stale.reject(new Error('Late failure.'))
+    else stale.resolve(phase === 'loading' ? undefined : phase === 'preparing'
+      ? audio : transcript)
+    await pending
+    setters.forEach((setter) => expect(setter).not.toHaveBeenCalled())
+    expect(editorReducerRecord().dispatch).not.toHaveBeenCalled()
+    expect(harness.transcribe).toHaveBeenCalledTimes(uploadCount)
+    expect(harness.extractAudio).toHaveBeenCalledTimes(extractionCount)
+  })
+})
+
 describe('App regression wiring', () => {
   it.each(['dismissed', 'resolved'] as const)(
     'keeps %s advice through legacy content-only Undo and a delayed agent commit',

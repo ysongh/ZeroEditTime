@@ -189,11 +189,14 @@ function App() {
   const [outPoint, setOutPoint] = useState<number | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [transcript, setTranscript] = useState<Transcript | null>(null)
-  // The Transcribe action runs in two visible phases: 'preparing' extracts the
-  // audio client-side (engine load + ffmpeg.wasm), then 'transcribing' uploads it.
+  // Engine loading, local extraction, and uploading have separate visible
+  // phases so a first-time download does not look like stalled extraction.
   const [transcribePhase, setTranscribePhase] =
-    useState<'idle' | 'preparing' | 'transcribing'>('idle')
+    useState<'idle' | 'loading' | 'preparing' | 'transcribing'>('idle')
   const [transcribeError, setTranscribeError] = useState<string | null>(null)
+  // The synchronous lock also owns every async update. Replacing the source
+  // invalidates it before a previous load, extraction, or upload can finish.
+  const activeTranscriptionRef = useRef<symbol | null>(null)
   // Tracks whether captions carry hand edits since the last generation, so the
   // manual "Generate captions" button can warn before overwriting them. It lives
   // in React state (not the EDL — the Caption type is untouched): set when an
@@ -227,6 +230,7 @@ function App() {
   // Revoke the video URL and every still-image object URL on disposal.
   useEffect(() => {
     return () => {
+      activeTranscriptionRef.current = null
       retakeSourcePreviewRef.current = null
       retakeScriptCopyAttemptRef.current += 1
       const activeRetakeAnalysis = activeRetakeAnalysisRef.current
@@ -401,6 +405,7 @@ function App() {
       return
     }
 
+    activeTranscriptionRef.current = null
     cancelActiveRetakeAnalysis()
     retakeSourcePreviewRef.current = null
     setSuccessfulRetakeAnalysis(null)
@@ -417,6 +422,7 @@ function App() {
     dispatchEditor({ type: 'reset-document' })
     setPlayhead(0)
     setTranscript(null)
+    setTranscribePhase('idle')
     setTranscribeError(null)
     setCaptionsEdited(false)
     setIsOverlayEditing(false)
@@ -576,17 +582,29 @@ function App() {
   }
 
   async function handleTranscribe() {
-    if (file === null || transcribePhase !== 'idle') {
+    if (
+      file === null ||
+      transcribePhase !== 'idle' ||
+      activeTranscriptionRef.current !== null
+    ) {
       return
     }
+    const request = Symbol('transcription')
+    activeTranscriptionRef.current = request
+    const isCurrent = () => activeTranscriptionRef.current === request
     setTranscribeError(null)
     try {
+      setTranscribePhase('loading')
+      await loadFfmpeg()
+      if (!isCurrent()) return
       // Extract a tiny mono 16 kHz audio file client-side first, so a real clip
       // clears the proxy's body wall; only then upload it for transcription.
       setTranscribePhase('preparing')
       const audio = await extractAudio(file)
+      if (!isCurrent()) return
       setTranscribePhase('transcribing')
       const nextTranscript = await transcribe(audio)
+      if (!isCurrent()) return
       cancelActiveRetakeAnalysis()
       clearRetakeScriptCopyFeedback()
       setSuccessfulRetakeAnalysis(null)
@@ -597,11 +615,15 @@ function App() {
       })
       setTranscript(nextTranscript)
     } catch (err) {
+      if (!isCurrent()) return
       setTranscribeError(
         err instanceof Error ? err.message : 'Transcription failed.',
       )
     } finally {
-      setTranscribePhase('idle')
+      if (isCurrent()) {
+        activeTranscriptionRef.current = null
+        setTranscribePhase('idle')
+      }
     }
   }
 
@@ -1165,15 +1187,25 @@ function App() {
               onClick={handleTranscribe}
               disabled={file === null || transcribePhase !== 'idle'}
             >
-              {transcribePhase === 'preparing'
-                ? 'Preparing audio…'
-                : transcribePhase === 'transcribing'
-                  ? 'Transcribing…'
-                  : 'Transcribe'}
+              {transcribePhase === 'loading'
+                ? 'Loading audio engine…'
+                : transcribePhase === 'preparing'
+                  ? 'Preparing audio…'
+                  : transcribePhase === 'transcribing'
+                    ? 'Transcribing…'
+                    : 'Transcribe'}
             </button>
 
+            {transcribePhase === 'loading' && (
+              <p role="status" style={{ marginTop: 8 }}>
+                The first load downloads about 31 MB. This can take a moment.
+              </p>
+            )}
+
             {transcribeError !== null && (
-              <p style={{ color: 'crimson', marginTop: 8 }}>{transcribeError}</p>
+              <p role="alert" style={{ color: 'crimson', marginTop: 8 }}>
+                {transcribeError}
+              </p>
             )}
 
             {transcript !== null && edl !== null && (

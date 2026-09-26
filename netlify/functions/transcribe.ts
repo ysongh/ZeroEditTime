@@ -26,6 +26,7 @@ type TranscribeResponse = {
 }
 
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1/audio/transcriptions'
+export const TRANSCRIPTION_SERVICE_TIMEOUT_MS = 45_000
 
 // OpenAI infers the audio format from the upload's filename extension and rejects
 // a nameless buffer, so we name the upload from the request's Content-Type. The
@@ -94,6 +95,54 @@ function toWords(data: unknown): Word[] | null {
   return words
 }
 
+async function requestTranscript(
+  endpoint: string,
+  apiKey: string,
+  form: FormData,
+  signal: AbortSignal,
+): Promise<TranscribeResponse> {
+  let upstream: Response
+  try {
+    upstream = await fetch(endpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: form,
+      signal,
+    })
+  } catch (err) {
+    return json(502, {
+      error: `Could not reach the transcription service: ${String(err)}`,
+    })
+  }
+
+  if (!upstream.ok) {
+    let detail: string
+    try {
+      detail = await upstream.text()
+    } catch {
+      detail = `HTTP ${upstream.status}; please try again.`
+    }
+    return json(upstream.status, { error: `Transcription failed: ${detail}` })
+  }
+
+  let payload: unknown
+  try {
+    payload = await upstream.json()
+  } catch {
+    return json(502, {
+      error: 'The transcription service returned an unreadable response. Try again.',
+    })
+  }
+  const words = toWords(payload)
+  if (words === null) {
+    return json(502, {
+      error: 'Transcription response was missing word-level timestamps.',
+    })
+  }
+
+  return json(200, { words })
+}
+
 export const handler = async (
   event: TranscribeEvent,
 ): Promise<TranscribeResponse> => {
@@ -123,32 +172,24 @@ export const handler = async (
   form.append('timestamp_granularities[]', 'word') // [] is required for word times
 
   const endpoint = process.env.TRANSCRIBE_ENDPOINT ?? OPENAI_ENDPOINT
+  const controller = new AbortController()
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<TranscribeResponse>((resolve) => {
+    timeoutId = setTimeout(() => {
+      resolve(json(504, {
+        error: 'The transcription service timed out. Please try again.',
+      }))
+      controller.abort()
+    }, TRANSCRIPTION_SERVICE_TIMEOUT_MS)
+  })
 
-  let upstream: Response
   try {
-    upstream = await fetch(endpoint, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form,
-    })
-  } catch (err) {
-    return json(502, {
-      error: `Could not reach the transcription service: ${String(err)}`,
-    })
+    // Keep the deadline active through both success and error body reads.
+    return await Promise.race([
+      requestTranscript(endpoint, apiKey, form, controller.signal),
+      timeout,
+    ])
+  } finally {
+    clearTimeout(timeoutId)
   }
-
-  if (!upstream.ok) {
-    const detail = await upstream.text()
-    return json(upstream.status, { error: `Transcription failed: ${detail}` })
-  }
-
-  const payload: unknown = await upstream.json()
-  const words = toWords(payload)
-  if (words === null) {
-    return json(502, {
-      error: 'Transcription response was missing word-level timestamps.',
-    })
-  }
-
-  return json(200, { words })
 }

@@ -11,7 +11,7 @@
 
 import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile } from '@ffmpeg/util'
-import { inputExtension } from '../ffmpeg/engine'
+import { inputExtension, withFfmpegJob } from '../ffmpeg/engine'
 import { buildSrt, type PreparedCaption } from '../captions/captions'
 import type { OverlayRenderSegment } from '../overlays/renderPlan'
 import type { OverlayAsset } from '../overlays/types'
@@ -280,6 +280,20 @@ export async function runExport(
   file: File,
   segments: ExportSegment[],
   captions: PreparedCaption[] = [],
+  onNote?: (note: string) => void,
+  imageOverlays?: ImageOverlayExportRequest,
+  audioCleanup?: AudioCleanupPlan,
+): Promise<Blob> {
+  return withFfmpegJob(ffmpeg, () => runOwnedExport(
+    ffmpeg, file, segments, captions, onNote, imageOverlays, audioCleanup,
+  ))
+}
+
+async function runOwnedExport(
+  ffmpeg: FFmpeg,
+  file: File,
+  segments: ExportSegment[],
+  captions: PreparedCaption[],
   onNote?: (note: string) => void,
   imageOverlays?: ImageOverlayExportRequest,
   audioCleanup?: AudioCleanupPlan,

@@ -6,6 +6,10 @@
 
 import type { Transcript, Word } from './types'
 
+// Includes uploading and reading the response, with time for the proxy to report
+// its own shorter service deadline.
+export const TRANSCRIPTION_TIMEOUT_MS = 60_000
+
 function isWord(value: unknown): value is Word {
   if (typeof value !== 'object' || value === null) {
     return false
@@ -41,18 +45,29 @@ async function errorMessage(res: Response): Promise<string> {
   return `Transcription failed (HTTP ${res.status}).`
 }
 
-export async function transcribe(audio: Blob): Promise<Transcript> {
+async function requestTranscript(
+  audio: Blob,
+  signal: AbortSignal,
+): Promise<Transcript> {
   const res = await fetch('/api/transcribe', {
     method: 'POST',
     headers: { 'Content-Type': audio.type },
     body: audio,
+    signal,
   })
 
   if (!res.ok) {
     throw new Error(await errorMessage(res))
   }
 
-  const data: unknown = await res.json()
+  let data: unknown
+  try {
+    data = await res.json()
+  } catch (cause) {
+    throw new Error('Received a malformed transcript from the server. Try again.', {
+      cause,
+    })
+  }
   if (
     typeof data !== 'object' ||
     data === null ||
@@ -64,4 +79,26 @@ export async function transcribe(audio: Blob): Promise<Transcript> {
 
   const words = (data as { words: unknown[] }).words.filter(isWord)
   return { words }
+}
+
+export async function transcribe(audio: Blob): Promise<Transcript> {
+  const controller = new AbortController()
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timeoutId = setTimeout(() => {
+      // Settle the caller even if a stalled transport ignores abort, including
+      // when headers arrived but the response body never finishes.
+      reject(new Error('Transcription timed out. Check your connection and try again.'))
+      controller.abort()
+    }, TRANSCRIPTION_TIMEOUT_MS)
+  })
+
+  try {
+    return await Promise.race([
+      requestTranscript(audio, controller.signal),
+      timeout,
+    ])
+  } finally {
+    clearTimeout(timeoutId)
+  }
 }
