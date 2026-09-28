@@ -1,6 +1,6 @@
 # Phase 11 — Part Y performance and cost
 
-Retake analysis remains an explicit **Check for retakes** action. Part Y removes
+Retake analysis remains an explicit **Check for Retakes** action. Part Y removes
 repeated local work from ordinary editor updates without changing detection
 thresholds, model policy, request limits, source timing, or progress copy.
 
@@ -55,7 +55,7 @@ On a real recording, use the [manual setup](phase-11-manual-verification.md#setu
 and record browser/version, commit, source duration/word count, and a performance
 trace. Check playback, edits, and export before and after obtaining advice. Verify
 that these actions create no retake-mode `/api/agent` requests, then explicitly
-check for retakes and observe section progress. Distinguish ordinary editing-agent
+**Check for Retakes** and observe section progress. Distinguish ordinary editing-agent
 requests and transcription uploads from retake requests.
 
 Record observed responsiveness or long tasks and their reproduction steps; do not

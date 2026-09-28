@@ -80,70 +80,48 @@ export default function CaptionList({
   }
 
   return (
-    <div style={{ marginTop: 12 }}>
-      <p style={{ fontSize: 13, opacity: 0.7, margin: '0 0 6px' }}>
+    <div className="caption-list-block">
+      <p className="caption-list__hint">
         Click a time to seek; click text to fix a mishear — Enter saves, Esc
         cancels.
       </p>
-      <ul
-        style={{
-          listStyle: 'none',
-          margin: 0,
-          padding: '6px 10px',
-          maxHeight: '30vh',
-          overflowY: 'auto',
-          textAlign: 'left',
-          border: '1px solid var(--border)',
-          borderRadius: 6,
-        }}
-      >
+      <ul className="caption-list">
         {captions.map((caption) => {
           const isActive =
             caption.start <= currentTime && currentTime < caption.end
           return (
             <li
               key={caption.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                padding: '2px 0',
-              }}
+              className={
+                isActive
+                  ? 'caption-list__row caption-list__row--active'
+                  : 'caption-list__row'
+              }
             >
               <button
                 type="button"
+                className="caption-list__time"
                 onClick={() => onSeek(caption.start)}
                 title={`${caption.start.toFixed(2)}s`}
-                style={{
-                  padding: '0 6px',
-                  fontSize: 13,
-                  fontVariantNumeric: 'tabular-nums',
-                }}
               >
                 {fmtMmSs(caption.start)}
               </button>
               {editingId === caption.id ? (
                 <input
                   type="text"
+                  className="caption-list__input"
+                  aria-label={`Caption at ${fmtMmSs(caption.start)}`}
                   value={draft}
                   autoFocus
                   onChange={handleDraftChange}
                   onKeyDown={handleKeyDown}
                   onBlur={() => handleBlur(caption.id)}
-                  style={{ flex: 1, font: 'inherit', padding: '1px 5px' }}
                 />
               ) : (
                 <span
+                  className="caption-list__text"
                   onClick={() => startEditing(caption)}
                   title="Click to edit"
-                  style={{
-                    flex: 1,
-                    cursor: 'text',
-                    padding: '1px 6px',
-                    borderRadius: 3,
-                    background: isActive ? 'var(--accent)' : 'transparent',
-                    color: isActive ? 'var(--accent-fg, #ffffff)' : 'inherit',
-                  }}
                 >
                   {caption.text}
                 </span>

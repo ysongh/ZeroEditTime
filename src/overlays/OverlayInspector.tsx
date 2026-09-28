@@ -91,7 +91,7 @@ const hintStyle: CSSProperties = {
 const errorStyle: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.3,
-  color: 'crimson',
+  color: 'var(--danger)',
 }
 
 function DraftTextField({

@@ -12,8 +12,13 @@ import { useState } from 'react'
 import type { MouseEvent } from 'react'
 import type { EDL } from '../edl/types'
 import { isSourceTimeKept } from '../edl/edl'
+import Icon from '../ui/Icon'
+import { formatClock, formatSeconds, formatShortClock } from '../ui/time'
 import type { Transcript } from './types'
 import { groupSentences } from './sentences'
+
+/** An advisory source range (original-source ms), e.g. an open retake. */
+type FlaggedRange = { startSourceMs: number; endSourceMs: number }
 
 type TranscriptProps = {
   transcript: Transcript
@@ -24,10 +29,26 @@ type TranscriptProps = {
   onSeek: (sourceTime: number) => void
   /** Remove the source range [start, end] from the EDL (a word/sentence span). */
   onDeleteRange: (start: number, end: number) => void
+  /** Words inside these ranges get a dotted underline. Display only. */
+  flaggedRanges?: readonly FlaggedRange[]
 }
 
 /** Anchor/focus word indices of a contiguous selection; null when nothing is selected. */
 type Selection = { anchor: number; focus: number }
+
+function wordClassName(
+  struck: boolean,
+  active: boolean,
+  selected: boolean,
+  flagged: boolean,
+): string {
+  let name = 'word'
+  if (flagged && !struck) name += ' word--flagged'
+  if (active) name += ' word--active'
+  if (struck) name += ' word--cut'
+  if (selected) name += ' word--selected'
+  return name
+}
 
 export default function TranscriptView({
   transcript,
@@ -35,10 +56,10 @@ export default function TranscriptView({
   currentTime,
   onSeek,
   onDeleteRange,
+  flaggedRanges = [],
 }: TranscriptProps) {
   const { words } = transcript
   const [selection, setSelection] = useState<Selection | null>(null)
-  const [hoveredSentence, setHoveredSentence] = useState<number | null>(null)
 
   const sentences = groupSentences(words)
   const activeIndex = words.findIndex(
@@ -72,98 +93,123 @@ export default function TranscriptView({
     }
   }
 
-  return (
-    <div style={{ marginTop: 16 }}>
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          alignItems: 'center',
-          marginBottom: 8,
-        }}
-      >
-        <button type="button" onClick={deleteSelection} disabled={selection === null}>
-          Delete selection
-        </button>
-        <button
-          type="button"
-          onClick={() => setSelection(null)}
-          disabled={selection === null}
-        >
-          Clear
-        </button>
-        <span style={{ fontSize: 13, opacity: 0.7 }}>
-          Click a word to select; Shift-click to extend. Hover a sentence to delete it.
-        </span>
-      </div>
+  function isFlagged(midpointSeconds: number): boolean {
+    const ms = midpointSeconds * 1_000
+    return flaggedRanges.some(
+      (range) => ms >= range.startSourceMs && ms < range.endSourceMs,
+    )
+  }
 
-      <div
-        style={{
-          textAlign: 'left',
-          lineHeight: 1.9,
-          maxHeight: '30vh',
-          overflowY: 'auto',
-          padding: '8px 12px',
-          border: '1px solid var(--border)',
-          borderRadius: 6,
-        }}
-      >
-        {sentences.map((sentence, s) => (
+  const selectedCount = selection === null ? 0 : selHi - selLo + 1
+
+  return (
+    <div className="transcript">
+      <p className="transcript__hint">
+        Click a word to select · Shift-click to extend · Hover a sentence to cut it
+      </p>
+
+      {sentences.map((sentence, s) => {
+        const sentenceStart = words[sentence.startIndex].start
+        const stamp = formatShortClock(sentenceStart)
+        const sentenceWords = words
+          .slice(sentence.startIndex, sentence.endIndex + 1)
+          .map((word, offset) => {
+            const midpoint = (word.start + word.end) / 2
+            return {
+              word,
+              index: sentence.startIndex + offset,
+              midpoint,
+              struck: !isSourceTimeKept(edl, midpoint),
+            }
+          })
+        const allStruck = sentenceWords.every((entry) => entry.struck)
+        const tokens = sentenceWords.map(({ word, index, midpoint, struck }) => (
           <span
-            key={s}
-            onMouseEnter={() => setHoveredSentence(s)}
-            onMouseLeave={() => setHoveredSentence(null)}
+            key={index}
+            className={wordClassName(
+              struck,
+              index === activeIndex,
+              index >= selLo && index <= selHi,
+              isFlagged(midpoint),
+            )}
+            // Shift-click extends the word selection; keep the browser from
+            // also extending a native text selection across the words.
+            onMouseDown={(event) => {
+              if (event.shiftKey) event.preventDefault()
+            }}
+            onClick={(event) => handleWordClick(index, event)}
+            title={formatClock(word.start)}
           >
-            {words
-              .slice(sentence.startIndex, sentence.endIndex + 1)
-              .map((word, offset) => {
-                const i = sentence.startIndex + offset
-                const struck = !isSourceTimeKept(edl, (word.start + word.end) / 2)
-                const isActive = i === activeIndex
-                const isSelected = i >= selLo && i <= selHi
-                return (
-                  <span
-                    key={i}
-                    onClick={(event) => handleWordClick(i, event)}
-                    title={`${word.start.toFixed(2)}s`}
-                    style={{
-                      cursor: 'pointer',
-                      padding: '1px 3px',
-                      borderRadius: 3,
-                      textDecoration: struck ? 'line-through' : 'none',
-                      opacity: struck ? 0.45 : 1,
-                      background: isActive
-                        ? 'var(--accent)'
-                        : isSelected
-                          ? 'rgba(120, 160, 255, 0.35)'
-                          : 'transparent',
-                      color: isActive ? 'var(--accent-fg, #ffffff)' : 'inherit',
-                    }}
-                  >
-                    {word.text}{' '}
-                  </span>
-                )
-              })}
-            {hoveredSentence === s && (
+            {word.text}
+          </span>
+        ))
+
+        return (
+          <div key={s} className="transcript__row">
+            <div className="transcript__gutter">
               <button
                 type="button"
-                onClick={() => deleteSpan(sentence.startIndex, sentence.endIndex)}
-                title="Delete this sentence"
-                style={{
-                  cursor: 'pointer',
-                  fontSize: 11,
-                  lineHeight: 1,
-                  padding: '1px 5px',
-                  marginRight: 4,
-                  verticalAlign: 'middle',
-                }}
+                className={
+                  allStruck
+                    ? 'transcript__time'
+                    : 'transcript__time transcript__time--cuttable'
+                }
+                onClick={() => onSeek(sentenceStart)}
+                title="Jump here"
+                aria-label={`Jump to ${stamp}`}
               >
-                ✕ sentence
+                {stamp}
               </button>
-            )}
-          </span>
-        ))}
-      </div>
+              {!allStruck && (
+                <button
+                  type="button"
+                  className="transcript__cut"
+                  onClick={() =>
+                    deleteSpan(sentence.startIndex, sentence.endIndex)
+                  }
+                  title="Cut this sentence"
+                  aria-label={`Cut the sentence at ${stamp}`}
+                >
+                  <Icon name="scissors" size={12} strokeWidth={2} />
+                  Cut
+                </button>
+              )}
+            </div>
+            <div className="transcript__words">{tokens}</div>
+          </div>
+        )
+      })}
+
+      {selection === null ? (
+        <div className="transcript__end" />
+      ) : (
+        <div className="selection-bar">
+          <div className="selection-bar__info">
+            <span className="selection-bar__count">
+              {selectedCount} {selectedCount === 1 ? 'word' : 'words'} selected
+            </span>
+            <span className="selection-bar__span">
+              {formatClock(words[selLo].start)} – {formatClock(words[selHi].end)}
+              {' · '}
+              {formatSeconds(words[selHi].end - words[selLo].start)}
+            </span>
+          </div>
+          <button
+            type="button"
+            className="btn btn--outline"
+            onClick={() => setSelection(null)}
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            className="btn btn--secondary"
+            onClick={deleteSelection}
+          >
+            Cut Selection
+          </button>
+        </div>
+      )}
     </div>
   )
 }

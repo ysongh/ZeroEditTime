@@ -55,11 +55,20 @@ Use strict TypeScript and avoid `any`. Keep the existing toolchain configuration
 - Retry only precisely recognized missing optional filters, no-source-audio, or silent-loudness failures. Report degraded successes visibly; treat unrelated encode failures as fatal. Clean staged VFS files even on failure. Do not add a Cancel control without centralized ownership/serialization of the shared FFmpeg engine.
 - Keep `public/_headers` COOP/COEP headers. The current single-threaded export works under plain `pnpm dev` and does not require cross-origin isolation.
 
+### UI shell
+
+- The editor UI follows the ZeroEditTime Claude Design mock (Ginseo design-system tokens, dark violet theme). Tokens and component classes live in `src/index.css`; shared icons and time formatting live in `src/ui/`. There is no UI framework; keep legacy CSS variable aliases (`--text`, `--border`, `--accent`, …) because overlay editors still use them inline.
+- Layout: header (file, Undo, Reset, Export), preview with custom transport (no native `controls`), timeline card, and a tabbed inspector (agent box plus Transcript, Captions, Retakes, Audio, Images). Inactive tab panels stay mounted and `hidden`, never unmounted; this keeps drafts and live regions alive, and App tests find every panel in the tree.
+- Export-time settings (audio cleanup, burn captions) are App state, reset on source replacement, and passed to the header `ExportButton` as data; it snapshots them when an export starts and reports busy state so the Audio tab locks. The preview caption overlay shows only while burning is on.
+- Keyboard shortcuts map through `src/editorShortcuts.ts`. They skip text entry, native Space activation, widget arrow keys, and events already handled (`defaultPrevented`); Delete/Escape are left to the overlay stage while overlay editing is on.
+- Retake cards stay advisory (Play, Dismiss, Mark as re-recorded, Copy script). The mock's retake Cut/Cut All actions are intentionally not implemented.
+
 ## Where to work
 
 | Area | Primary files/directories |
 | --- | --- |
-| Editor state, playback, history, source replacement | `src/App.tsx`, `src/Timeline.tsx` |
+| Editor state, playback, history, source replacement | `src/App.tsx`, `src/Timeline.tsx`, `src/timelineScale.ts`, `src/editorShortcuts.ts` |
+| Theme, shared icons and formatting | `src/index.css`, `src/ui/` |
 | Pure EDL math | `src/edl/` |
 | Transcript display, grouping, upload and extraction | `src/transcript/` |
 | Editing agent, detectors, client tool loop | `src/agent/` |

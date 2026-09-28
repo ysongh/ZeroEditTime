@@ -35,7 +35,7 @@ clipboard access, or screen-reader behavior.
 3. Load one recording, wait for its duration, and click **Transcribe**. Wait for
    transcription to finish before running export, since they share an engine.
    Listen to the source and compare the transcript before judging retakes.
-4. Run **Check for retakes** in the **Retakes** panel, not an editing command in
+4. Run **Check for Retakes** in the **Retakes** panel, not an editing command in
    the Agent bar. Record the initial result before dismissing or resolving cards.
    Use a fresh page session and reload/retranscribe the fixture for an independent
    run; unchanged successful decisions may be reused within the same session.
@@ -96,7 +96,7 @@ Record a clean 30–60 second explanation in your usual speaking style. Include
 ordinary conversational pauses and an occasional filler; do not deliberately
 create repeated failures.
 
-- [ ] Run **Check for retakes**. Expect zero recommendations, or very few with a
+- [ ] Run **Check for Retakes**. Expect zero recommendations, or very few with a
       specific, independently justified need for re-recording.
 - [ ] No recommendation targets an ordinary pause, isolated filler, accent,
       dialect, or natural speaking style.

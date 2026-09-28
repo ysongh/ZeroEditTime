@@ -8,49 +8,61 @@ import { useState } from 'react'
 import type { FormEvent, ChangeEvent } from 'react'
 import type { EDL } from '../edl/types'
 import type { Transcript } from '../transcript/types'
-import { runAgent, type AgentRunResult } from './run'
+import Icon from '../ui/Icon'
+import { formatClock, formatSeconds } from '../ui/time'
+import { runAgent, type AgentRunResult, type AgentToolRun } from './run'
 
 type AgentBarProps = {
   edl: EDL
-  transcript: Transcript
+  /** Null until the source is transcribed; the command box is disabled until then. */
+  transcript: Transcript | null
   // `regeneratedCaptions` lets App clear its hand-edited flag when a run
   // included generate_captions (which replaces any hand-edited caption text).
   onCommit: (edl: EDL, regeneratedCaptions: boolean) => void
 }
 
-function fmt(seconds: number): string {
-  return seconds.toFixed(2)
+const SUGGESTIONS = [
+  'Remove the silences',
+  'Remove filler words',
+  'Get it under 60 seconds',
+] as const
+
+const TOOL_LABELS: Readonly<Record<string, string>> = {
+  cut_segment: 'Cut a range',
+  remove_silences: 'Removed silences',
+  remove_filler_words: 'Removed filler words',
+  remove_stumbles: 'Removed stumbles',
+  generate_captions: 'Generated captions',
+  trim_to_duration: 'Trimmed to length',
+}
+
+function describeTool(tool: AgentToolRun): string {
+  const label = TOOL_LABELS[tool.name] ?? tool.name
+  const count = tool.removed_count > 0 ? ` ×${tool.removed_count}` : ''
+  const removed =
+    tool.removed_seconds > 0 ? ` (−${formatSeconds(tool.removed_seconds)})` : ''
+  return `${label}${count}${removed}`
 }
 
 function Summary({ result }: { result: AgentRunResult }) {
-  const delta = result.keptBefore - result.keptAfter
-  const duration = `Kept ${fmt(result.keptBefore)}s → ${fmt(result.keptAfter)}s (−${fmt(delta)}s)`
-
-  if (result.toolsRun.length === 0) {
-    return (
-      <p style={{ marginTop: 8, fontSize: 14 }}>
-        The agent made no edits. {duration}.
-        {result.text !== '' && (
-          <span style={{ color: '#666' }}> — {result.text}</span>
-        )}
-      </p>
-    )
-  }
-
-  const tools = result.toolsRun
-    .map((t) => `${t.name} (−${fmt(t.removed_seconds)}s)`)
-    .join(', ')
+  const delta = Math.max(0, result.keptBefore - result.keptAfter)
+  const duration = `${formatClock(result.keptBefore)} → ${formatClock(result.keptAfter)} kept (−${formatSeconds(delta)})`
+  const madeEdits = result.toolsRun.length > 0
 
   return (
-    <div style={{ marginTop: 8, fontSize: 14, textAlign: 'left' }}>
-      <p style={{ margin: '4px 0' }}>
-        Ran {result.toolsRun.length} tool
-        {result.toolsRun.length === 1 ? '' : 's'}: {tools}.
-      </p>
-      <p style={{ margin: '4px 0' }}>{duration}.</p>
-      {result.text !== '' && (
-        <p style={{ margin: '4px 0', color: '#666' }}>{result.text}</p>
-      )}
+    <div className="agent__result" role="status">
+      {madeEdits && <Icon name="check" size={16} strokeWidth={2} />}
+      <div className="agent__result-body">
+        <p>
+          {madeEdits
+            ? `${result.toolsRun.map(describeTool).join(' · ')}.`
+            : 'The agent made no edits.'}
+        </p>
+        <p>{duration}.</p>
+        {result.text !== '' && (
+          <p className="agent__narration">{result.text}</p>
+        )}
+      </div>
     </div>
   )
 }
@@ -61,9 +73,11 @@ export default function AgentBar({ edl, transcript, onCommit }: AgentBarProps) {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<AgentRunResult | null>(null)
 
-  async function run() {
-    const trimmed = command.trim()
-    if (trimmed === '' || isRunning) {
+  const unavailable = transcript === null
+
+  async function run(text: string) {
+    const trimmed = text.trim()
+    if (trimmed === '' || isRunning || transcript === null) {
       return
     }
     setIsRunning(true)
@@ -85,37 +99,67 @@ export default function AgentBar({ edl, transcript, onCommit }: AgentBarProps) {
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    void run()
+    void run(command)
   }
 
   function handleChange(event: ChangeEvent<HTMLInputElement>) {
     setCommand(event.target.value)
   }
 
+  function runSuggestion(suggestion: string) {
+    setCommand(suggestion)
+    void run(suggestion)
+  }
+
   return (
-    <div style={{ marginTop: 16, textAlign: 'center' }}>
-      <form
-        onSubmit={handleSubmit}
-        style={{ display: 'flex', gap: 8, justifyContent: 'center' }}
-      >
+    <section className="agent" aria-labelledby="agent-heading">
+      <h2 id="agent-heading" className="eyebrow">
+        Describe an edit
+      </h2>
+      <form className="agent__form" onSubmit={handleSubmit}>
         <input
           type="text"
+          className="text-input"
+          aria-labelledby="agent-heading"
           value={command}
           onChange={handleChange}
-          disabled={isRunning}
-          placeholder='e.g. "remove the silences" or "get it under 30 seconds"'
-          style={{ flex: '1 1 420px', maxWidth: 520, padding: '6px 8px' }}
+          disabled={isRunning || unavailable}
+          placeholder={
+            unavailable
+              ? 'Transcribe first to edit by describing'
+              : 'e.g. “remove the silences”'
+          }
         />
-        <button type="submit" disabled={isRunning || command.trim() === ''}>
-          {isRunning ? 'Thinking…' : 'Run'}
+        <button
+          type="submit"
+          className="btn btn--primary"
+          disabled={isRunning || unavailable || command.trim() === ''}
+        >
+          {isRunning ? 'Working' : 'Run'}
         </button>
       </form>
 
+      <div className="agent__suggestions">
+        {SUGGESTIONS.map((suggestion) => (
+          <button
+            key={suggestion}
+            type="button"
+            className="chip-btn"
+            disabled={isRunning || unavailable}
+            onClick={() => runSuggestion(suggestion)}
+          >
+            {suggestion}
+          </button>
+        ))}
+      </div>
+
       {error !== null && (
-        <p style={{ color: 'crimson', marginTop: 8, fontSize: 14 }}>{error}</p>
+        <p role="alert" className="error-text" style={{ fontSize: 13 }}>
+          {error}
+        </p>
       )}
 
       {result !== null && <Summary result={result} />}
-    </div>
+    </section>
   )
 }

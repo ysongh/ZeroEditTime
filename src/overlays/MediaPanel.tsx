@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import type { ChangeEvent, CSSProperties } from 'react'
+import type { ChangeEvent, DragEvent } from 'react'
+import Icon from '../ui/Icon'
+import IconBadge from '../ui/IconBadge'
 import {
   createImageOverlayFromPreset,
   nextImageOverlayZIndex,
@@ -24,13 +26,12 @@ type MediaPanelProps = {
   onRemoveAsset: (assetId: string) => void
 }
 
-const panelStyle: CSSProperties = {
-  marginTop: 16,
-  padding: 12,
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  textAlign: 'left',
-}
+const PRESETS: ReadonlyArray<{ preset: ImageOverlayPreset; label: string; name: string }> = [
+  { preset: 'default', label: 'Playhead', name: 'at the playhead' },
+  { preset: 'cutaway', label: 'Cutaway', name: 'as a cutaway' },
+  { preset: 'picture-in-picture', label: 'PiP', name: 'as picture-in-picture' },
+  { preset: 'logo', label: 'Logo', name: 'as a logo' },
+]
 
 export default function MediaPanel({
   assets,
@@ -45,6 +46,7 @@ export default function MediaPanel({
 }: MediaPanelProps) {
   const [isReading, setIsReading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
   const mountedRef = useRef(false)
 
   useEffect(() => {
@@ -54,11 +56,26 @@ export default function MediaPanel({
     }
   }, [])
 
-  async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
+  function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget
     const selected = input.files?.[0]
     input.value = ''
-    if (selected === undefined || isReading) {
+    if (selected !== undefined) {
+      void addFile(selected)
+    }
+  }
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault()
+    setIsDragging(false)
+    const dropped = event.dataTransfer.files[0]
+    if (dropped !== undefined) {
+      void addFile(dropped)
+    }
+  }
+
+  async function addFile(selected: File) {
+    if (isReading) {
       return
     }
 
@@ -149,155 +166,90 @@ export default function MediaPanel({
   }
 
   return (
-    <section style={panelStyle} aria-labelledby="media-panel-heading">
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-          flexWrap: 'wrap',
+    <section className="media-panel" aria-labelledby="media-panel-heading">
+      <h2 id="media-panel-heading" className="sr-only">
+        Images
+      </h2>
+      <label
+        className={[
+          'upload-zone',
+          isDragging ? 'upload-zone--active' : '',
+          isReading ? 'upload-zone--busy' : '',
+        ].join(' ').trim()}
+        onDragOver={(event) => {
+          event.preventDefault()
+          setIsDragging(true)
         }}
+        onDragLeave={() => setIsDragging(false)}
+        onDrop={handleDrop}
       >
-        <div>
-          <h2 id="media-panel-heading" style={{ margin: 0 }}>
-            Images
-          </h2>
-          <p style={{ fontSize: 13, opacity: 0.75 }}>
-            PNG, JPEG, or WebP. Images stay in this browser.
-          </p>
-        </div>
-        <label>
-          <span
-            style={{
-              display: 'inline-block',
-              padding: '5px 10px',
-              border: '1px solid var(--border)',
-              borderRadius: 5,
-              cursor: isReading ? 'not-allowed' : 'pointer',
-              opacity: isReading ? 0.6 : 1,
-            }}
-          >
-            {isReading ? 'Reading image…' : 'Upload image'}
+        <IconBadge icon="image-plus" size={44} />
+        <span className="upload-zone__text">
+          <span className="upload-zone__title">
+            {isReading ? 'Reading image…' : 'Upload Image'}
           </span>
-          <input
-            type="file"
-            accept={IMAGE_FILE_ACCEPT}
-            disabled={isReading}
-            onChange={(event) => void handleUpload(event)}
-            style={{
-              position: 'absolute',
-              width: 1,
-              height: 1,
-              overflow: 'hidden',
-              clipPath: 'inset(50%)',
-            }}
-          />
-        </label>
-      </div>
+          <span className="upload-zone__hint">
+            PNG, JPEG, or WebP. Images stay in this browser.
+          </span>
+        </span>
+        <input
+          type="file"
+          className="sr-only"
+          accept={IMAGE_FILE_ACCEPT}
+          disabled={isReading}
+          onChange={handleUpload}
+        />
+      </label>
 
       {error !== null && (
-        <p role="alert" style={{ color: 'crimson', marginTop: 8, fontSize: 14 }}>
+        <p role="alert" className="error-text" style={{ fontSize: 13 }}>
           {error}
         </p>
       )}
 
       {assets.length === 0 ? (
-        <p style={{ marginTop: 10, fontSize: 14, opacity: 0.75 }}>
+        <p className="muted" style={{ fontSize: 13, textAlign: 'center' }}>
           No images uploaded yet.
         </p>
       ) : (
-        <ul
-          style={{
-            listStyle: 'none',
-            padding: 0,
-            margin: '12px 0 0',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))',
-            gap: 10,
-          }}
-        >
+        <ul className="media-grid">
           {assets.map((asset) => {
             const usageCount = overlays.filter(
               (overlay) => overlay.assetId === asset.id,
             ).length
             return (
-              <li
-                key={asset.id}
-                style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: 6,
-                  padding: 8,
-                  minWidth: 0,
-                }}
-              >
-                <img
-                  src={asset.src}
-                  alt={`Preview of ${asset.name}`}
-                  style={{
-                    display: 'block',
-                    width: '100%',
-                    height: 104,
-                    objectFit: 'contain',
-                    background: 'var(--code-bg)',
-                    borderRadius: 4,
-                  }}
-                />
-                <p
-                  title={asset.name}
-                  style={{
-                    marginTop: 6,
-                    fontSize: 14,
-                    color: 'var(--text-h)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
+              <li key={asset.id} className="media-card">
+                <img src={asset.src} alt={`Preview of ${asset.name}`} />
+                <span className="media-card__name" title={asset.name}>
                   {asset.name}
-                </p>
-                <p style={{ fontSize: 12, opacity: 0.7 }}>
+                </span>
+                <span className="media-card__meta">
                   {asset.width}×{asset.height} · Used {usageCount}{' '}
                   {usageCount === 1 ? 'time' : 'times'}
-                </p>
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: 6,
-                    flexWrap: 'wrap',
-                    marginTop: 8,
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => addWithPreset(asset, 'default')}
-                  >
-                    Add at playhead
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => addWithPreset(asset, 'cutaway')}
-                  >
-                    Add as cutaway
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      addWithPreset(asset, 'picture-in-picture')
-                    }
-                  >
-                    Add as picture-in-picture
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => addWithPreset(asset, 'logo')}
-                  >
-                    Add as logo
-                  </button>
-                  <button type="button" onClick={() => removeAsset(asset)}>
-                    Remove
-                  </button>
+                </span>
+                <div className="media-card__add">
+                  <span className="label-text">Add</span>
+                  {PRESETS.map(({ preset, label, name }) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      className="chip-btn"
+                      aria-label={`Add ${asset.name} ${name}`}
+                      onClick={() => addWithPreset(asset, preset)}
+                    >
+                      {label}
+                    </button>
+                  ))}
                 </div>
+                <button
+                  type="button"
+                  className="media-card__remove"
+                  aria-label={`Remove ${asset.name}`}
+                  title="Remove image"
+                  onClick={() => removeAsset(asset)}
+                >
+                  <Icon name="x" size={13} strokeWidth={2} />
+                </button>
               </li>
             )
           })}

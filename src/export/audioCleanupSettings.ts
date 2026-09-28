@@ -14,6 +14,7 @@ export const MIN_LOUDNESS_TARGET_LUFS = -24
 export const MAX_LOUDNESS_TARGET_LUFS = -10
 export const MIN_TRUE_PEAK_LIMIT_DB = -6
 export const MAX_TRUE_PEAK_LIMIT_DB = 0
+export const TRUE_PEAK_LIMIT_STEP_DB = 0.5
 
 export const DEFAULT_AUDIO_CLEANUP_SETTINGS: Readonly<AudioCleanupSettings> = {
   enabled: true,
@@ -58,4 +59,19 @@ export function normalizeAudioCleanupSettings(
       DEFAULT_AUDIO_CLEANUP_SETTINGS.truePeakLimitDb,
     ),
   }
+}
+
+/**
+ * One stepper press on the peak limit: move by TRUE_PEAK_LIMIT_STEP_DB, rounded
+ * to a tenth so repeated steps never drift, then normalized into range.
+ */
+export function stepTruePeakLimit(
+  settings: Readonly<AudioCleanupSettings>,
+  direction: 1 | -1,
+): AudioCleanupSettings {
+  const next =
+    Math.round(
+      (settings.truePeakLimitDb + direction * TRUE_PEAK_LIMIT_STEP_DB) * 10,
+    ) / 10
+  return normalizeAudioCleanupSettings({ ...settings, truePeakLimitDb: next })
 }

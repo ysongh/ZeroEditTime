@@ -43,6 +43,7 @@ type HostProps = {
   'aria-labelledby'?: string
   'aria-live'?: string
   children?: ReactNode
+  className?: string
   disabled?: boolean
   id?: string
   onClick?: (event: Pick<MouseEvent<HTMLButtonElement>, 'currentTarget'>) => void
@@ -172,21 +173,11 @@ describe('RetakesPanel', () => {
         (element) => textOf(element.props.children) === text,
       )
 
-    expect(label('Suggestion')?.props.style).toMatchObject({
-      background: 'var(--code-bg)',
-      borderColor: 'var(--border)',
-      fontWeight: 500,
-    })
-    expect(label('Recommended')?.props.style).toMatchObject({
-      background: 'var(--accent-bg)',
-      borderColor: 'var(--accent-border)',
-      fontWeight: 500,
-    })
-    expect(label('Strongly recommended')?.props.style).toMatchObject({
-      background: 'var(--accent-bg)',
-      borderColor: 'var(--accent)',
-      fontWeight: 600,
-    })
+    expect(label('Suggestion')?.props.className).toBe('tag')
+    expect(label('Recommended')?.props.className).toBe('tag tag--accent')
+    expect(label('Strongly recommended')?.props.className).toBe(
+      'tag tag--strong',
+    )
     expect(findHosts(view, 'article').map(textOf)).toEqual([
       expect.stringContaining('Recommended'),
       expect.stringContaining('Strongly recommended'),
@@ -208,7 +199,7 @@ describe('RetakesPanel', () => {
       onCopyScript,
     })
 
-    clickButton(findButton(view, 'Check for retakes'))
+    clickButton(findButton(view, 'Check for Retakes'))
     clickButton(findButton(view, 'Play'))
     clickButton(findButton(view, 'Dismiss'))
     const resolveButtons = findHosts(view, 'button').filter(
@@ -515,7 +506,7 @@ describe('RetakesPanel', () => {
     )
     expect(textOf(view)).toContain(RECOMMENDATION.title)
     expect(findHosts(view, 'article')).toHaveLength(1)
-    expect(findButton(view, 'Check for retakes').props.disabled).not.toBe(
+    expect(findButton(view, 'Check for Retakes').props.disabled).not.toBe(
       true,
     )
   })
@@ -535,7 +526,7 @@ describe('RetakesPanel', () => {
     )
     expect(textOf(view)).toContain(RECOMMENDATION.title)
     expect(findHosts(view, 'article')).toHaveLength(1)
-    expect(findButton(view, 'Check for retakes').props.disabled).not.toBe(
+    expect(findButton(view, 'Check for Retakes').props.disabled).not.toBe(
       true,
     )
   })
@@ -566,7 +557,7 @@ describe('RetakesPanel', () => {
     )
     expect(text).not.toContain('0 open recommendations.')
     expect(findHosts(view, 'article')).toEqual([])
-    expect(findButton(view, 'Check for retakes').props.disabled).not.toBe(
+    expect(findButton(view, 'Check for Retakes').props.disabled).not.toBe(
       true,
     )
   })

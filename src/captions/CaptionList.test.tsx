@@ -35,6 +35,7 @@ const CAPTIONS: Caption[] = [
 
 type HostProps = {
   children?: ReactNode
+  className?: string
   onBlur?: () => void
   onChange?: (event: { target: { value: string } }) => void
   onClick?: () => void
@@ -99,6 +100,20 @@ function captionText(view: ReactNode, text: string): ReactElement<HostProps> {
   )
 }
 
+/** The list row holding the caption whose text is `text`. */
+function captionRow(view: ReactNode, text: string): ReactElement<HostProps> {
+  return findHost(view, 'li', (props) =>
+    Children.toArray(props.children).some(
+      (child) =>
+        isValidElement(child) &&
+        (child.props as HostProps).title === 'Click to edit' &&
+        textOf((child.props as HostProps).children) === text,
+    ),
+  )
+}
+
+const ACTIVE_ROW = 'caption-list__row caption-list__row--active'
+
 beforeEach(() => {
   hooks.refs.length = 0
   hooks.states.length = 0
@@ -139,12 +154,12 @@ describe('CaptionList', () => {
     const onSeek = vi.fn()
     const atBoundary = renderList(6, onSeek)
 
-    expect(captionText(atBoundary, 'First caption').props.style?.background).toBe(
-      'transparent',
+    expect(captionRow(atBoundary, 'First caption').props.className).not.toBe(
+      ACTIVE_ROW,
     )
-    expect(
-      captionText(atBoundary, 'Original SDK name').props.style?.background,
-    ).toBe('var(--accent)')
+    expect(captionRow(atBoundary, 'Original SDK name').props.className).toBe(
+      ACTIVE_ROW,
+    )
 
     const timeButton = findHost(
       atBoundary,
@@ -156,9 +171,9 @@ describe('CaptionList', () => {
     expect(onSeek).toHaveBeenCalledWith(65.25)
 
     const atEnd = renderList(8, onSeek)
-    expect(
-      captionText(atEnd, 'Original SDK name').props.style?.background,
-    ).toBe('transparent')
+    expect(captionRow(atEnd, 'Original SDK name').props.className).not.toBe(
+      ACTIVE_ROW,
+    )
   })
 
   it('commits the latest draft once through the Enter-to-blur path', () => {

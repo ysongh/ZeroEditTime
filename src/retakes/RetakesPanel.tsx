@@ -4,7 +4,6 @@
 // suggested-script/resolved workflow, and Part T supplies aggregate outcomes.
 // Part V adds contextual names, announcements, and keyboard focus handling.
 
-import type { CSSProperties } from 'react'
 import type {
   RetakeAnalysisProgress,
   RetakeAnalysisStatus,
@@ -17,6 +16,7 @@ import {
   formatRetakeSourceRangeForSpeech,
   formatRetakeSourceTime,
 } from './sourceTime'
+import Icon from '../ui/Icon'
 
 export type RetakeScriptCopyStatus = 'copying' | 'copied' | 'error'
 
@@ -42,52 +42,15 @@ export interface RetakesPanelProps {
   onCopyScript: (id: string, script: string) => void | Promise<void>
 }
 
-const PANEL_STYLE: CSSProperties = {
-  marginTop: 16,
-  padding: 12,
-  border: '1px solid var(--border)',
-  borderRadius: 8,
-  textAlign: 'left',
-}
-
-const SEVERITY_BADGE_STYLE: CSSProperties = {
-  display: 'inline-block',
-  padding: '1px 6px',
-  border: '1px solid',
-  borderRadius: 999,
-  fontSize: 12,
-  lineHeight: 1.5,
-  fontWeight: 500,
-}
-
 const SEVERITY_PRESENTATION = {
-  suggestion: {
-    label: 'Suggestion',
-    style: {
-      color: 'var(--text)',
-      background: 'var(--code-bg)',
-      borderColor: 'var(--border)',
-    },
-  },
-  recommended: {
-    label: 'Recommended',
-    style: {
-      color: 'var(--text-h)',
-      background: 'var(--accent-bg)',
-      borderColor: 'var(--accent-border)',
-    },
-  },
+  suggestion: { label: 'Suggestion', className: 'tag' },
+  recommended: { label: 'Recommended', className: 'tag tag--accent' },
   'strongly-recommended': {
     label: 'Strongly recommended',
-    style: {
-      color: 'var(--text-h)',
-      background: 'var(--accent-bg)',
-      borderColor: 'var(--accent)',
-      fontWeight: 600,
-    },
+    className: 'tag tag--strong',
   },
 } as const satisfies Readonly<
-  Record<RetakeSeverity, { label: string; style: CSSProperties }>
+  Record<RetakeSeverity, { label: string; className: string }>
 >
 
 function recommendationSummary(openCount: number): string {
@@ -147,93 +110,75 @@ export default function RetakesPanel({
   const errorMessage = analysisError?.trim() || 'Try again.'
 
   return (
-    <section
-      className="retakes-panel"
-      style={PANEL_STYLE}
-      aria-labelledby="retakes-panel-heading"
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          justifyContent: 'space-between',
-          gap: 12,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div>
-          <h2 id="retakes-panel-heading" tabIndex={-1} style={{ margin: 0 }}>
-            Retakes
-          </h2>
-          <div role="status" aria-live="polite" aria-atomic="true">
-            {showSuccessfulEmptyState ? (
-              <div style={{ marginTop: 6 }}>
-                <p
-                  style={{
-                    color: 'var(--text-h)',
-                    fontSize: 14,
-                    fontWeight: 600,
-                  }}
-                >
-                  No retakes recommended
-                </p>
-                <p style={{ marginTop: 3, fontSize: 14 }}>
-                  The sections we checked appear fixable through normal editing.
-                </p>
-              </div>
-            ) : (
-              <p style={{ marginTop: 4, fontSize: 14 }}>
-                {recommendationSummary(openRecommendations.length)}
+    <section className="retakes-panel" aria-labelledby="retakes-panel-heading">
+      {/* The tab names this panel visually; the heading stays for AT and focus. */}
+      <h2 id="retakes-panel-heading" tabIndex={-1} className="sr-only">
+        Retakes
+      </h2>
+
+      <div className="retakes-panel__summary">
+        <div
+          className="retakes-panel__status"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {showSuccessfulEmptyState ? (
+            <>
+              <p className="retakes-panel__status-strong">
+                No retakes recommended
               </p>
-            )}
-            {isAnalyzing && (
-              <p style={{ marginTop: 4, fontSize: 13 }}>
-                {analysisProgress === undefined
-                  ? 'Checking for retakes…'
-                  : `Checked ${checkedCount} of ${analysisProgress.total} sections…`}
+              <p className="retakes-panel__detail">
+                The sections we checked appear fixable through normal editing.
               </p>
-            )}
-            {showPartialResult && (
-              <p style={{ marginTop: 4, fontSize: 13 }}>
-                Checked {analysisProgress.total} sections.{' '}
-                {analysisProgress.completed} completed; {failedCount} could not
-                be analyzed.
-              </p>
-            )}
-          </div>
-          {analysisStatus === 'error' && (
-            <div
-              role="alert"
-              style={{ marginTop: 6, fontSize: 13, color: 'crimson' }}
-            >
-              <p style={{ fontWeight: 600 }}>Couldn’t check for retakes.</p>
-              <p style={{ marginTop: 2 }}>{errorMessage}</p>
-            </div>
+            </>
+          ) : (
+            <p>{recommendationSummary(openRecommendations.length)}</p>
+          )}
+          {isAnalyzing && (
+            <p className="retakes-panel__detail">
+              {analysisProgress === undefined
+                ? 'Checking for retakes…'
+                : `Checked ${checkedCount} of ${analysisProgress.total} sections…`}
+            </p>
+          )}
+          {showPartialResult && (
+            <p className="retakes-panel__detail">
+              Checked {analysisProgress.total} sections.{' '}
+              {analysisProgress.completed} completed; {failedCount} could not
+              be analyzed.
+            </p>
           )}
         </div>
         <button
           type="button"
+          className="btn btn--outline"
           data-retake-analyze
           aria-label={isAnalyzing ? 'Checking for retakes' : undefined}
           disabled={isAnalyzing}
           onClick={() => void onAnalyze()}
         >
-          {isAnalyzing ? 'Checking…' : 'Check for retakes'}
+          <Icon name="search" />
+          {isAnalyzing ? 'Checking…' : 'Check for Retakes'}
         </button>
       </div>
 
+      {analysisStatus === 'idle' && openRecommendations.length === 0 && (
+        <p className="panel-note">
+          Finds stumbles and false starts that may be worth recording again.
+          Advice only: checking never changes your edit.
+        </p>
+      )}
+
+      {analysisStatus === 'error' && (
+        <div role="alert" className="retakes-panel__error">
+          <strong>Couldn’t check for retakes.</strong>
+          <p>{errorMessage}</p>
+        </div>
+      )}
+
       {openRecommendations.length > 0 && (
-        <ul
-          style={{
-            listStyle: 'none',
-            padding: 0,
-            margin: '12px 0 0',
-            display: 'grid',
-            gap: 10,
-            maxHeight: '48vh',
-            overflowY: 'auto',
-          }}
-        >
+        <ul className="retake-list">
           {openRecommendations.map((recommendation) => {
             const severity = SEVERITY_PRESENTATION[recommendation.severity]
             const start = formatRetakeSourceTime(
@@ -255,79 +200,41 @@ export default function RetakesPanel({
               <li key={recommendation.id}>
                 <article
                   aria-labelledby={`${cardId}-heading`}
-                  style={{
-                    padding: 10,
-                    border: '1px solid var(--border)',
-                    borderRadius: 6,
-                  }}
+                  className={
+                    recommendation.severity === 'suggestion'
+                      ? 'retake-card retake-card--suggestion'
+                      : 'retake-card'
+                  }
                 >
-                  <p style={{ fontSize: 13 }}>
-                    <span
-                      style={{
-                        ...SEVERITY_BADGE_STYLE,
-                        ...severity.style,
-                      }}
-                    >
-                      {severity.label}
-                    </span>
-                    {' · '}
+                  <p className="retake-card__meta">
+                    <span className={severity.className}>{severity.label}</span>
+                    <span className="retake-card__sep">{' · '}</span>
                     <span
                       aria-hidden="true"
+                      className="retake-card__time"
                       title={`Original source time: ${(recommendation.startSourceMs / 1_000).toFixed(3)}s–${(recommendation.endSourceMs / 1_000).toFixed(3)}s`}
-                      style={{ fontVariantNumeric: 'tabular-nums' }}
                     >
                       {start} – {end}
                     </span>
-                    <span className="retake-sr-only">
-                      {spokenRange}.
-                    </span>
+                    <span className="retake-sr-only">{spokenRange}.</span>
                   </p>
-                  <h3
-                    id={`${cardId}-heading`}
-                    style={{
-                      margin: '4px 0 0',
-                      color: 'var(--text-h)',
-                      fontSize: 17,
-                    }}
-                  >
-                    {recommendation.title}
-                  </h3>
-                  <p style={{ marginTop: 4, fontSize: 14 }}>
+                  <h3 id={`${cardId}-heading`}>{recommendation.title}</h3>
+                  <p className="retake-card__explanation">
                     {recommendation.explanation}
                   </p>
 
                   {suggestedScript !== undefined && (
-                    <div
-                      style={{
-                        marginTop: 8,
-                        padding: '8px 10px',
-                        borderRadius: 6,
-                        background: 'var(--code-bg)',
-                      }}
-                    >
-                      <p
-                        style={{
-                          color: 'var(--text-h)',
-                          fontSize: 13,
-                          fontWeight: 600,
-                        }}
-                      >
+                    <div className="retake-card__script">
+                      <p className="retake-card__script-label">
                         Suggested retake
                       </p>
-                      <p style={{ marginTop: 3, fontSize: 14 }}>
+                      <p className="retake-card__script-text">
                         “{suggestedScript}”
                       </p>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          flexWrap: 'wrap',
-                          gap: 7,
-                          marginTop: 7,
-                        }}
-                      >
+                      <div className="retake-card__copy">
                         <button
                           type="button"
+                          className="link-btn"
                           aria-label={`Copy script for ${actionContext}`}
                           aria-describedby={`${cardId}-copy-status ${cardId}-copy-error`}
                           disabled={copyStatus === 'copying'}
@@ -342,10 +249,10 @@ export default function RetakesPanel({
                         </button>
                         <span
                           id={`${cardId}-copy-status`}
+                          className="retake-card__copy-status"
                           role="status"
                           aria-live="polite"
                           aria-atomic="true"
-                          style={{ fontSize: 13 }}
                         >
                           {copyStatus === 'copying'
                             ? 'Copying…'
@@ -355,9 +262,9 @@ export default function RetakesPanel({
                         </span>
                         <span
                           id={`${cardId}-copy-error`}
+                          className="error-text"
                           role="alert"
                           aria-atomic="true"
-                          style={{ fontSize: 13 }}
                         >
                           {copyStatus === 'error'
                             ? 'Couldn’t copy script. Try again.'
@@ -367,16 +274,10 @@ export default function RetakesPanel({
                     </div>
                   )}
 
-                  <div
-                    style={{
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      gap: 6,
-                      marginTop: 9,
-                    }}
-                  >
+                  <div className="retake-card__actions">
                     <button
                       type="button"
+                      className="btn btn--primary"
                       data-retake-play
                       aria-label={`Play ${actionContext}`}
                       onClick={() =>
@@ -386,10 +287,12 @@ export default function RetakesPanel({
                         )
                       }
                     >
+                      <Icon name="play" size={14} />
                       Play
                     </button>
                     <button
                       type="button"
+                      className="btn btn--outline"
                       aria-label={`Dismiss ${actionContext}`}
                       onClick={(event) => {
                         focusAfterRemovingCard(event.currentTarget)
@@ -400,6 +303,7 @@ export default function RetakesPanel({
                     </button>
                     <button
                       type="button"
+                      className="btn btn--outline"
                       aria-label={`Mark as re-recorded: ${actionContext}`}
                       onClick={(event) => {
                         focusAfterRemovingCard(event.currentTarget)

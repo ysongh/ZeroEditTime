@@ -3,63 +3,48 @@
 // then downloads the file. Export READS edl.segments and mutates nothing — the
 // EDL stays the single source of truth.
 //
-// Phase 8 adds the caption controls: a "Burn captions into video" toggle
-// (default on; off exports a clean video for the sidecar-SRT workflow) and a
-// "Download SRT" button that serializes the same prepared output-time captions
-// the burn would use — so the .srt always lines up with the exported .mp4.
-// Phase 9A Part J also projects current image overlays through the EDL and hands
-// that data to the non-React export layer for compositing. Phase 10 Part L adds
-// compact local audio-cleanup settings; Part N passes their validated plan into
-// the existing final-export path. Part Q keeps them in this mounted editor state:
-// the app has no project save/load boundary, so it adds no one-off persistence.
+// The button lives in the editor header. Its export-time inputs are owned by
+// App so they can be edited in other panels: the Phase-8 burn toggle (Captions
+// tab; off exports a clean video for the sidecar-SRT workflow) and the Phase-10
+// audio-cleanup settings (Audio tab). Both are snapshotted when an export
+// starts. Phase 9A Part J projects current image overlays through the EDL and
+// hands that data to the non-React export layer for compositing.
 
 import { useState } from 'react'
-import type { ChangeEvent } from 'react'
 import type { EDL } from '../edl/types'
 import type { ImageOverlay, OverlayAsset } from '../overlays/types'
-import { buildSrt, prepareCaptionsForExport } from '../captions/captions'
+import { prepareCaptionsForExport } from '../captions/captions'
 import { getFfmpeg, loadFfmpeg } from '../ffmpeg/engine'
+import Icon from '../ui/Icon'
 import { buildImageOverlayRenderPlanForEdl } from './imageOverlays'
 import { runExport } from './ffmpeg'
-import AudioCleanupControls from './AudioCleanupControls'
-import {
-  DEFAULT_AUDIO_CLEANUP_SETTINGS,
-  type AudioCleanupSettings,
-} from './audioCleanupSettings'
+import type { AudioCleanupSettings } from './audioCleanupSettings'
 import { buildAudioCleanupPlan } from './audioCleanupPlan'
+import { downloadBlob } from './download'
 
 type ExportButtonProps = {
   edl: EDL
   file: File | null
   overlayAssets: readonly OverlayAsset[]
   imageOverlays: readonly ImageOverlay[]
+  audioCleanupSettings: Readonly<AudioCleanupSettings>
+  /** Burn the prepared captions into the video (Phase 8 default: on). */
+  burnCaptions: boolean
+  /** Told when export work starts and ends, so App can lock export settings. */
+  onBusyChange?: (busy: boolean) => void
 }
 
 // idle → loading (first-time ~31 MB engine fetch) → encoding (progress 0–1).
 type Phase = 'idle' | 'loading' | 'encoding'
-
-function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob)
-  try {
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = filename
-    document.body.appendChild(anchor)
-    try {
-      anchor.click()
-    } finally {
-      anchor.remove()
-    }
-  } finally {
-    URL.revokeObjectURL(url)
-  }
-}
 
 export default function ExportButton({
   edl,
   file,
   overlayAssets,
   imageOverlays,
+  audioCleanupSettings,
+  burnCaptions,
+  onBusyChange,
 }: ExportButtonProps) {
   // The ffmpeg engine is the single shared instance from `../ffmpeg/engine`
   // (loaded at most once per session, shared with audio extraction); we only
@@ -68,50 +53,9 @@ export default function ExportButton({
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  // Phase 8: burning is opt-out. Checked (default) burns the captions into the
-  // video as before; unchecked exports a clean video (the no-srtFile graph,
-  // byte-identical to Phase 5.5) for the video-plus-sidecar-SRT workflow.
-  const [burnCaptions, setBurnCaptions] = useState(true)
-  // Export-only intent stays local to this mounted editor. It is snapshotted and
-  // normalized through buildAudioCleanupPlan at the final export boundary. There
-  // is no project serializer to extend yet, so a fresh editor gets a cloned safe
-  // default rather than an audio-only localStorage format.
-  const [audioCleanupSettings, setAudioCleanupSettings] =
-    useState<AudioCleanupSettings>(() => ({
-      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
-    }))
 
   const hasSegments = edl.segments.length > 0
   const canExport = file !== null && hasSegments && phase === 'idle'
-
-  // Output-time captions against the CURRENT EDL — a cheap pure derivation,
-  // recomputed per render so both the export and the SRT download always match
-  // the latest edit, and so Download SRT can disable when every caption was cut.
-  const hasCaptions = edl.captions.length > 0
-  const prepared = prepareCaptionsForExport(edl.captions, edl)
-  // Source-authored overlays are projected through the CURRENT EDL here, but
-  // FFmpeg-specific graph construction remains entirely in the export module.
-  const imageOverlayPlan = buildImageOverlayRenderPlanForEdl(
-    edl,
-    imageOverlays,
-    overlayAssets,
-  )
-
-  function handleBurnChange(event: ChangeEvent<HTMLInputElement>): void {
-    setBurnCaptions(event.target.checked)
-  }
-
-  // The SRT is in OUTPUT time by construction, so it lines up with the exported
-  // MP4 — upload the pair to YouTube/LinkedIn as video + closed captions.
-  function handleDownloadSrt(): void {
-    if (prepared.length === 0) {
-      return
-    }
-    downloadBlob(
-      new Blob([buildSrt(prepared)], { type: 'text/plain' }),
-      'zero-edit-time.srt',
-    )
-  }
 
   async function handleExport(): Promise<void> {
     if (file === null || !hasSegments || phase !== 'idle') {
@@ -119,9 +63,24 @@ export default function ExportButton({
     }
     setError(null)
     setNotice(null)
+    onBusyChange?.(true)
 
     try {
+      // Snapshot every export input at the click: later edits cannot leak
+      // into an encode that is already running.
       const audioCleanupPlan = buildAudioCleanupPlan(audioCleanupSettings)
+      // Output-time captions against the CURRENT EDL; an empty list takes the
+      // Phase 5.5-identical no-srtFile path in the export layer.
+      const captionsToBurn = burnCaptions
+        ? prepareCaptionsForExport(edl.captions, edl)
+        : []
+      // Source-authored overlays are projected through the CURRENT EDL here,
+      // but FFmpeg-specific graph construction stays in the export module.
+      const imageOverlayPlan = buildImageOverlayRenderPlanForEdl(
+        edl,
+        imageOverlays,
+        overlayAssets,
+      )
       let ffmpeg: ReturnType<typeof getFfmpeg>
       try {
         ffmpeg = getFfmpeg()
@@ -151,10 +110,6 @@ export default function ExportButton({
       }
       ffmpeg.on('progress', onProgress)
       try {
-        // Burn the prepared (output-time, current-EDL) captions unless the
-        // toggle opted out: no prepared captions → runExport stages no font/SRT
-        // and buildExportArgs takes the Phase 5.5-identical no-srtFile path.
-        const captionsToBurn = burnCaptions ? prepared : []
         const overlayExport =
           imageOverlayPlan.length === 0
             ? undefined
@@ -199,86 +154,83 @@ export default function ExportButton({
     } finally {
       setPhase('idle')
       setProgress(0)
+      onBusyChange?.(false)
     }
   }
 
-  const label =
-    phase === 'loading'
-      ? 'Loading engine…'
-      : phase === 'encoding'
-        ? `Exporting… ${Math.round(progress * 100)}%`
-        : 'Export MP4'
+  function dismissMessages(): void {
+    setError(null)
+    setNotice(null)
+  }
+
+  const percent = Math.round(progress * 100)
+  const showPopover =
+    phase === 'loading' || !hasSegments || notice !== null || error !== null
 
   return (
-    <div style={{ marginTop: 16, textAlign: 'center' }}>
-      <AudioCleanupControls
-        settings={audioCleanupSettings}
-        disabled={phase !== 'idle'}
-        onChange={setAudioCleanupSettings}
-      />
-
-      <button type="button" onClick={() => void handleExport()} disabled={!canExport}>
-        {label}
+    <>
+      <button
+        type="button"
+        className="btn btn--primary export-btn"
+        onClick={() => void handleExport()}
+        disabled={!canExport}
+      >
+        {phase === 'loading' ? (
+          'Loading engine…'
+        ) : phase === 'encoding' ? (
+          `Exporting ${percent}%`
+        ) : (
+          <>
+            Export MP4
+            <Icon name="chevron-right" />
+          </>
+        )}
       </button>
 
-      {hasCaptions && (
-        <div style={{ marginTop: 8, fontSize: 14 }}>
-          <label style={{ marginRight: 12 }}>
-            <input
-              type="checkbox"
-              checked={burnCaptions}
-              onChange={handleBurnChange}
-            />{' '}
-            Burn captions into video
-          </label>
-          <button
-            type="button"
-            onClick={handleDownloadSrt}
-            disabled={prepared.length === 0}
-          >
-            Download SRT
-          </button>
-          {prepared.length === 0 && (
-            <p style={{ marginTop: 4, fontSize: 13, color: '#666' }}>
-              Every caption&apos;s speech has been cut — nothing to burn or
-              download.
-            </p>
+      {phase !== 'idle' && (
+        <div
+          className="export-progress"
+          style={{ width: phase === 'encoding' ? `${percent}%` : '4%' }}
+          aria-hidden="true"
+        />
+      )}
+
+      {showPopover && (
+        <div className="export-popover">
+          <div className="export-popover__body">
+            {!hasSegments && (
+              <p className="error-text">
+                Nothing to export — every segment has been cut.
+              </p>
+            )}
+            {phase === 'loading' && (
+              <p className="muted">
+                Loading the export engine (~31 MB, first time only)…
+              </p>
+            )}
+            {notice !== null && (
+              <p role="status" className="notice-text">
+                {notice}
+              </p>
+            )}
+            {error !== null && (
+              <p role="alert" className="error-text">
+                {error}
+              </p>
+            )}
+          </div>
+          {(notice !== null || error !== null) && (
+            <button
+              type="button"
+              className="icon-btn export-popover__close"
+              aria-label="Dismiss export message"
+              onClick={dismissMessages}
+            >
+              <Icon name="x" size={14} />
+            </button>
           )}
         </div>
       )}
-
-      {!hasSegments && (
-        <p style={{ color: 'crimson', marginTop: 8, fontSize: 14 }}>
-          Nothing to export — every segment has been cut.
-        </p>
-      )}
-
-      {phase === 'loading' && (
-        <p style={{ marginTop: 8, fontSize: 14, color: '#666' }}>
-          Loading the export engine (~31 MB, first time only)…
-        </p>
-      )}
-
-      {phase === 'encoding' && (
-        <div style={{ marginTop: 8 }}>
-          <progress value={progress} max={1} style={{ width: 280 }} />
-        </div>
-      )}
-
-      {notice !== null && (
-        <p
-          role="status"
-          style={{ color: '#7a4f00', marginTop: 8, fontSize: 14 }}
-        >
-          {notice}
-        </p>
-      )}
-
-      {error !== null && (
-        <p role="alert" style={{ color: 'crimson', marginTop: 8, fontSize: 14 }}>
-          {error}
-        </p>
-      )}
-    </div>
+    </>
   )
 }

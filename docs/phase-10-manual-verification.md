@@ -81,13 +81,13 @@ codecs so a codec difference does not get mistaken for an audio-cleanup issue.
 
 ## Settings reference
 
-The `Audio cleanup` fieldset defaults to:
+The `Audio` tab's cleanup settings default to:
 
-- `Improve voice audio`: checked
+- `Improve voice audio`: on
 - `Noise reduction`: `Light`
-- `Level voice volume`: checked
-- `Smooth edit joins`: checked
-- `Loudness target`: `-16 LUFS`
+- `Level voice volume`: on
+- `Smooth edit joins`: on
+- `Loudness target`: `−16` LUFS
 - `Peak limit`: `-1 dB`
 
 Turning `Improve voice audio` off selects the pre-Phase-10 export path; it is not
@@ -235,10 +235,10 @@ off for a duration/timing comparison.
 Use `Transcribe` and wait for both preparation/transcription phases. In the agent
 command box, enter a request such as “remove silences longer than 600 ms and keep
 250 ms of each gap,” then select `Run`. Add manual/transcript cuts until the EDL
-contains at least ten cuts. Only then select `Generate captions` and leave `Burn
-captions into video` checked. Under `Images`, use `Upload image`, seek before a
-cut, and use `Add as logo`, or configure another overlay range that crosses a
-cut.
+contains at least ten cuts. Only then open the `Captions` tab, select `Generate
+Captions`, and leave `Burn captions into video` on. In the `Images` tab, use
+`Upload Image`, seek before a cut, and use the `Logo` add button, or configure
+another overlay range that crosses a cut.
 
 | Checkpoint | Source/output time or word | Lip-sync | Caption-sync | Overlay-sync |
 | --- | --- | --- | --- | --- |

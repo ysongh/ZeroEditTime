@@ -6,6 +6,7 @@ import {
   MIN_LOUDNESS_TARGET_LUFS,
   MIN_TRUE_PEAK_LIMIT_DB,
   normalizeAudioCleanupSettings,
+  stepTruePeakLimit,
   type AudioCleanupSettings,
 } from './audioCleanupSettings'
 
@@ -77,5 +78,28 @@ describe('normalizeAudioCleanupSettings', () => {
     expect(normalized.truePeakLimitDb).toBe(
       DEFAULT_AUDIO_CLEANUP_SETTINGS.truePeakLimitDb,
     )
+  })
+})
+
+describe('stepTruePeakLimit', () => {
+  it('moves by half a decibel without drift and clamps to the supported range', () => {
+    let settings: AudioCleanupSettings = { ...DEFAULT_AUDIO_CLEANUP_SETTINGS }
+    for (let press = 0; press < 20; press += 1) {
+      settings = stepTruePeakLimit(settings, -1)
+    }
+    expect(settings.truePeakLimitDb).toBe(MIN_TRUE_PEAK_LIMIT_DB)
+    expect(stepTruePeakLimit(settings, 1).truePeakLimitDb).toBe(-5.5)
+
+    const nearMax = { ...DEFAULT_AUDIO_CLEANUP_SETTINGS, truePeakLimitDb: -0.3 }
+    expect(stepTruePeakLimit(nearMax, 1).truePeakLimitDb).toBe(MAX_TRUE_PEAK_LIMIT_DB)
+    expect(stepTruePeakLimit(nearMax, -1).truePeakLimitDb).toBe(-0.8)
+  })
+
+  it('leaves every other setting unchanged', () => {
+    const stepped = stepTruePeakLimit(DEFAULT_AUDIO_CLEANUP_SETTINGS, -1)
+    expect(stepped).toEqual({
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      truePeakLimitDb: -1.5,
+    })
   })
 })

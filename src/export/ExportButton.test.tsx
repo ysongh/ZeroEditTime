@@ -1,17 +1,18 @@
 import {
   Children,
   isValidElement,
-  type ComponentProps,
   type ReactElement,
   type ReactNode,
 } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EDL } from '../edl/types'
 import type { ImageOverlay, OverlayAsset } from '../overlays/types'
-import AudioCleanupControls from './AudioCleanupControls'
 import ExportButton from './ExportButton'
 import { buildAudioCleanupPlan } from './audioCleanupPlan'
-import { DEFAULT_AUDIO_CLEANUP_SETTINGS } from './audioCleanupSettings'
+import {
+  DEFAULT_AUDIO_CLEANUP_SETTINGS,
+  type AudioCleanupSettings,
+} from './audioCleanupSettings'
 
 const harness = vi.hoisted(() => ({
   getFfmpeg: vi.fn(),
@@ -89,11 +90,18 @@ type ButtonProps = {
   onClick?: () => void
 }
 
-type CheckboxProps = {
-  checked?: boolean
-  children?: ReactNode
-  onChange?: (event: { target: { checked: boolean } }) => void
-  type?: string
+/** Visible text a screen reader would read: skips aria-hidden icons. */
+function accessibleText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node)
+  }
+  if (!isValidElement(node)) {
+    return Children.toArray(node).map(accessibleText).join('')
+  }
+  const props = node.props as { children?: ReactNode; 'aria-hidden'?: unknown }
+  return props['aria-hidden'] === 'true' || props['aria-hidden'] === true
+    ? ''
+    : accessibleText(props.children)
 }
 
 function findButton(node: ReactNode, label: string): ReactElement<ButtonProps> {
@@ -103,7 +111,7 @@ function findButton(node: ReactNode, label: string): ReactElement<ButtonProps> {
   const element = node as ReactElement<ButtonProps>
   if (
     element.type === 'button' &&
-    Children.toArray(element.props.children).join('') === label
+    accessibleText(element.props.children) === label
   ) {
     return element
   }
@@ -120,79 +128,33 @@ function findButton(node: ReactNode, label: string): ReactElement<ButtonProps> {
   throw new Error(`Could not find button "${label}".`)
 }
 
-function findAudioCleanupControls(
-  node: ReactNode,
-): ReactElement<ComponentProps<typeof AudioCleanupControls>> {
-  if (!isValidElement(node)) {
-    throw new Error('Could not find AudioCleanupControls.')
-  }
-  const element = node as ReactElement<{ children?: ReactNode }>
-  if (element.type === AudioCleanupControls) {
-    return element as ReactElement<ComponentProps<typeof AudioCleanupControls>>
-  }
-  for (const child of Children.toArray(element.props.children)) {
-    if (!isValidElement(child)) {
-      continue
-    }
-    try {
-      return findAudioCleanupControls(child)
-    } catch {
-      // Keep walking sibling branches.
-    }
-  }
-  throw new Error('Could not find AudioCleanupControls.')
+type RenderOptions = {
+  edl?: EDL
+  overlayAssets?: readonly OverlayAsset[]
+  imageOverlays?: readonly ImageOverlay[]
+  audioCleanupSettings?: AudioCleanupSettings
+  burnCaptions?: boolean
+  onBusyChange?: (busy: boolean) => void
 }
 
-function findCheckbox(node: ReactNode): ReactElement<CheckboxProps> {
-  if (!isValidElement(node)) {
-    throw new Error('Could not find checkbox.')
-  }
-  const element = node as ReactElement<CheckboxProps>
-  if (element.type === 'input' && element.props.type === 'checkbox') {
-    return element
-  }
-  for (const child of Children.toArray(element.props.children)) {
-    if (!isValidElement(child)) {
-      continue
-    }
-    try {
-      return findCheckbox(child)
-    } catch {
-      // Keep walking sibling branches.
-    }
-  }
-  throw new Error('Could not find checkbox.')
-}
-
-function containsText(node: ReactNode, text: string): boolean {
-  if (typeof node === 'string' || typeof node === 'number') {
-    return String(node).includes(text)
-  }
-  if (!isValidElement(node)) {
-    return false
-  }
-  const element = node as ReactElement<{ children?: ReactNode }>
-  return Children.toArray(element.props.children).some((child) =>
-    containsText(child, text),
-  )
-}
-
-function renderExportButton(
-  edl: EDL = EDL_FIXTURE,
-  stateOverrides: ReadonlyMap<number, unknown> = new Map(),
-  overlayAssets: readonly OverlayAsset[] = [],
-  imageOverlays: readonly ImageOverlay[] = [],
-): ReactElement {
+function renderExportButton({
+  edl = EDL_FIXTURE,
+  overlayAssets = [],
+  imageOverlays = [],
+  audioCleanupSettings = { ...DEFAULT_AUDIO_CLEANUP_SETTINGS },
+  burnCaptions = true,
+  onBusyChange,
+}: RenderOptions = {}): ReactElement {
   harness.stateSetters.length = 0
   harness.stateOverrides.clear()
-  for (const [index, value] of stateOverrides) {
-    harness.stateOverrides.set(index, value)
-  }
   return ExportButton({
     edl,
     file: { name: 'source.mp4' } as File,
     overlayAssets,
     imageOverlays,
+    audioCleanupSettings,
+    burnCaptions,
+    onBusyChange,
   })
 }
 
@@ -244,25 +206,53 @@ afterEach(() => {
 })
 
 describe('ExportButton orchestration', () => {
-  it('does not access FFmpeg while rendering or changing cleanup settings', () => {
-    const view = renderExportButton()
+  it('does not access FFmpeg while rendering', () => {
+    renderExportButton({
+      audioCleanupSettings: {
+        ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+        noiseReduction: 'strong',
+      },
+    })
 
     expect(harness.getFfmpeg).not.toHaveBeenCalled()
     expect(harness.loadFfmpeg).not.toHaveBeenCalled()
     expect(harness.runExport).not.toHaveBeenCalled()
+  })
 
-    findAudioCleanupControls(view).props.onChange({
+  it('forwards the cleanup settings it is given and reports busy start and end', async () => {
+    const fake = createFfmpeg(true)
+    const anchor = {
+      href: '',
+      download: '',
+      click: vi.fn(),
+      remove: vi.fn(),
+    }
+    vi.stubGlobal('document', {
+      createElement: vi.fn(() => anchor),
+      body: { appendChild: vi.fn() },
+    })
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
+    harness.runExport.mockResolvedValue(
+      new Blob([new Uint8Array([1])], { type: 'video/mp4' }),
+    )
+    const settings: AudioCleanupSettings = {
       ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
       noiseReduction: 'strong',
-    })
+      loudnessTargetLufs: -18,
+      truePeakLimitDb: -2,
+    }
+    const onBusyChange = vi.fn()
+    const view = renderExportButton({ audioCleanupSettings: settings, onBusyChange })
 
-    expect(harness.stateSetters[5]).toHaveBeenCalledWith({
-      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
-      noiseReduction: 'strong',
-    })
-    expect(harness.getFfmpeg).not.toHaveBeenCalled()
-    expect(harness.loadFfmpeg).not.toHaveBeenCalled()
-    expect(harness.runExport).not.toHaveBeenCalled()
+    findButton(view, 'Export MP4').props.onClick?.()
+
+    await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledOnce())
+    expect(harness.runExport.mock.calls[0][6]).toEqual(
+      buildAudioCleanupPlan(settings),
+    )
+    expect(onBusyChange.mock.calls).toEqual([[true], [false]])
   })
 
   it('loads lazily, forwards the default cleanup plan, and reports progress', async () => {
@@ -340,132 +330,50 @@ describe('ExportButton orchestration', () => {
     )
   })
 
-  it('downloads a prepared sidecar SRT without touching FFmpeg', async () => {
-    const anchor = {
-      href: '',
-      download: '',
-      click: vi.fn(),
-      remove: vi.fn(),
-    }
-    vi.stubGlobal('document', {
-      createElement: vi.fn(() => anchor),
-      body: { appendChild: vi.fn() },
+  it.each([
+    [true, [{ text: 'Keep this caption', start: 0.25, end: 1.25 }]],
+    [false, []],
+  ] as const)(
+    'with burnCaptions %s passes the prepared burn captions %j',
+    async (burnCaptions, expected) => {
+      const fake = createFfmpeg(true)
+      const anchor = {
+        href: '',
+        download: '',
+        click: vi.fn(),
+        remove: vi.fn(),
+      }
+      vi.stubGlobal('document', {
+        createElement: vi.fn(() => anchor),
+        body: { appendChild: vi.fn() },
+      })
+      vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
+      vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+      harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
+      harness.runExport.mockResolvedValue(
+        new Blob([new Uint8Array([1])], { type: 'video/mp4' }),
+      )
+      const view = renderExportButton({
+        edl: CAPTIONED_EDL_FIXTURE,
+        burnCaptions,
+      })
+
+      findButton(view, 'Export MP4').props.onClick?.()
+
+      await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledOnce())
+      expect(harness.runExport.mock.calls[0][3]).toEqual(expected)
+    },
+  )
+
+  it('disables export and explains why when every segment is cut', () => {
+    const view = renderExportButton({
+      edl: { ...EDL_FIXTURE, segments: [] },
     })
-    const createObjectUrl = vi
-      .spyOn(URL, 'createObjectURL')
-      .mockReturnValue('blob:srt-download')
-    const revokeObjectUrl = vi
-      .spyOn(URL, 'revokeObjectURL')
-      .mockImplementation(() => {})
-    const view = renderExportButton(CAPTIONED_EDL_FIXTURE)
 
-    findButton(view, 'Download SRT').props.onClick?.()
-
-    expect(createObjectUrl).toHaveBeenCalledOnce()
-    const blob = createObjectUrl.mock.calls[0][0]
-    expect(blob).toBeInstanceOf(Blob)
-    if (!(blob instanceof Blob)) {
-      throw new Error('Expected SRT download to use a Blob.')
-    }
-    expect(await blob.text()).toBe(
-      '1\n00:00:00,250 --> 00:00:01,250\nKeep this caption\n\n',
+    expect(findButton(view, 'Export MP4').props.disabled).toBe(true)
+    expect(accessibleText(view)).toContain(
+      'Nothing to export — every segment has been cut.',
     )
-    expect(blob.type).toBe('text/plain')
-    expect(anchor.href).toBe('blob:srt-download')
-    expect(anchor.download).toBe('zero-edit-time.srt')
-    expect(anchor.click).toHaveBeenCalledOnce()
-    expect(anchor.remove).toHaveBeenCalledOnce()
-    expect(revokeObjectUrl).toHaveBeenCalledWith('blob:srt-download')
-    expect(harness.getFfmpeg).not.toHaveBeenCalled()
-    expect(harness.loadFfmpeg).not.toHaveBeenCalled()
-    expect(harness.runExport).not.toHaveBeenCalled()
-  })
-
-  it('burns prepared captions by default and exposes the opt-out', async () => {
-    const fake = createFfmpeg(true)
-    const anchor = {
-      href: '',
-      download: '',
-      click: vi.fn(),
-      remove: vi.fn(),
-    }
-    vi.stubGlobal('document', {
-      createElement: vi.fn(() => anchor),
-      body: { appendChild: vi.fn() },
-    })
-    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
-    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
-    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
-    harness.runExport.mockResolvedValue(
-      new Blob([new Uint8Array([1])], { type: 'video/mp4' }),
-    )
-    const view = renderExportButton(CAPTIONED_EDL_FIXTURE)
-    const checkbox = findCheckbox(view)
-
-    expect(checkbox.props.checked).toBe(true)
-    checkbox.props.onChange?.({ target: { checked: false } })
-    expect(harness.stateSetters[4]).toHaveBeenCalledWith(false)
-
-    findButton(view, 'Export MP4').props.onClick?.()
-
-    await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledOnce())
-    expect(harness.runExport.mock.calls[0][3]).toEqual([
-      { text: 'Keep this caption', start: 0.25, end: 1.25 },
-    ])
-  })
-
-  it('passes no burn captions after the caption toggle is off', async () => {
-    const fake = createFfmpeg(true)
-    const anchor = {
-      href: '',
-      download: '',
-      click: vi.fn(),
-      remove: vi.fn(),
-    }
-    vi.stubGlobal('document', {
-      createElement: vi.fn(() => anchor),
-      body: { appendChild: vi.fn() },
-    })
-    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:download')
-    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
-    harness.getFfmpeg.mockReturnValue(fake.ffmpeg)
-    harness.runExport.mockResolvedValue(
-      new Blob([new Uint8Array([1])], { type: 'video/mp4' }),
-    )
-    const stateOverrides = new Map<number, unknown>([[4, false]])
-    const view = renderExportButton(CAPTIONED_EDL_FIXTURE, stateOverrides)
-
-    expect(findCheckbox(view).props.checked).toBe(false)
-    findButton(view, 'Export MP4').props.onClick?.()
-
-    await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledOnce())
-    expect(harness.runExport.mock.calls[0][3]).toEqual([])
-  })
-
-  it('hides caption controls when none are stored and disables SRT when all are cut', () => {
-    const noCaptionsView = renderExportButton()
-
-    expect(() => findCheckbox(noCaptionsView)).toThrow(
-      'Could not find checkbox.',
-    )
-    expect(() => findButton(noCaptionsView, 'Download SRT')).toThrow(
-      'Could not find button "Download SRT".',
-    )
-
-    const fullyCutCaptionEdl: EDL = {
-      ...CAPTIONED_EDL_FIXTURE,
-      segments: [{ id: 'seg_2_4', start: 2, end: 4 }],
-    }
-    const fullyCutView = renderExportButton(fullyCutCaptionEdl)
-
-    expect(findCheckbox(fullyCutView).props.checked).toBe(true)
-    expect(findButton(fullyCutView, 'Download SRT').props.disabled).toBe(true)
-    expect(
-      containsText(
-        fullyCutView,
-        "Every caption's speech has been cut — nothing to burn or download.",
-      ),
-    ).toBe(true)
   })
 
   it('passes the current overlay plan, asset, fades, and frame size to export', async () => {
@@ -486,12 +394,10 @@ describe('ExportButton orchestration', () => {
     harness.runExport.mockResolvedValue(
       new Blob([new Uint8Array([1])], { type: 'video/mp4' }),
     )
-    const view = renderExportButton(
-      EDL_FIXTURE,
-      new Map(),
-      [OVERLAY_ASSET_FIXTURE],
-      [IMAGE_OVERLAY_FIXTURE],
-    )
+    const view = renderExportButton({
+      overlayAssets: [OVERLAY_ASSET_FIXTURE],
+      imageOverlays: [IMAGE_OVERLAY_FIXTURE],
+    })
 
     findButton(view, 'Export MP4').props.onClick?.()
 

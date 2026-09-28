@@ -80,23 +80,33 @@ pnpm exec netlify dev  # start Vite with the local Netlify Functions
 
 ## Using it
 
-1. Load a video. It plays and shows its duration; the EDL starts as one full-length segment.
+1. Drop a video on the start screen (or **Choose Video**). The preview plays with the custom
+   transport (Play, ±5 s, **Skip Cuts** to hear or skip removed ranges); the EDL starts as one
+   full-length segment.
 2. Edit:
-   - **Timeline** — Set In / Set Out, then Delete range or Trim to selection; Split at playhead.
-   - **Transcript** (after Transcribe) — click words to select a span, or delete a whole sentence;
-     struck-through words show what's been cut.
-   - **Agent** — type a command and Run; it edits via the same EDL primitives in one Undo.
-   - **Undo / Reset** at any time.
-3. **Export MP4** — loads the encode engine (≈31 MB, first time only), shows a progress bar, then
+   - **Timeline** — Set In / Set Out, then **Delete Range** or **Trim to Range**; **Split**. Drag
+     the track to scrub; double-click a segment to select it. Keys: Space, I, O, S, Delete, Esc,
+     ←/→ (±5 s), ⌘Z/Ctrl+Z.
+   - **Transcript** tab (after Transcribe) — click words to select a span, or hover a sentence and
+     Cut it; struck-through words show what's been cut.
+   - **Describe an edit** — type a command (or pick a suggestion) and Run; it edits via the same EDL
+     primitives in one Undo.
+   - **Captions**, **Retakes**, **Audio**, and **Images** tabs hold caption text/export options,
+     advisory retake checks, export audio cleanup, and still-image overlays.
+   - **Undo / Reset** in the header at any time.
+3. **Export MP4** (header) — loads the encode engine (≈31 MB, first time only), shows progress, then
    downloads `zero-edit-time.mp4` containing only the kept segments, in order, audio in sync.
 
 ## Project layout
 
 - `src/edl/` — framework-free EDL core: types and pure math (`createEdl`, `applyRemovedRange`,
   `splitSegmentAt`, time mapping, `isSourceTimeKept`). All times are seconds into the source.
-- `src/App.tsx` — the app shell: file picker, EDL state + history (`commitEdl` / `undo`), the
-  skip-removed-ranges playback controller, and the edit controls.
-- `src/Timeline.tsx` — the one-track timeline, rendered one-way from the EDL.
+- `src/App.tsx` — the app shell: header, start screen, preview + transport, timeline card, and
+  tabbed inspector; EDL state + history (`commitEdl` / `undo`), the skip-removed-ranges playback
+  controller, and the keyboard shortcuts (`src/editorShortcuts.ts`).
+- `src/Timeline.tsx` — the one-track timeline, rendered one-way from the EDL (layout math in
+  `src/timelineScale.ts`).
+- `src/index.css`, `src/ui/` — the design tokens and shared icon/format helpers (no UI framework).
 - `src/transcript/` — the clickable transcript view, sentence grouping, client-side audio
   extraction (Phase 2.5), and the proxy client.
 - `src/agent/` — the AI agent: pure range detection and tool executors, the client agent loop, and

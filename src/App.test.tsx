@@ -106,6 +106,8 @@ const harness = vi.hoisted(() => ({
   extractAudio: vi.fn(),
   transcribe: vi.fn(),
   analyzeRetakes: vi.fn(),
+  addWindowListener: vi.fn(),
+  removeWindowListener: vi.fn(),
 }))
 
 vi.mock('react', async (importOriginal) => {
@@ -193,6 +195,19 @@ type ExportButtonProps = NodeProps & {
   file: File | null
   overlayAssets: readonly OverlayAsset[]
   imageOverlays: readonly ImageOverlay[]
+  audioCleanupSettings: AudioCleanupSettings
+  burnCaptions: boolean
+  onBusyChange?: (busy: boolean) => void
+}
+
+/** The data an export consumes: ExportButton props minus its busy callback. */
+function exportInputs(
+  props: ExportButtonProps,
+): Omit<ExportButtonProps, 'children' | 'onBusyChange'> {
+  const inputs = { ...props }
+  delete inputs.children
+  delete inputs.onBusyChange
+  return inputs
 }
 
 function findNode(
@@ -220,12 +235,28 @@ function findNode(
   throw new Error(`Could not find ${description}.`)
 }
 
+/** Visible text a screen reader would read: skips aria-hidden icons and key hints. */
+function accessibleText(node: ReactNode): string {
+  if (typeof node === 'string' || typeof node === 'number') {
+    return String(node)
+  }
+  if (!isValidElement(node)) {
+    return Children.toArray(node).map(accessibleText).join('')
+  }
+  const props = node.props as NodeProps & { 'aria-hidden'?: unknown }
+  return props['aria-hidden'] === 'true' || props['aria-hidden'] === true
+    ? ''
+    : accessibleText(props.children)
+}
+
 function findButton(node: ReactNode, label: string): ReactElement<ButtonProps> {
   return findNode(
     node,
-    (element) =>
-      element.type === 'button' &&
-      Children.toArray(element.props.children).join('') === label,
+    (element) => {
+      if (element.type !== 'button') return false
+      const ariaLabel = (element.props as { 'aria-label'?: string })['aria-label']
+      return (ariaLabel ?? accessibleText(element.props.children)) === label
+    },
     `button "${label}"`,
   ) as ReactElement<ButtonProps>
 }
@@ -378,6 +409,8 @@ beforeEach(() => {
   harness.extractAudio.mockReset()
   harness.transcribe.mockReset()
   harness.analyzeRetakes.mockReset()
+  harness.addWindowListener.mockReset()
+  harness.removeWindowListener.mockReset()
   harness.useState.mockReset()
   harness.useReducer.mockReset()
   harness.useRef.mockReset()
@@ -499,6 +532,11 @@ beforeEach(() => {
   vi.spyOn(crypto, 'randomUUID').mockReturnValue(
     '00000000-0000-4000-8000-000000000001',
   )
+  // App binds its keyboard shortcuts on window; Node has no window.
+  vi.stubGlobal('window', {
+    addEventListener: harness.addWindowListener,
+    removeEventListener: harness.removeWindowListener,
+  })
 })
 
 afterEach(() => {
@@ -549,7 +587,7 @@ describe('App transcription lifecycle', () => {
     upload.resolve(transcript)
     await pending
     view = renderApp()
-    expect(findButton(view, 'Transcribe').props.disabled).toBe(false)
+    expect(findButton(view, 'Transcribe Again').props.disabled).toBe(false)
     expect(findComponent<TranscriptProps>(view, TranscriptView, 'transcript')
       .props.transcript).toBe(transcript)
   })
@@ -636,7 +674,7 @@ describe('App transcription lifecycle', () => {
       current.resolve(transcript)
       await currentPending
       view = renderApp()
-      expect(findButton(view, 'Transcribe').props.disabled).toBe(false)
+      expect(findButton(view, 'Transcribe Again').props.disabled).toBe(false)
       expect(findComponent<TranscriptProps>(view, TranscriptView, 'transcript')
         .props.transcript).toBe(transcript)
     },
@@ -826,8 +864,20 @@ describe('App regression wiring', () => {
         zIndex: 0, fadeInMs: 100, fadeOutMs: 200,
       })
     view = renderApp()
+    const settings: AudioCleanupSettings = {
+      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
+      noiseReduction: 'strong', voiceLeveling: false,
+      loudnessTargetLufs: -20, truePeakLimitDb: -3, smoothJoins: false,
+    }
+    // Cleanup settings are edited in the Audio tab and handed to the header
+    // Export button as data.
+    findComponent<ComponentProps<typeof AudioCleanupControls>>(
+      view, AudioCleanupControls, 'audio cleanup controls',
+    ).props.onChange(settings)
+    view = renderApp()
     const exportProps = findComponent<ExportButtonProps>(view, ExportButton, 'export button').props
-    const contentBefore = structuredClone(exportProps)
+    expect(exportProps.audioCleanupSettings).toEqual(settings)
+    const contentBefore = structuredClone(exportInputs(exportProps))
     const transcriptBefore = structuredClone(transcript)
     const engine = { loaded: true, on: vi.fn(), off: vi.fn() }
     harness.getFfmpeg.mockReturnValue(engine)
@@ -839,28 +889,19 @@ describe('App regression wiring', () => {
     vi.stubGlobal('document', {
       createElement: vi.fn().mockReturnValue(anchor), body: { appendChild: vi.fn() },
     })
-    const settings: AudioCleanupSettings = {
-      ...DEFAULT_AUDIO_CLEANUP_SETTINGS,
-      noiseReduction: 'strong', voiceLeveling: false,
-      loudnessTargetLufs: -20, truePeakLimitDb: -3, smoothJoins: false,
-    }
-    let exportView = ExportButton(exportProps)
-    findComponent<ComponentProps<typeof AudioCleanupControls>>(
-      exportView, AudioCleanupControls, 'audio cleanup controls',
-    ).props.onChange(settings)
 
     async function expectSameExport() {
       view = renderApp()
       const props = findComponent<ExportButtonProps>(view, ExportButton, 'export button').props
-      expect(props).toEqual(contentBefore)
+      expect(exportInputs(props)).toEqual(contentBefore)
       expect(props.file).toBe(file)
       expect(props.edl).toBe(exportProps.edl)
       expect(totalKeptDuration(props.edl)).toBe(8)
       expect(transcript).toEqual(transcriptBefore)
-      exportView = ExportButton(props)
       expect(findComponent<ComponentProps<typeof AudioCleanupControls>>(
-        exportView, AudioCleanupControls, 'audio cleanup controls',
+        view, AudioCleanupControls, 'audio cleanup controls',
       ).props.settings).toEqual(settings)
+      const exportView = ExportButton(props)
       const nextCall = encode.mock.calls.length + 1
       findButton(exportView, 'Export MP4').props.onClick?.()
       await vi.waitFor(() => expect(anchor.click).toHaveBeenCalledTimes(nextCall))
@@ -970,9 +1011,9 @@ describe('App regression wiring', () => {
     }
     findButton(view, 'Set In').props.onClick?.()
     expectNoRetakeWork()
-    findButton(view, 'Clear selection').props.onClick?.()
+    findButton(view, 'Clear').props.onClick?.()
     expectNoRetakeWork()
-    findButton(view, 'Split at playhead').props.onClick?.()
+    findButton(view, 'Split').props.onClick?.()
     expectNoRetakeWork()
     expect(findComponent<TimelineProps>(view, Timeline, 'timeline').props.edl.segments)
       .toHaveLength(2)
@@ -985,7 +1026,7 @@ describe('App regression wiring', () => {
       .props.transcript).toBe(transcript)
     findButton(view, 'Undo').props.onClick?.()
     expectNoRetakeWork()
-    findButton(view, 'Generate captions').props.onClick?.()
+    findButton(view, 'Generate Captions').props.onClick?.()
     expectNoRetakeWork()
     const captions = findComponent<CaptionListProps>(view, CaptionList, 'caption list')
     captions.props.onEditText(captions.props.captions[0].id, 'Corrected caption')
@@ -1099,7 +1140,7 @@ describe('App regression wiring', () => {
         index === 1 ? { ...word, text: 'workspace' } : { ...word }),
     }
     harness.transcribe.mockResolvedValueOnce(changedTranscript)
-    await findButton(view, 'Transcribe').props.onClick?.()
+    await findButton(view, 'Transcribe Again').props.onClick?.()
     view = renderApp()
     expect(findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel')
       .props.recommendations).toEqual([])
@@ -1110,7 +1151,7 @@ describe('App regression wiring', () => {
 
     // Restoring the exact source evidence invalidates the memo again and
     // restores current advice without requesting another model analysis.
-    await findButton(view, 'Transcribe').props.onClick?.()
+    await findButton(view, 'Transcribe Again').props.onClick?.()
     view = renderApp()
     const panel = findComponent<RetakesPanelProps>(view, RetakesPanel, 'retakes panel')
     expect(panel.props.recommendations).toEqual([editedRecommendation])
@@ -1221,7 +1262,7 @@ describe('App regression wiring', () => {
     const exportPropsBefore = findComponent<ExportButtonProps>(
       view, ExportButton, 'export button',
     ).props
-    const exportInputsBefore = structuredClone(exportPropsBefore)
+    const exportInputsBefore = structuredClone(exportInputs(exportPropsBefore))
     function exportSnapshot(props: ExportButtonProps) {
       const captions = prepareCaptionsForExport(props.edl.captions, props.edl)
       const overlays = buildImageOverlayRenderPlanForEdl(
@@ -1257,7 +1298,7 @@ describe('App regression wiring', () => {
       const props = findComponent<ExportButtonProps>(
         currentView, ExportButton, 'export button',
       ).props
-      expect(props).toEqual(exportInputsBefore)
+      expect(exportInputs(props)).toEqual(exportInputsBefore)
       expect(props.edl).toBe(edlBefore)
       expect(props.imageOverlays).toBe(exportPropsBefore.imageOverlays)
       expect(exportSnapshot(props)).toEqual(exportBefore)
@@ -1631,7 +1672,7 @@ describe('App regression wiring', () => {
       ),
     }
     harness.transcribe.mockResolvedValueOnce(changedTranscript)
-    await findButton(view, 'Transcribe').props.onClick?.()
+    await findButton(view, 'Transcribe Again').props.onClick?.()
     view = renderApp()
     panel = findComponent<RetakesPanelProps>(
       view,
@@ -1744,7 +1785,7 @@ describe('App regression wiring', () => {
 
     // A new transcript generation invalidates the claim even if a test double
     // returns the same object: the new transcript has not itself been checked.
-    await findButton(view, 'Transcribe').props.onClick?.()
+    await findButton(view, 'Transcribe Again').props.onClick?.()
     view = renderApp()
     panel = findComponent<RetakesPanelProps>(
       view,
@@ -1885,7 +1926,7 @@ describe('App regression wiring', () => {
 
     // A successful replacement invalidates the old token before aborting it,
     // resets lifecycle state, and makes a new run possible after rerender.
-    await findButton(view, 'Transcribe').props.onClick?.()
+    await findButton(view, 'Transcribe Again').props.onClick?.()
     expect(firstOptions?.signal?.aborted).toBe(true)
     expect(state().retakes.retakeAnalysisStatus).toBe('idle')
     view = renderApp()
@@ -1982,7 +2023,7 @@ describe('App regression wiring', () => {
         view, RetakesPanel, 'retakes panel',
       ).props.onAnalyze()
 
-      await findButton(view, 'Transcribe').props.onClick?.()
+      await findButton(view, 'Transcribe Again').props.onClick?.()
       expect(oldOptions?.signal?.aborted).toBe(true)
       view = renderApp()
       await findComponent<RetakesPanelProps>(
@@ -2202,10 +2243,9 @@ describe('App regression wiring', () => {
     input.props.onChange?.({ target: { files: [first] } })
 
     view = renderApp()
-    expect(findVideo(view).props).toMatchObject({
-      controls: true,
-      src: 'blob:first',
-    })
+    // The custom transport replaces native controls.
+    expect(findVideo(view).props).toMatchObject({ src: 'blob:first' })
+    expect(findVideo(view).props.controls).toBeUndefined()
     findFileInput(view).props.onChange?.({ target: { files: [second] } })
 
     expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:first')
@@ -2264,7 +2304,7 @@ describe('App regression wiring', () => {
     view = renderApp()
     findButton(view, 'Set Out').props.onClick?.()
     view = renderApp()
-    findButton(view, 'Trim to selection').props.onClick?.()
+    findButton(view, 'Trim to Range').props.onClick?.()
 
     view = renderApp()
     expect(
@@ -2285,7 +2325,7 @@ describe('App regression wiring', () => {
     view = renderApp()
     findButton(view, 'Set Out').props.onClick?.()
     view = renderApp()
-    findButton(view, 'Delete range').props.onClick?.()
+    findButton(view, 'Delete Range').props.onClick?.()
 
     view = renderApp()
     expect(
@@ -2349,7 +2389,7 @@ describe('App regression wiring', () => {
       [2, 10],
     ])
 
-    findButton(view, 'Generate captions').props.onClick?.()
+    findButton(view, 'Generate Captions').props.onClick?.()
     view = renderApp()
     let captionList = findComponent<CaptionListProps>(
       view,
