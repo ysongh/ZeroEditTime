@@ -6,6 +6,7 @@ Zero Edit Time is a browser-based, non-destructive video editor built with React
 
 - Phases 0–6, 8, 9A, 10, and 11 are implemented. The intermediate phases 2.5, 4.5, and 5.5 are also complete. Phase 11 ends at Part Z; no next feature phase has been specified.
 - Phase 11 retake recommendations are advisory. The automated suites and handoff are complete, but real-recording, browser, live-model quality, and actual-output verification are still pending. Do not describe those checks as passed.
+- AI Clarity Edit parts 1–2 provide pure sentence mapping and a bounded analysis API. The inspector, preview, proposal lifecycle, and Apply integration are pending; see `docs/clarity-edit.md`.
 - Implement only the task or phase currently requested. Do not scaffold future phases or add speculative dependencies.
 - Save/load is deferred. Caption timing edits, caption add/delete/split/merge, styling UI, SRT import, an agent tool for editing caption text, and karaoke timing remain outside the existing scope unless explicitly requested.
 
@@ -38,7 +39,7 @@ Use strict TypeScript and avoid `any`. Keep the existing toolchain configuration
 
 - `netlify/functions/transcribe.ts` proxies extracted audio to Whisper and returns word timings. `src/transcript/extractAudio.ts` uses the shared FFmpeg engine to make small mono 16 kHz audio before upload; its MP3 path has a WAV fallback.
 - `netlify/functions/agent.ts` is a **stateless relay** to Claude. It owns the server-side prompt/tool schemas and never executes tools, stores an EDL, or computes edits. The client loop in `src/agent/run.ts` executes pure tools against a working EDL and commits the whole command once. Compute reported counts and durations client-side; model text is narration.
-- Preserve the shared `/api/agent` transport's editing mode and retake-analysis mode. Validate unknown input and model results at their respective boundaries; send bounded text context, not raw media or credentials, for retake analysis.
+- Preserve the shared `/api/agent` transport's editing, retake-analysis, and clarity-analysis modes. Validate unknown input and model results at their respective boundaries; send bounded text context, not raw media or credentials, for analysis. Clarity makes one request per explicit call, rejects oversized input without truncation, and never executes edits on the server.
 
 ### Time bases and overlays
 
@@ -75,6 +76,7 @@ Use strict TypeScript and avoid `any`. Keep the existing toolchain configuration
 | Caption generation, text edits, preview, SRT | `src/captions/` |
 | Image overlay state, timing, preview, geometry | `src/overlays/` |
 | Retake candidates, validation, freshness, workflow, UI | `src/retakes/` |
+| Clarity sentence mapping and bounded analysis contract/client | `src/clarity/` |
 | Shared FFmpeg engine | `src/ffmpeg/engine.ts` |
 | Export graph, audio cleanup, runtime and UI | `src/export/` |
 | Transcription and stateless Claude relays | `netlify/functions/transcribe.ts`, `netlify/functions/agent.ts` |

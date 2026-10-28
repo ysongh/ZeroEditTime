@@ -119,6 +119,7 @@ pnpm exec netlify dev  # start Vite with the local Netlify Functions
 
 See [CLAUDE.md](CLAUDE.md) for the detailed architecture and contributor guidance.
 The [AI Clarity Edit implementation notes](docs/clarity-edit.md) describe the
-completed sentence-mapping foundation; the feature is not yet available in the UI.
+completed sentence-mapping foundation and bounded analysis API; the feature is
+not yet available in the UI.
 Use the [Phase 9A image-overlay manual verification checklist](docs/phase-9a-manual-verification.md)
 for browser end-to-end and export release checks.
