@@ -1,8 +1,29 @@
 # AI Clarity Edit — implementation notes
 
-Parts 1–2 implement pure local sentence mapping and a bounded clarity-analysis
-API. They are not wired into the editor yet: there is no Clarity tab, preview,
-or Apply action, and the app does not automatically make clarity requests.
+Parts 1–3 implement pure local sentence mapping, a bounded clarity-analysis API,
+and a working Clarity inspector for analysis and review. Edited-version preview
+and applying selected cuts remain pending. Analysis runs only on an explicit click.
+
+## Using the Clarity tab
+
+1. Load a video and transcribe it. Open **Clarity** in the inspector.
+2. Optionally enter a target duration in seconds, an audience, and **What must
+   stay?**. Click **Suggest clarity edits**.
+3. Review each proposed sentence's exact local wording, original source time,
+   reason, and explanation. **Play original** auditions that sentence and stops
+   at its end. The regular transport also stops playback.
+4. Toggle **Remove this sentence** to compare the locally calculated proposed
+   duration. An unmet target is shown explicitly; no extra request forces it.
+5. **Discard** clears review and cancels pending analysis or its active audition.
+
+An empty proposal is a successful result. Deselecting every suggestion still
+shows the returned cards, with zero selected. Oversized input is rejected with
+the applicable limit, without sending a truncated recording for analysis.
+
+The tab stays mounted while hidden, preserving draft settings and review state.
+Analysis, selection, audition, and Discard do not change editor content, Undo,
+caption text, overlays, audio settings, retake workflow, or export inputs. The
+proposed duration is a comparison only; export still reads the committed edit.
 
 ## Sentence mapping
 
@@ -13,8 +34,8 @@ The local foundation lives in
 using the existing sentence parser. IDs use original inclusive word-index spans
 (`sentence:12:18`), so repeated wording remains distinct and earlier cuts do not
 renumber surviving sentences. IDs are scoped to that transcript; they do not
-establish freshness across source or transcript replacement. Later proposals must
-also capture their source, transcript, kept ranges, and analysis settings.
+establish freshness across source or transcript replacement. Current review also
+captures its source, transcript, kept ranges, and analysis settings.
 
 All local ranges are half-open **original-source seconds**. A removable sentence
 has its entire spoken envelope kept and no overlap with any outside word.
@@ -114,8 +135,20 @@ receive HTTP 502. There are no automatic retries, cache, or background analysis.
 The adapter accepts a caller `AbortSignal` as its fourth argument. Cancellation
 and timeout settle even if a transport ignores abort; late success/error cannot
 change the settled result. The input is copied before sending and reused to
-validate the response. Latest-request ownership and source/transcript/EDL/settings
-invalidation in the editor remain part of the later UI lifecycle work.
+validate the response. The review hook owns the latest request and ignores late
+success/failure/finalization from superseded work. Source, transcript, ranges,
+and draft-setting changes invalidate review and cancel analysis; rendered results
+are also filtered by input identity before effect cleanup. Async editing-agent
+callbacks compare against the input actually being reviewed when invalidating.
+Source replacement resets draft settings. Caption, overlay, audio, and retake-only
+changes preserve review. Future Apply must still revalidate freshness synchronously
+against the latest editor content before a single history commit.
+
+`review.ts` keeps draft validation, card mapping, and selected-duration calculation
+pure. `useClarityReview.ts` owns ephemeral request/selection state, and
+`ClarityPanel.tsx` is a controlled view. `App.tsx` owns bounded source playback.
+Clarity and retake auditions have separate owners; clearing clarity review does
+not stop ordinary playback or a retake audition.
 
 Only normalized text, IDs, eligibility, durations, and settings are sent to the
 same-origin relay and then the model. Source URLs, filenames, raw media, actual
@@ -131,6 +164,36 @@ Network and model calls are mocked. Build, lint, and test commands are the stand
 Part 2 verification: build and lint passed; the full suite passed 1,311 tests
 across 61 files. The new boundary, adapter, and relay suites add 241 tests.
 
-Live-model proposal quality remains unverified. Browser playback, Undo, captions,
-overlays, and actual exported-video checks await editor integration; offline API
-tests do not establish those behaviors.
+Part 3 adds pure review, component, and App integration tests for explicit-only
+requests, settings, hidden panels, local text/ranges/durations, empty/error states,
+audition events, Discard/history/export isolation, cancellation, and input changes.
+Build and lint passed; the full suite passed **1,392 tests across 63 files**,
+including 81 new review/UI/integration tests.
+
+A headless Chrome smoke check passed at 1480×1100 and 390×844, with screenshots
+visually inspected. It exercised the live React UI with mocked media metadata/
+playback, audio extraction, transcription, and model responses: explicit request
+count, hidden-tab persistence, settings, original text, checkbox duration updates,
+unmet target, bounded audition events, Discard, empty results, and unchanged Undo.
+This was a UI check, not a real-media or live-model run.
+
+Live-model proposal quality and real-recording playback remain unverified. Actual
+media decoding, sentence-boundary sound, and encoded-output quality are not proved
+by mocked browser or automated tests.
+
+## Manual recording checklist (pending)
+
+- Use a real rambling demo with setup, repeated detail, caveats, and a conclusion.
+  Check that the model proposes useful removals and honors audience/must-stay
+  settings; accept empty results when no useful cuts exist.
+- Make earlier word/pause cuts, then analyze. Confirm fragmented sentences stay
+  protected and neighboring retained words are not included in removal ranges.
+- Audition multiple originals and pause/seek/Discard. Listen for accurate source
+  boundaries and verify ordinary playback resumes normally.
+- Change source, transcript, ranges, or settings during analysis. Verify obsolete
+  advice never returns, and no background requests start on playback or tab changes.
+- Keep hand-edited captions, overlays, audio settings, and dismissed retakes.
+  Confirm review/Discard leave them and Undo unchanged; compare exported output
+  before and after review.
+- After the later preview/Apply step is implemented, verify temporary edited
+  playback, one-step Undo, caption/overlay alignment, and the actual exported edit.

@@ -6,7 +6,7 @@ Zero Edit Time is a browser-based, non-destructive video editor built with React
 
 - Phases 0–6, 8, 9A, 10, and 11 are implemented. The intermediate phases 2.5, 4.5, and 5.5 are also complete. Phase 11 ends at Part Z; no next feature phase has been specified.
 - Phase 11 retake recommendations are advisory. The automated suites and handoff are complete, but real-recording, browser, live-model quality, and actual-output verification are still pending. Do not describe those checks as passed.
-- AI Clarity Edit parts 1–2 provide pure sentence mapping and a bounded analysis API. The inspector, preview, proposal lifecycle, and Apply integration are pending; see `docs/clarity-edit.md`.
+- AI Clarity Edit parts 1–3 provide sentence mapping, a bounded analysis API, and the Clarity inspector for analysis/review/original-sentence audition. Review has cancellation and input-invalidation guards; edited-version preview and Apply remain pending. See `docs/clarity-edit.md` for verification limits.
 - Implement only the task or phase currently requested. Do not scaffold future phases or add speculative dependencies.
 - Save/load is deferred. Caption timing edits, caption add/delete/split/merge, styling UI, SRT import, an agent tool for editing caption text, and karaoke timing remain outside the existing scope unless explicitly requested.
 
@@ -59,7 +59,7 @@ Use strict TypeScript and avoid `any`. Keep the existing toolchain configuration
 ### UI shell
 
 - The editor UI follows the ZeroEditTime Claude Design mock (Ginseo design-system tokens, dark violet theme). Tokens and component classes live in `src/index.css`; shared icons and time formatting live in `src/ui/`. There is no UI framework; keep legacy CSS variable aliases (`--text`, `--border`, `--accent`, …) because overlay editors still use them inline.
-- Layout: header (file, Undo, Reset, Export), preview with custom transport (no native `controls`), timeline card, and a tabbed inspector (agent box plus Transcript, Captions, Retakes, Audio, Images). Inactive tab panels stay mounted and `hidden`, never unmounted; this keeps drafts and live regions alive, and App tests find every panel in the tree.
+- Layout: header (file, Undo, Reset, Export), preview with custom transport (no native `controls`), timeline card, and a tabbed inspector (agent box plus Transcript, Captions, Clarity, Retakes, Audio, Images). Inactive tab panels stay mounted and `hidden`, never unmounted; this keeps drafts and live regions alive, and App tests find every panel in the tree.
 - Export-time settings (audio cleanup, burn captions) are App state, reset on source replacement, and passed to the header `ExportButton` as data; it snapshots them when an export starts and reports busy state so the Audio tab locks. The preview caption overlay shows only while burning is on.
 - Keyboard shortcuts map through `src/editorShortcuts.ts`. They skip text entry, native Space activation, widget arrow keys, and events already handled (`defaultPrevented`); Delete/Escape are left to the overlay stage while overlay editing is on.
 - Retake cards stay advisory (Play, Dismiss, Mark as re-recorded, Copy script). The mock's retake Cut/Cut All actions are intentionally not implemented.
@@ -76,7 +76,7 @@ Use strict TypeScript and avoid `any`. Keep the existing toolchain configuration
 | Caption generation, text edits, preview, SRT | `src/captions/` |
 | Image overlay state, timing, preview, geometry | `src/overlays/` |
 | Retake candidates, validation, freshness, workflow, UI | `src/retakes/` |
-| Clarity sentence mapping and bounded analysis contract/client | `src/clarity/` |
+| Clarity sentence mapping, analysis, review state, and inspector | `src/clarity/` |
 | Shared FFmpeg engine | `src/ffmpeg/engine.ts` |
 | Export graph, audio cleanup, runtime and UI | `src/export/` |
 | Transcription and stateless Claude relays | `netlify/functions/transcribe.ts`, `netlify/functions/agent.ts` |

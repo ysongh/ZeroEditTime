@@ -11,6 +11,9 @@ import Timeline from './Timeline'
 import AgentBar from './agent/AgentBar'
 import CaptionList from './captions/CaptionList'
 import CaptionOverlay from './captions/CaptionOverlay'
+import ClarityPanel, { type ClarityPanelProps } from './clarity/ClarityPanel'
+import type { ClarityAnalysisResult } from './clarity/analysis'
+import { CLARITY_LIMITS } from './clarity/limits'
 import { buildSrt, prepareCaptionsForExport } from './captions/captions'
 import { applyRemovedRange, totalKeptDuration } from './edl/edl'
 import type { Caption, EDL } from './edl/types'
@@ -106,6 +109,7 @@ const harness = vi.hoisted(() => ({
   extractAudio: vi.fn(),
   transcribe: vi.fn(),
   analyzeRetakes: vi.fn(),
+  analyzeClarityContext: vi.fn(),
   addWindowListener: vi.fn(),
   removeWindowListener: vi.fn(),
 }))
@@ -139,6 +143,10 @@ vi.mock('./transcript/api', () => ({ transcribe: harness.transcribe }))
 
 vi.mock('./retakes/batchAnalysis', () => ({
   analyzeRetakes: harness.analyzeRetakes,
+}))
+
+vi.mock('./clarity/analysisApi', () => ({
+  analyzeClarityContext: harness.analyzeClarityContext,
 }))
 
 type NodeProps = { children?: ReactNode }
@@ -409,6 +417,7 @@ beforeEach(() => {
   harness.extractAudio.mockReset()
   harness.transcribe.mockReset()
   harness.analyzeRetakes.mockReset()
+  harness.analyzeClarityContext.mockReset()
   harness.addWindowListener.mockReset()
   harness.removeWindowListener.mockReset()
   harness.useState.mockReset()
@@ -2429,5 +2438,338 @@ describe('App regression wiring', () => {
     ).toBe('Hello world')
     expect(harness.extractAudio).toHaveBeenCalledWith(file)
     expect(harness.transcribe).toHaveBeenCalledWith(audio)
+  })
+})
+
+describe('App clarity review', () => {
+  const transcript: Transcript = {
+    words: [
+      { text: 'Keep', start: 0, end: 0.5 },
+      { text: 'setup.', start: 0.5, end: 1 },
+      { text: 'Repeat', start: 2, end: 2.5 },
+      { text: 'setup.', start: 2.5, end: 3 },
+      { text: 'See', start: 4, end: 4.5 },
+      { text: 'result.', start: 4.5, end: 5 },
+    ],
+  }
+  const proposal: ClarityAnalysisResult = {
+    suggestions: [{
+      sentenceId: 'sentence:2:3',
+      reason: 'repeated-explanation',
+      explanation: 'The setup is already explained.',
+    }],
+  }
+
+  function panel(view: ReactNode) {
+    return findComponent<ClarityPanelProps>(view, ClarityPanel, 'clarity panel').props
+  }
+
+  function inspectorNode(view: ReactNode, id: string) {
+    return findNode(
+      view,
+      (node) => (node.props as { id?: string }).id === id,
+      id,
+    ) as ReactElement<ButtonProps & { hidden?: boolean }>
+  }
+
+  function content() {
+    return editorReducerRecord().state as {
+      edl: EDL
+      history: unknown[]
+      overlays: OverlayEditorState
+      retakes: RetakeEditorState
+    }
+  }
+
+  async function loadedClarity(nextTranscript = transcript) {
+    harness.extractAudio.mockResolvedValue(new Blob(['audio']))
+    harness.transcribe.mockResolvedValue(nextTranscript)
+    const view = selectSource({ name: 'clarity.mp4' } as File, 'blob:clarity', 10)
+    await findButton(view, 'Transcribe').props.onClick?.()
+    return renderApp()
+  }
+
+  function attachMedia(view: ReactNode): VideoLike {
+    const media: VideoLike = {
+      currentSrc: 'blob:clarity', currentTime: 0, duration: 10,
+      paused: true, pause: vi.fn(), play: vi.fn(),
+      videoHeight: 1080, videoWidth: 1920,
+    }
+    media.play = vi.fn().mockImplementation(async () => { media.paused = false })
+    media.pause = vi.fn().mockImplementation(() => { media.paused = true })
+    const ref = findVideo(view).props.ref
+    if (ref === undefined) throw new Error('Expected a video ref.')
+    ref.current = media
+    return media
+  }
+
+  it('keeps Clarity mounted while hidden, preserves its draft across tabs, and starts no automatic analysis', async () => {
+    let view = selectSource({ name: 'untranscribed.mp4' } as File, 'blob:untranscribed', 10)
+    expect(panel(view).availability).toBe('unavailable')
+    expect(inspectorNode(view, 'inspector-panel-clarity').props.hidden).toBe(true)
+    view = await loadedClarity()
+    inspectorNode(view, 'inspector-tab-clarity').props.onClick?.()
+    view = renderApp()
+    expect(inspectorNode(view, 'inspector-panel-clarity').props.hidden).toBe(false)
+    const draft = { targetDuration: '6', audience: 'developers', mustStay: 'Setup and result' }
+    panel(view).onDraftChange(draft)
+    view = renderApp()
+    inspectorNode(view, 'inspector-tab-audio').props.onClick?.()
+    view = renderApp()
+    expect(inspectorNode(view, 'inspector-panel-clarity').props.hidden).toBe(true)
+    expect(panel(view).draft).toEqual(draft)
+    inspectorNode(view, 'inspector-tab-clarity').props.onClick?.()
+    view = renderApp()
+    expect(panel(view)).toMatchObject({ draft, availability: 'ready', status: 'idle' })
+    expect(harness.analyzeClarityContext).not.toHaveBeenCalled()
+  })
+
+  it('analyzes once per explicit action and derives exact local suggestions and selected durations', async () => {
+    await loadedClarity()
+    const oldEdl = content().edl
+    editorReducerRecord().dispatch({ type: 'commit-edl', edl: applyRemovedRange(oldEdl, 6, 7) })
+    let view = renderApp()
+    panel(view).onDraftChange({ targetDuration: '1', audience: 'developers', mustStay: 'Setup' })
+    view = renderApp()
+    const before = content()
+    const beforeExport = exportInputs(findComponent<ExportButtonProps>(view, ExportButton, 'export').props)
+    const response = deferredValue<ClarityAnalysisResult>()
+    harness.analyzeClarityContext.mockReturnValueOnce(response.promise)
+    const analyze = panel(view).onAnalyze
+    const pending = analyze()
+    await analyze()
+    expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+    view = renderApp()
+    expect(panel(view)).toMatchObject({ status: 'analyzing', currentDurationSeconds: 9 })
+    expect(harness.analyzeClarityContext.mock.calls[0][0]).toMatchObject({
+      currentDurationSeconds: 9,
+      settings: { targetDurationSeconds: 1, audience: 'developers', mustStay: 'Setup' },
+    })
+    response.resolve(proposal)
+    await pending
+    view = renderApp()
+    expect(panel(view)).toMatchObject({
+      status: 'complete', currentDurationSeconds: 9, proposedDurationSeconds: 8,
+      targetDurationSeconds: 1,
+      suggestions: [{
+        ...proposal.suggestions[0], text: 'Repeat setup.',
+        sourceRange: { start: 2, end: 3 }, selected: true,
+      }],
+    })
+    panel(view).onSelect('sentence:2:3', false)
+    view = renderApp()
+    expect(panel(view)).toMatchObject({ status: 'complete', proposedDurationSeconds: 9 })
+    expect(panel(view).suggestions).toHaveLength(1)
+    expect(panel(view).suggestions[0].selected).toBe(false)
+    panel(view).onSelect('sentence:2:3', true)
+    view = renderApp()
+    expect(panel(view).proposedDurationSeconds).toBe(8)
+    expect(content()).toBe(before)
+    expect(exportInputs(findComponent<ExportButtonProps>(view, ExportButton, 'export').props)).toEqual(beforeExport)
+    expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+  })
+
+  it('auditions the exact original range, stops at its end, and discards without changing content, history, or export', async () => {
+    let view = await loadedClarity()
+    harness.analyzeClarityContext.mockResolvedValueOnce(proposal)
+    await panel(view).onAnalyze()
+    view = renderApp()
+    const before = content()
+    const exported = exportInputs(findComponent<ExportButtonProps>(view, ExportButton, 'export').props)
+    const media = attachMedia(view)
+    await panel(view).onPlaySentence('sentence:2:3')
+    expect(media.currentTime).toBe(2)
+    expect(media.play).toHaveBeenCalledOnce()
+    findVideo(view).props.onPlay?.({ currentTarget: media })
+    media.currentTime = 2.9
+    findVideo(view).props.onTimeUpdate?.({ currentTarget: media })
+    expect(media.paused).toBe(false)
+    media.currentTime = 3.1
+    findVideo(view).props.onTimeUpdate?.({ currentTarget: media })
+    expect(media.currentTime).toBe(3)
+    expect(media.paused).toBe(true)
+    view = renderApp()
+    await panel(view).onPlaySentence('sentence:2:3')
+    expect(media.paused).toBe(false)
+    panel(view).onDiscard()
+    view = renderApp()
+    expect(media.paused).toBe(true)
+    expect(panel(view)).toMatchObject({ status: 'idle', suggestions: [] })
+    expect(content()).toBe(before)
+    expect(exportInputs(findComponent<ExportButtonProps>(view, ExportButton, 'export').props)).toEqual(exported)
+    // Once the clarity-owned audition ends, Discard must not pause ordinary playback.
+    media.paused = false
+    findVideo(view).props.onPlay?.({ currentTarget: media })
+    panel(view).onDiscard()
+    expect(media.paused).toBe(false)
+  })
+
+  it('represents an empty successful response and a request failure without altering editor state', async () => {
+    let view = await loadedClarity()
+    const before = content()
+    harness.analyzeClarityContext.mockResolvedValueOnce({ suggestions: [] })
+    await panel(view).onAnalyze()
+    view = renderApp()
+    expect(panel(view)).toMatchObject({ status: 'complete', suggestions: [], proposedDurationSeconds: 10 })
+    harness.analyzeClarityContext.mockRejectedValueOnce(new Error('Clarity request unavailable.'))
+    await panel(view).onAnalyze()
+    view = renderApp()
+    expect(panel(view)).toMatchObject({ status: 'error', error: 'Clarity request unavailable.' })
+    expect(content()).toBe(before)
+  })
+
+  it('rejects invalid settings and oversized speech before invoking the API', async () => {
+    let view = await loadedClarity()
+    panel(view).onDraftChange({ targetDuration: '-2', audience: '', mustStay: '' })
+    view = renderApp()
+    expect(panel(view).availability).toBe('invalid')
+    await panel(view).onAnalyze()
+    expect(harness.analyzeClarityContext).not.toHaveBeenCalled()
+    panel(view).onDraftChange({ targetDuration: '', audience: '', mustStay: '' })
+    harness.transcribe.mockResolvedValueOnce({
+      words: [{ text: 'x'.repeat(CLARITY_LIMITS.maxTranscriptCharacters + 1), start: 0, end: 1 }],
+    })
+    await findButton(view, 'Transcribe Again').props.onClick?.()
+    view = renderApp()
+    expect(panel(view).availability).toBe('oversized')
+    expect(panel(view).message).toEqual(expect.any(String))
+    await panel(view).onAnalyze()
+    expect(harness.analyzeClarityContext).not.toHaveBeenCalled()
+  })
+
+  it.each(['source', 'transcript', 'ranges', 'settings'] as const)(
+    'cancels stale analysis after %s changes and ignores its late outcome after a newer result',
+    async (change) => {
+      let view = await loadedClarity()
+      const stale = deferredValue<ClarityAnalysisResult>()
+      harness.analyzeClarityContext.mockReturnValueOnce(stale.promise)
+      const pending = panel(view).onAnalyze()
+      const signal = harness.analyzeClarityContext.mock.calls[0][3] as AbortSignal
+      expect(signal.aborted).toBe(false)
+      if (change === 'source') {
+        view = selectSource({ name: 'replacement.mp4' } as File, 'blob:replacement', 10)
+        await findButton(view, 'Transcribe').props.onClick?.()
+      } else if (change === 'transcript') {
+        harness.transcribe.mockResolvedValueOnce({
+          words: transcript.words.map((word, index) => index === 0 ? { ...word, text: 'Updated' } : word),
+        })
+        await findButton(view, 'Transcribe Again').props.onClick?.()
+      } else if (change === 'ranges') {
+        findComponent<TranscriptProps>(view, TranscriptView, 'transcript').props.onDeleteRange(6, 7)
+      } else {
+        panel(view).onDraftChange({ targetDuration: '', audience: 'new audience', mustStay: '' })
+      }
+      view = renderApp()
+      expect(signal.aborted).toBe(true)
+      expect(panel(view).suggestions).toEqual([])
+      harness.analyzeClarityContext.mockResolvedValueOnce({ suggestions: [] })
+      await panel(view).onAnalyze()
+      view = renderApp()
+      const before = content()
+      expect(panel(view).status).toBe('complete')
+      if (change === 'transcript' || change === 'settings') {
+        stale.reject(new Error('An obsolete request failed.'))
+      } else {
+        stale.resolve(proposal)
+      }
+      await pending
+      view = renderApp()
+      expect(panel(view)).toMatchObject({ status: 'complete', suggestions: [] })
+      expect(panel(view).error).toBeUndefined()
+      expect(content()).toBe(before)
+      expect(harness.analyzeClarityContext).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  it('clears a completed proposal and stops only its audition when analysis settings change', async () => {
+    let view = await loadedClarity()
+    harness.analyzeClarityContext.mockResolvedValueOnce(proposal)
+    await panel(view).onAnalyze()
+    view = renderApp()
+    const media = attachMedia(view)
+    await panel(view).onPlaySentence('sentence:2:3')
+    panel(view).onDraftChange({ targetDuration: '5', audience: '', mustStay: '' })
+    view = renderApp()
+    expect(panel(view)).toMatchObject({ status: 'idle', suggestions: [] })
+    expect(media.paused).toBe(true)
+    expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+  })
+
+  it.each(['unchanged', 'captions'] as const)(
+    'invalidates synchronously when an older agent callback restores %s original ranges',
+    async (agentResult) => {
+      let view = await loadedClarity()
+      const original = content().edl
+      const commit = findComponent<ComponentProps<typeof AgentBar>>(view, AgentBar, 'agent').props.onCommit
+      findComponent<TranscriptProps>(view, TranscriptView, 'transcript').props.onDeleteRange(6, 7)
+      view = renderApp()
+      const late = deferredValue<ClarityAnalysisResult>()
+      harness.analyzeClarityContext.mockReturnValueOnce(late.promise)
+      const pending = panel(view).onAnalyze()
+      const signal = harness.analyzeClarityContext.mock.calls[0][3] as AbortSignal
+
+      commit(agentResult === 'unchanged' ? original : {
+        ...original,
+        captions: [{ id: 'agent-caption', start: 0, end: 1, text: 'Generated caption' }],
+      }, agentResult === 'captions')
+      // Assert before render/effect cleanup: the captured callback must use
+      // the input currently under analysis, not its older captured EDL.
+      expect(signal.aborted).toBe(true)
+      late.resolve(proposal)
+      await pending
+      view = renderApp()
+      expect(panel(view)).toMatchObject({ status: 'idle', suggestions: [] })
+      expect(ranges(content().edl)).toEqual(ranges(original))
+    },
+  )
+
+  it('retains a proposal through caption, overlay, audio, and retake-only changes, with Discard preserving them', async () => {
+    let view = await loadedClarity()
+    harness.analyzeClarityContext.mockResolvedValueOnce(proposal)
+    await panel(view).onAnalyze()
+    renderApp()
+    const editor = editorReducerRecord()
+    editor.dispatch({
+      type: 'commit-edl',
+      edl: { ...content().edl, captions: [{ id: 'caption', start: 0, end: 1, text: 'Hand-edited caption' }] },
+    })
+    editor.dispatch({
+      type: 'commit-overlays',
+      action: {
+        type: 'add-overlay-asset',
+        asset: { id: 'image', kind: 'image', name: 'image.png', mimeType: 'image/png', width: 40, height: 40, src: 'blob:image' },
+      },
+    })
+    editor.dispatch({
+      type: 'commit-overlays',
+      action: {
+        type: 'add-image-overlay',
+        overlay: {
+          id: 'overlay', assetId: 'image', startSourceMs: 0, endSourceMs: 5_000,
+          x: 0, y: 0, width: 0.5, height: 0.5, fit: 'contain', opacity: 0.7,
+          zIndex: 0, fadeInMs: 100, fadeOutMs: 200,
+        },
+      },
+    })
+    editor.dispatch({
+      type: 'update-retakes',
+      action: { type: 'set-retake-recommendations', recommendations: [failedTakeFixture().recommendation] },
+    })
+    view = renderApp()
+    const settings: AudioCleanupSettings = { ...DEFAULT_AUDIO_CLEANUP_SETTINGS, noiseReduction: 'strong' }
+    findComponent<ComponentProps<typeof AudioCleanupControls>>(view, AudioCleanupControls, 'audio controls').props.onChange(settings)
+    view = renderApp()
+    expect(panel(view)).toMatchObject({ status: 'complete', suggestions: [{ selected: true, sentenceId: 'sentence:2:3' }] })
+    const before = content()
+    const exported = exportInputs(findComponent<ExportButtonProps>(view, ExportButton, 'export').props)
+    expect(exported.edl.captions[0].text).toBe('Hand-edited caption')
+    expect(exported.imageOverlays).toHaveLength(1)
+    expect(exported.audioCleanupSettings).toEqual(settings)
+    expect(before.retakes.retakeRecommendations).toHaveLength(1)
+    panel(view).onDiscard()
+    view = renderApp()
+    expect(content()).toBe(before)
+    expect(exportInputs(findComponent<ExportButtonProps>(view, ExportButton, 'export').props)).toEqual(exported)
+    expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
   })
 })

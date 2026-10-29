@@ -26,6 +26,8 @@ import RetakesPanel, {
   type RetakeScriptCopyFeedback,
 } from './retakes/RetakesPanel'
 import RetakeTimelineTrack from './retakes/RetakeTimelineTrack'
+import ClarityPanel from './clarity/ClarityPanel'
+import { useClarityReview } from './clarity/useClarityReview'
 import Icon from './ui/Icon'
 import IconBadge from './ui/IconBadge'
 import { formatClock, formatSeconds } from './ui/time'
@@ -63,11 +65,12 @@ import {
   totalKeptDuration,
 } from './edl/edl'
 
-type InspectorTab = 'transcript' | 'captions' | 'retakes' | 'audio' | 'images'
+type InspectorTab = 'transcript' | 'captions' | 'clarity' | 'retakes' | 'audio' | 'images'
 
 const INSPECTOR_TABS: ReadonlyArray<{ id: InspectorTab; label: string }> = [
   { id: 'transcript', label: 'Transcript' },
   { id: 'captions', label: 'Captions' },
+  { id: 'clarity', label: 'Clarity' },
   { id: 'retakes', label: 'Retakes' },
   { id: 'audio', label: 'Audio' },
   { id: 'images', label: 'Images' },
@@ -113,6 +116,11 @@ type EditorState = {
 type RetakeSourcePreview = {
   start: number
   end: number
+}
+
+type ClaritySourcePreview = RetakeSourcePreview & {
+  input: ReturnType<typeof useClarityReview>['input']
+  video: HTMLVideoElement
 }
 
 type SuccessfulRetakeAnalysis = {
@@ -271,6 +279,7 @@ function App() {
   // will be burned, so it matches the export.
   const [burnCaptions, setBurnCaptions] = useState(true)
   const [isExporting, setIsExporting] = useState(false)
+  const clarity = useClarityReview(edl, transcript)
   // Ephemeral view state: which inspector tab is open, transport status,
   // whether playback jumps removed ranges, and the empty-state drop highlight.
   const [activeTab, setActiveTab] = useState<InspectorTab>('transcript')
@@ -284,6 +293,7 @@ function App() {
   // A retake preview is ephemeral player state in original-source seconds. It
   // must never enter the EDL, output-time projection, editor history, or export.
   const retakeSourcePreviewRef = useRef<RetakeSourcePreview | null>(null)
+  const claritySourcePreviewRef = useRef<ClaritySourcePreview | null>(null)
   const retakeScriptCopyAttemptRef = useRef(0)
   // Object identity is both the synchronous double-start lock and the
   // latest-request token. Invalidating it before aborting makes every late
@@ -295,6 +305,7 @@ function App() {
     return () => {
       activeTranscriptionRef.current = null
       retakeSourcePreviewRef.current = null
+      claritySourcePreviewRef.current = null
       retakeScriptCopyAttemptRef.current += 1
       const activeRetakeAnalysis = activeRetakeAnalysisRef.current
       activeRetakeAnalysisRef.current = null
@@ -307,6 +318,19 @@ function App() {
       }
     }
   }, [])
+
+  // Only stop an audition owned by the obsolete clarity input. Retake and
+  // ordinary playback are independent of clarity review state.
+  useEffect(() => {
+    const input = clarity.input
+    return () => {
+      const preview = claritySourcePreviewRef.current
+      if (preview?.input === input) {
+        claritySourcePreviewRef.current = null
+        preview.video.pause()
+      }
+    }
+  }, [clarity.input])
 
   // An image URL remains live while reachable from current editor content OR
   // an Undo snapshot. This lets asset removal stay undoable and prevents early
@@ -338,11 +362,47 @@ function App() {
     if (edl === null) {
       return
     }
+    if (clarity.invalidateForEdl(next)) stopClaritySourcePreview()
     dispatchEditor({ type: 'commit-edl', edl: next })
   }
 
   function undo() {
+    const previous = history.at(-1)?.edl
+    if (previous !== undefined && clarity.invalidateForEdl(previous)) {
+      stopClaritySourcePreview()
+    }
     dispatchEditor({ type: 'undo' })
+  }
+
+  function stopClaritySourcePreview() {
+    const preview = claritySourcePreviewRef.current
+    if (preview === null) return
+    claritySourcePreviewRef.current = null
+    preview.video.pause()
+  }
+
+  function invalidateClarity() {
+    stopClaritySourcePreview()
+    clarity.invalidate()
+  }
+
+  async function playClaritySentence(sentenceId: string) {
+    const sentence = clarity.sentenceForPlayback(sentenceId)
+    const video = videoRef.current
+    if (sentence === null || video === null) return
+    // Both audition modes share the source player, but retain separate owners.
+    retakeSourcePreviewRef.current = null
+    const preview = { ...sentence.sourceRange, input: clarity.input, video }
+    claritySourcePreviewRef.current = preview
+    video.currentTime = preview.start
+    setPlayhead(preview.start)
+    try {
+      await video.play()
+    } catch {
+      if (claritySourcePreviewRef.current === preview) {
+        claritySourcePreviewRef.current = null
+      }
+    }
   }
 
   function addOverlayAsset(asset: OverlayAsset) {
@@ -508,6 +568,8 @@ function App() {
   function loadSourceFile(selected: File) {
     activeTranscriptionRef.current = null
     cancelActiveRetakeAnalysis()
+    stopClaritySourcePreview()
+    clarity.reset()
     retakeSourcePreviewRef.current = null
     setSuccessfulRetakeAnalysis(null)
     clearRetakeScriptCopyFeedback()
@@ -544,6 +606,7 @@ function App() {
   // Initialize the EDL from the loaded source as a single full-length segment.
   function handleLoadedMetadata(event: SyntheticEvent<HTMLVideoElement>) {
     const video = event.currentTarget
+    invalidateClarity()
     retakeSourcePreviewRef.current = null
     dispatchEditor({
       type: 'replace-edl',
@@ -564,17 +627,17 @@ function App() {
   function handleTimeUpdate(event: SyntheticEvent<HTMLVideoElement>) {
     const video = event.currentTarget
     const t = video.currentTime
-    const retakePreview = retakeSourcePreviewRef.current
+    const sourcePreview = claritySourcePreviewRef.current ?? retakeSourcePreviewRef.current
 
-    // Retake playback intentionally audits the unedited source, including any
-    // range removed from the EDL. Keep this branch ahead of nextSourceTime so
-    // the normal edited-preview skip controller cannot hide the affected take.
-    if (retakePreview !== null) {
-      if (t >= retakePreview.end) {
+    // Sentence/retake audition plays a bounded original-source range. Keep this
+    // ahead of ordinary EDL skipping, and restore normal playback on completion.
+    if (sourcePreview !== null) {
+      if (t >= sourcePreview.end) {
         retakeSourcePreviewRef.current = null
-        video.currentTime = retakePreview.end
+        claritySourcePreviewRef.current = null
+        video.currentTime = sourcePreview.end
         video.pause()
-        setPlayhead(retakePreview.end)
+        setPlayhead(sourcePreview.end)
         return
       }
       setPlayhead(t)
@@ -604,7 +667,10 @@ function App() {
   // past the end, or skip forward if we're sitting inside a removed gap.
   function handlePlay(event: SyntheticEvent<HTMLVideoElement>) {
     const video = event.currentTarget
-    if (retakeSourcePreviewRef.current !== null || !skipCuts) {
+    if (
+      retakeSourcePreviewRef.current !== null ||
+      claritySourcePreviewRef.current !== null || !skipCuts
+    ) {
       return
     }
     if (edl === null || edl.segments.length === 0) {
@@ -623,6 +689,7 @@ function App() {
 
   function handleSeek(sourceTime: number) {
     retakeSourcePreviewRef.current = null
+    claritySourcePreviewRef.current = null
     if (videoRef.current !== null) {
       videoRef.current.currentTime = sourceTime
     }
@@ -663,6 +730,7 @@ function App() {
     }
 
     const preview: RetakeSourcePreview = { start, end }
+    claritySourcePreviewRef.current = null
     retakeSourcePreviewRef.current = preview
     const video = videoRef.current
     if (video === null) {
@@ -710,6 +778,7 @@ function App() {
       setTranscribePhase('transcribing')
       const nextTranscript = await transcribe(audio)
       if (!isCurrent()) return
+      invalidateClarity()
       cancelActiveRetakeAnalysis()
       clearRetakeScriptCopyFeedback()
       setSuccessfulRetakeAnalysis(null)
@@ -1245,6 +1314,7 @@ function App() {
   const tabCounts: Record<InspectorTab, number> = {
     transcript: 0,
     captions: 0,
+    clarity: clarity.suggestions.length,
     retakes: openCurrentRetakeRecommendations.length,
     audio: 0,
     images: overlayEditor.overlayAssets.length,
@@ -1398,10 +1468,12 @@ function App() {
                   onPause={() => {
                     setIsPlaying(false)
                     cancelRetakeSourcePreview()
+                    claritySourcePreviewRef.current = null
                   }}
                   onEnded={() => {
                     setIsPlaying(false)
                     cancelRetakeSourcePreview()
+                    claritySourcePreviewRef.current = null
                   }}
                 />
                 {showCutNotice && (
@@ -1829,6 +1901,42 @@ function App() {
                       )}
                     </>
                   )}
+                </div>
+              </div>
+
+              <div
+                role="tabpanel"
+                id="inspector-panel-clarity"
+                aria-labelledby="inspector-tab-clarity"
+                hidden={activeTab !== 'clarity'}
+              >
+                <div className="panel">
+                  <ClarityPanel
+                    draft={clarity.draft}
+                    onDraftChange={(next) => {
+                      stopClaritySourcePreview()
+                      clarity.changeDraft(next)
+                    }}
+                    availability={clarity.input.status}
+                    message={clarity.input.status === 'ready' ? undefined : clarity.input.message}
+                    status={clarity.status}
+                    error={clarity.error}
+                    suggestions={clarity.suggestions}
+                    currentDurationSeconds={clarity.currentDurationSeconds}
+                    proposedDurationSeconds={clarity.proposedDurationSeconds}
+                    targetDurationSeconds={clarity.targetDurationSeconds}
+                    onAnalyze={() => {
+                      stopClaritySourcePreview()
+                      return clarity.analyze()
+                    }}
+                    onSelect={clarity.select}
+                    onPlaySentence={playClaritySentence}
+                    onDiscard={() => {
+                      stopClaritySourcePreview()
+                      clarity.discard()
+                    }}
+                  />
+                  {transcript === null && transcribeButton('sm')}
                 </div>
               </div>
 

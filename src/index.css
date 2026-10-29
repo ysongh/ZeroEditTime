@@ -2080,6 +2080,176 @@ textarea {
   outline-offset: 2px;
 }
 
+/* ---------- clarity ---------- */
+
+.clarity-panel,
+.clarity-panel__settings,
+.clarity-panel__field,
+.clarity-list,
+.clarity-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 12px;
+}
+
+.clarity-panel__field {
+  gap: 6px;
+  color: var(--lav-100);
+  font-size: 14px;
+}
+
+.clarity-panel__optional,
+.clarity-panel__hint {
+  color: var(--lav-400);
+  font-size: 12px;
+}
+
+.clarity-panel__optional {
+  margin-left: 6px;
+}
+
+.clarity-panel__input {
+  border-radius: 8px;
+  padding-inline: 12px;
+}
+
+.clarity-panel__input--duration {
+  max-width: 160px;
+}
+
+.clarity-panel__instructions {
+  height: auto;
+  min-height: 82px;
+  padding-block: 10px;
+  resize: vertical;
+}
+
+.clarity-panel__actions,
+.clarity-card__actions,
+.clarity-card__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.clarity-panel__status,
+.clarity-card__explanation {
+  color: var(--lav-300);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.clarity-panel__status-strong {
+  color: var(--white);
+  font-weight: 600;
+}
+
+.clarity-panel__error {
+  padding: 10px 12px;
+  border: 1px solid var(--pink-line);
+  border-radius: 10px;
+  background: var(--surface-chip);
+  color: var(--pink-300);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.clarity-panel__durations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--surface-chip);
+  font-size: 13px;
+}
+
+.clarity-panel__durations dt {
+  color: var(--lav-400);
+}
+
+.clarity-panel__durations dd {
+  margin: 2px 0 0;
+  color: var(--lav-100);
+  font-variant-numeric: tabular-nums;
+}
+
+.clarity-panel__target-note {
+  color: var(--amber-300);
+  font-size: 13px;
+}
+
+.clarity-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.clarity-card {
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: 12px;
+}
+
+.clarity-card--selected {
+  border-color: var(--cyan-line);
+}
+
+.clarity-card h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.clarity-card__time {
+  color: var(--lav-400);
+  font-family: var(--font-label);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.clarity-card__text {
+  color: var(--lav-100);
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.clarity-card__actions {
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.clarity-card__actions .link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clarity-card__selection {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--lav-200);
+  cursor: pointer;
+}
+
+.clarity-card__selection input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--cyan-400);
+}
+
+.clarity-panel button:focus-visible,
+.clarity-panel input[type='checkbox']:focus-visible,
+.clarity-panel h2:focus {
+  outline: 2px solid var(--cyan-400);
+  outline-offset: 2px;
+}
+
 /* ---------- audio ---------- */
 
 .audio-cleanup-controls {

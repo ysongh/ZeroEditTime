@@ -91,6 +91,9 @@ pnpm exec netlify dev  # start Vite with the local Netlify Functions
      Cut it; struck-through words show what's been cut.
    - **Describe an edit** — type a command (or pick a suggestion) and Run; it edits via the same EDL
      primitives in one Undo.
+   - **Clarity** — after transcription, optionally enter a duration, audience, and what must stay,
+     then **Suggest clarity edits**. Review sentence removals, play originals, and adjust
+     checkboxes to compare proposed duration. This review step does not apply cuts yet.
    - **Captions**, **Retakes**, **Audio**, and **Images** tabs hold caption text/export options,
      advisory retake checks, export audio cleanup, and still-image overlays.
    - **Undo / Reset** in the header at any time.
@@ -119,7 +122,7 @@ pnpm exec netlify dev  # start Vite with the local Netlify Functions
 
 See [CLAUDE.md](CLAUDE.md) for the detailed architecture and contributor guidance.
 The [AI Clarity Edit implementation notes](docs/clarity-edit.md) describe the
-completed sentence-mapping foundation and bounded analysis API; the feature is
-not yet available in the UI.
+sentence-mapping foundation, bounded analysis API, and Clarity review tab.
+Edited-version preview and applying clarity cuts are still pending.
 Use the [Phase 9A image-overlay manual verification checklist](docs/phase-9a-manual-verification.md)
 for browser end-to-end and export release checks.
