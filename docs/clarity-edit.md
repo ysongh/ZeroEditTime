@@ -1,7 +1,7 @@
 # AI Clarity Edit — implementation notes
 
-Parts 1–3 implement pure local sentence mapping, a bounded clarity-analysis API,
-and a working Clarity inspector for analysis and review. Edited-version preview
+Parts 1–4 implement pure local sentence mapping, a bounded clarity-analysis API,
+a working Clarity inspector, and request/proposal freshness. Edited-version preview
 and applying selected cuts remain pending. Analysis runs only on an explicit click.
 
 ## Using the Clarity tab
@@ -137,12 +137,43 @@ and timeout settle even if a transport ignores abort; late success/error cannot
 change the settled result. The input is copied before sending and reused to
 validate the response. The review hook owns the latest request and ignores late
 success/failure/finalization from superseded work. Source, transcript, ranges,
-and draft-setting changes invalidate review and cancel analysis; rendered results
-are also filtered by input identity before effect cleanup. Async editing-agent
-callbacks compare against the input actually being reviewed when invalidating.
-Source replacement resets draft settings. Caption, overlay, audio, and retake-only
-changes preserve review. Future Apply must still revalidate freshness synchronously
-against the latest editor content before a single history commit.
+and draft-setting changes invalidate review and cancel analysis. Source replacement
+resets draft settings. Caption, overlay, audio, and retake-only changes preserve
+review. No cancellation starts a replacement request automatically.
+
+### Local freshness and ownership
+
+[`freshness.ts`](../src/clarity/freshness.ts) captures a detached, frozen snapshot of:
+
+- Source ID, URL, and duration.
+- Every original transcript word's exact text and start/end times, including
+  deleted words that still determine sentence identities.
+- Ordered kept source ranges, coalescing exactly adjacent structural splits.
+- Raw target-duration, audience, and must-stay drafts. Even a whitespace-only
+  draft change invalidates the review conservatively.
+
+Freshness uses exact values, without hashes, rounding, or gap tolerances. Captions,
+source display dimensions, and segment IDs do not affect this value comparison.
+The snapshot stays local; it never expands the model's kept-speech payload.
+
+The hook separately binds callbacks to the current mounted input session and
+results to their originating request. It checks ownership and snapshot values
+before starting a request, accepting success/failure, changing selection, or
+returning an audition range. An old callback cannot start work after later input
+changes or unmount. Returning to earlier settings does not revive previous advice.
+Discard is scoped to its request so an obsolete control cannot clear newer advice.
+
+Editor changes revoke ownership synchronously before dispatch. Async editing-agent
+callbacks compare against the snapshot actually under review, rather than their
+captured EDL. Layout-effect cleanup cancels obsolete work and stops its audition
+before subsequent playback events; render also hides outcomes from another session.
+Reference replacement of source, ranges, or transcript conservatively creates a
+fresh session, even when values compare equal. Value checks additionally reject
+accidental in-place changes before effects or another render.
+
+Future Apply must use the same snapshot check synchronously against the latest
+editor content, then validate selected ranges before its single history commit.
+This part does not yet add the Apply action.
 
 `review.ts` keeps draft validation, card mapping, and selected-duration calculation
 pure. `useClarityReview.ts` owns ephemeral request/selection state, and
@@ -176,6 +207,14 @@ playback, audio extraction, transcription, and model responses: explicit request
 count, hidden-tab persistence, settings, original text, checkbox duration updates,
 unmet target, bounded audition events, Discard, empty results, and unchanged Undo.
 This was a UI check, not a real-media or live-model run.
+
+Part 4 adds 27 snapshot tests and 20 App lifecycle regressions. These cover exact
+input changes, old callbacks after multiple changes/unmount, returning to prior
+settings, late success/failure after cancellation, completed-proposal audition
+cleanup, and preservation of newer review and caption edits. Build and lint passed;
+the full suite passed **1,439 tests across 64 files**. The same desktop/mobile
+Chrome smoke check also passed again with mocked media, transcription, and model
+responses. Synchronous freshness at Apply will be tested when Apply is added.
 
 Live-model proposal quality and real-recording playback remain unverified. Actual
 media decoding, sentence-boundary sound, and encoded-output quality are not proved

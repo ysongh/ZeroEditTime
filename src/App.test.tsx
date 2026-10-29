@@ -122,6 +122,7 @@ vi.mock('react', async (importOriginal) => {
     useReducer: harness.useReducer,
     useRef: harness.useRef,
     useEffect: harness.useEffect,
+    useLayoutEffect: harness.useEffect,
     useMemo: harness.useMemo,
   }
 })
@@ -2772,4 +2773,301 @@ describe('App clarity review', () => {
     expect(exportInputs(findComponent<ExportButtonProps>(view, ExportButton, 'export').props)).toEqual(exported)
     expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
   })
+
+  it('rejects an old Analyze callback after multiple settings changes without blocking the current request', async () => {
+    let view = await loadedClarity()
+    const oldAnalyze = panel(view).onAnalyze
+    panel(view).onDraftChange({ targetDuration: '', audience: 'designers', mustStay: '' })
+    view = renderApp()
+    panel(view).onDraftChange({ targetDuration: '', audience: 'developers', mustStay: '' })
+    view = renderApp()
+    harness.analyzeClarityContext.mockResolvedValue({ suggestions: [] })
+
+    await oldAnalyze()
+    expect(harness.analyzeClarityContext).not.toHaveBeenCalled()
+    await panel(view).onAnalyze()
+    view = renderApp()
+    expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+    expect(harness.analyzeClarityContext.mock.calls[0][0].settings.audience).toBe('developers')
+    expect(panel(view).status).toBe('complete')
+  })
+
+  it('does not start analysis from a callback captured before unmount', async () => {
+    const view = await loadedClarity()
+    const analyze = panel(view).onAnalyze
+    for (const record of harness.slots) {
+      if (record.kind === 'effect') record.cleanup?.()
+    }
+    harness.analyzeClarityContext.mockResolvedValue({ suggestions: [] })
+
+    await analyze()
+    expect(harness.analyzeClarityContext).not.toHaveBeenCalled()
+  })
+
+  it('does not revive a completed proposal when settings return to their original values', async () => {
+    let view = await loadedClarity()
+    harness.analyzeClarityContext.mockResolvedValueOnce(proposal)
+    await panel(view).onAnalyze()
+    view = renderApp()
+    const oldPanel = panel(view)
+    const originalDraft = oldPanel.draft
+    oldPanel.onDraftChange({ ...originalDraft, audience: 'developers' })
+    view = renderApp()
+    panel(view).onDraftChange(originalDraft)
+    view = renderApp()
+
+    const media = attachMedia(view)
+    oldPanel.onSelect('sentence:2:3', false)
+    await oldPanel.onPlaySentence('sentence:2:3')
+    await oldPanel.onAnalyze()
+    view = renderApp()
+    expect(panel(view)).toMatchObject({ status: 'idle', suggestions: [], draft: originalDraft })
+    expect(media.play).not.toHaveBeenCalled()
+    expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+  })
+
+  it.each(['success', 'failure'] as const)(
+    'ignores pending analysis %s after settings change away and back',
+    async (outcome) => {
+      let view = await loadedClarity()
+      const originalDraft = panel(view).draft
+      const late = deferredValue<ClarityAnalysisResult>()
+      harness.analyzeClarityContext.mockReturnValueOnce(late.promise)
+      const pending = panel(view).onAnalyze()
+      const signal = harness.analyzeClarityContext.mock.calls[0][3] as AbortSignal
+      panel(view).onDraftChange({ ...originalDraft, audience: 'developers' })
+      view = renderApp()
+      panel(view).onDraftChange(originalDraft)
+      renderApp()
+      expect(signal.aborted).toBe(true)
+      if (outcome === 'success') late.resolve(proposal)
+      else late.reject(new Error('Obsolete failure.'))
+      await pending
+      view = renderApp()
+      expect(panel(view)).toMatchObject({ status: 'idle', suggestions: [], error: undefined })
+
+      harness.analyzeClarityContext.mockResolvedValueOnce({ suggestions: [] })
+      await panel(view).onAnalyze()
+      view = renderApp()
+      expect(panel(view)).toMatchObject({ status: 'complete', suggestions: [] })
+      expect(harness.analyzeClarityContext).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  it.each(['success', 'failure'] as const)(
+    'keeps a newer same-input result when discarded analysis settles with %s',
+    async (outcome) => {
+      let view = await loadedClarity()
+      const late = deferredValue<ClarityAnalysisResult>()
+      harness.analyzeClarityContext.mockReturnValueOnce(late.promise)
+      const pending = panel(view).onAnalyze()
+      const signal = harness.analyzeClarityContext.mock.calls[0][3] as AbortSignal
+      view = renderApp()
+      panel(view).onDiscard()
+      expect(signal.aborted).toBe(true)
+      view = renderApp()
+      harness.analyzeClarityContext.mockResolvedValueOnce({ suggestions: [] })
+      await panel(view).onAnalyze()
+      renderApp()
+      const before = content()
+      if (outcome === 'success') late.resolve(proposal)
+      else late.reject(new Error('Discarded failure.'))
+      await pending
+      view = renderApp()
+
+      expect(panel(view)).toMatchObject({ status: 'complete', suggestions: [], error: undefined })
+      expect(content()).toBe(before)
+      expect(harness.analyzeClarityContext).toHaveBeenCalledTimes(2)
+    },
+  )
+
+  it.each(['success', 'failure'] as const)(
+    'aborts analysis on unmount and ignores its late %s without setting state',
+    async (outcome) => {
+      const view = await loadedClarity()
+      const late = deferredValue<ClarityAnalysisResult>()
+      harness.analyzeClarityContext.mockReturnValueOnce(late.promise)
+      const pending = panel(view).onAnalyze()
+      const signal = harness.analyzeClarityContext.mock.calls[0][3] as AbortSignal
+      for (const record of harness.slots) {
+        if (record.kind === 'effect') record.cleanup?.()
+      }
+      expect(signal.aborted).toBe(true)
+      const setters = harness.slots.filter((record): record is StateRecord => record.kind === 'state')
+      const callCounts = setters.map((record) => record.setter.mock.calls.length)
+      const before = content()
+      if (outcome === 'success') late.resolve(proposal)
+      else late.reject(new Error('Unmounted failure.'))
+      await pending
+
+      expect(setters.map((record) => record.setter.mock.calls.length)).toEqual(callCounts)
+      expect(content()).toBe(before)
+      expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each(['source', 'transcript', 'ranges'] as const)(
+    'clears a completed proposal and stops its original audition when %s changes',
+    async (change) => {
+      let view = await loadedClarity()
+      harness.analyzeClarityContext.mockResolvedValueOnce(proposal)
+      await panel(view).onAnalyze()
+      view = renderApp()
+      const stale = panel(view)
+      const media = attachMedia(view)
+      await stale.onPlaySentence('sentence:2:3')
+      expect(media.paused).toBe(false)
+
+      if (change === 'source') {
+        view = selectSource({ name: 'replacement.mp4' } as File, 'blob:replacement', 10)
+        await findButton(view, 'Transcribe').props.onClick?.()
+      } else if (change === 'transcript') {
+        harness.transcribe.mockResolvedValueOnce({
+          words: transcript.words.map((word, index) => index === 2 ? { ...word, text: 'Revised' } : word),
+        })
+        await findButton(view, 'Transcribe Again').props.onClick?.()
+      } else {
+        findComponent<TranscriptProps>(view, TranscriptView, 'transcript').props.onDeleteRange(6, 7)
+      }
+      // Actual editor entry points must stop the owned player before rerender.
+      expect(media.paused).toBe(true)
+      renderApp()
+      const before = content()
+      stale.onSelect('sentence:2:3', false)
+      await stale.onPlaySentence('sentence:2:3')
+      view = renderApp()
+      expect(panel(view)).toMatchObject({ status: 'idle', suggestions: [] })
+      expect(media.play).toHaveBeenCalledOnce()
+      expect(content()).toBe(before)
+      expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each(['same', 'changed'] as const)(
+    'ignores old selection and audition handlers after a newer proposal for %s inputs',
+    async (input) => {
+      let view = await loadedClarity()
+      harness.analyzeClarityContext.mockResolvedValueOnce(proposal)
+      await panel(view).onAnalyze()
+      view = renderApp()
+      const stale = panel(view)
+      if (input === 'changed') {
+        stale.onDraftChange({ ...stale.draft, audience: 'developers' })
+        view = renderApp()
+      }
+      harness.analyzeClarityContext.mockResolvedValueOnce({
+        suggestions: [{ ...proposal.suggestions[0], explanation: 'Current proposal explanation.' }],
+      })
+      await panel(view).onAnalyze()
+      view = renderApp()
+      const media = attachMedia(view)
+      const before = content()
+
+      stale.onSelect('sentence:2:3', false)
+      await stale.onPlaySentence('sentence:2:3')
+      view = renderApp()
+      expect(panel(view).suggestions).toMatchObject([{
+        selected: true, explanation: 'Current proposal explanation.',
+      }])
+      expect(media.play).not.toHaveBeenCalled()
+      expect(content()).toBe(before)
+
+      panel(view).onSelect('sentence:2:3', false)
+      view = renderApp()
+      await panel(view).onPlaySentence('sentence:2:3')
+      expect(panel(view).suggestions[0].selected).toBe(false)
+      expect(media.play).toHaveBeenCalledOnce()
+    },
+  )
+
+  it.each(['source', 'ranges', 'transcript'] as const)(
+    'rejects a result synchronously after %s values mutate before another render',
+    async (change) => {
+      const localTranscript = structuredClone(transcript)
+      let view = await loadedClarity(localTranscript)
+      const late = deferredValue<ClarityAnalysisResult>()
+      harness.analyzeClarityContext.mockReturnValueOnce(late.promise)
+      const pending = panel(view).onAnalyze()
+      // The normal editor is immutable. This deliberately retains identities
+      // to prove request freshness compares detached values, not references.
+      if (change === 'source') content().edl.source.id = 'different-source'
+      else if (change === 'ranges') content().edl.segments[0].end = 9
+      else localTranscript.words[2].text = 'Different'
+      const before = content()
+      late.resolve(proposal)
+      await pending
+      view = renderApp()
+
+      expect(panel(view)).toMatchObject({ status: 'idle', suggestions: [], error: undefined })
+      expect(content()).toBe(before)
+      expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('accepts pending analysis after caption-only edits and preserves those edits during review', async () => {
+    let view = await loadedClarity()
+    const late = deferredValue<ClarityAnalysisResult>()
+    harness.analyzeClarityContext.mockReturnValueOnce(late.promise)
+    const pending = panel(view).onAnalyze()
+    const signal = harness.analyzeClarityContext.mock.calls[0][3] as AbortSignal
+    const commit = findComponent<ComponentProps<typeof AgentBar>>(view, AgentBar, 'agent').props.onCommit
+    commit({
+      ...content().edl,
+      captions: [{ id: 'caption', start: 0, end: 1, text: 'Keep this caption edit.' }],
+    }, true)
+    renderApp()
+    expect(signal.aborted).toBe(false)
+    const before = content()
+    late.resolve(proposal)
+    await pending
+    view = renderApp()
+
+    expect(panel(view)).toMatchObject({ status: 'complete', suggestions: [{ selected: true }] })
+    expect(content()).toBe(before)
+    expect(content().edl.captions[0].text).toBe('Keep this caption edit.')
+    expect(harness.analyzeClarityContext).toHaveBeenCalledOnce()
+  })
+
+  it.each(['discard', 'settings'] as const)(
+    'ignores obsolete %s callbacks without interrupting a newer audition',
+    async (action) => {
+      let view = await loadedClarity()
+      harness.analyzeClarityContext.mockResolvedValue(proposal)
+      await panel(view).onAnalyze()
+      view = renderApp()
+      const stale = panel(view)
+      if (action === 'settings') {
+        stale.onDraftChange({ ...stale.draft, audience: 'developers' })
+        view = renderApp()
+      }
+      await panel(view).onAnalyze()
+      view = renderApp()
+      const currentDraft = panel(view).draft
+      const before = content()
+      const media = attachMedia(view)
+      await panel(view).onPlaySentence('sentence:2:3')
+      expect(media.paused).toBe(false)
+
+      if (action === 'discard') stale.onDiscard()
+      else {
+        await stale.onAnalyze()
+        stale.onDraftChange({ targetDuration: '5', audience: 'obsolete', mustStay: 'Obsolete settings.' })
+      }
+      view = renderApp()
+      expect(panel(view)).toMatchObject({
+        status: 'complete', draft: currentDraft, suggestions: [{ selected: true }],
+      })
+      expect(media.paused).toBe(false)
+      expect(media.pause).not.toHaveBeenCalled()
+      expect(harness.analyzeClarityContext).toHaveBeenCalledTimes(2)
+      expect(content()).toBe(before)
+
+      // Current controls still own the audition and can stop it.
+      if (action === 'discard') panel(view).onDiscard()
+      else panel(view).onDraftChange({ ...currentDraft, audience: 'Current update' })
+      view = renderApp()
+      expect(media.paused).toBe(true)
+      expect(panel(view)).toMatchObject({ status: 'idle', suggestions: [] })
+    },
+  )
 })

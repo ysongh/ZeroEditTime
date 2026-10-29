@@ -6,7 +6,7 @@ Zero Edit Time is a browser-based, non-destructive video editor built with React
 
 - Phases 0–6, 8, 9A, 10, and 11 are implemented. The intermediate phases 2.5, 4.5, and 5.5 are also complete. Phase 11 ends at Part Z; no next feature phase has been specified.
 - Phase 11 retake recommendations are advisory. The automated suites and handoff are complete, but real-recording, browser, live-model quality, and actual-output verification are still pending. Do not describe those checks as passed.
-- AI Clarity Edit parts 1–3 provide sentence mapping, a bounded analysis API, and the Clarity inspector for analysis/review/original-sentence audition. Review has cancellation and input-invalidation guards; edited-version preview and Apply remain pending. See `docs/clarity-edit.md` for verification limits.
+- AI Clarity Edit parts 1–4 provide sentence mapping, a bounded analysis API, the Clarity inspector, and request/proposal freshness. Frozen local snapshots bind source, original transcript, kept ranges, and settings; mounted-session and request ownership guard callbacks and late outcomes. Edited-version preview and Apply remain pending, including the synchronous freshness check at Apply. See `docs/clarity-edit.md` for verification limits.
 - Implement only the task or phase currently requested. Do not scaffold future phases or add speculative dependencies.
 - Save/load is deferred. Caption timing edits, caption add/delete/split/merge, styling UI, SRT import, an agent tool for editing caption text, and karaoke timing remain outside the existing scope unless explicitly requested.
 

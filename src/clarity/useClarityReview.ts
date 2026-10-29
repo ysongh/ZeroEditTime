@@ -1,9 +1,15 @@
 // Ephemeral analysis/review state. No editor dispatch, content history, or edits.
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { EDL } from '../edl/types'
 import type { Transcript } from '../transcript/types'
 import { normalizeClarityAnalysisResult, type ClarityAnalysisResult } from './analysis'
 import { analyzeClarityContext } from './analysisApi'
+import {
+  captureClaritySnapshot,
+  isClaritySnapshotCurrent,
+  isClaritySnapshotEdlCurrent,
+  type ClaritySnapshot,
+} from './freshness'
 import {
   createClarityDraft,
   prepareClarityReview,
@@ -13,28 +19,42 @@ import {
 
 type PreparedInput = ReturnType<typeof prepareClarityReview>
 type ReadyInput = Extract<PreparedInput, { status: 'ready' }>
-type ActiveAnalysis = { input: ReadyInput; edl: EDL; controller: AbortController }
+type ReviewSession = {
+  input: PreparedInput
+  edl: EDL | null
+  transcript: Transcript | null
+  draft: ClarityDraft
+  snapshot: ClaritySnapshot | null
+  revision: number
+}
+type ReadySession = ReviewSession & { input: ReadyInput; snapshot: ClaritySnapshot }
+type ActiveAnalysis = { session: ReadySession; controller: AbortController }
 type CompleteReview = {
-  input: ReadyInput
-  edl: EDL
+  owner: ActiveAnalysis
   status: 'complete'
   result: ClarityAnalysisResult
   selectedIds: string[]
 }
 type ReviewOutcome =
-  | { input: ReadyInput; status: 'analyzing' }
-  | { input: ReadyInput; status: 'error'; error: string }
+  | { owner: ActiveAnalysis; status: 'analyzing' }
+  | { owner: ActiveAnalysis; status: 'error'; error: string }
   | CompleteReview
+
+function isSessionFresh(session: ReviewSession): session is ReadySession {
+  return session.input.status === 'ready' && session.snapshot !== null &&
+    isClaritySnapshotCurrent(session.snapshot, session.edl, session.transcript, session.draft)
+}
 
 export function useClarityReview(edl: EDL | null, transcript: Transcript | null) {
   const [draft, setDraft] = useState(createClarityDraft)
   const [outcome, setOutcome] = useState<ReviewOutcome | null>(null)
+  const [revision, setRevision] = useState(0)
   const activeRef = useRef<ActiveAnalysis | null>(null)
-  const acceptedRef = useRef<CompleteReview | null>(null)
-  const invalidatedInputRef = useRef<PreparedInput | null>(null)
+  const outcomeRef = useRef<ReviewOutcome | null>(null)
+  const sessionRef = useRef<ReviewSession | null>(null)
 
-  // Only source/kept-range changes affect analysis. Caption edits keep the same
-  // segments, so they must not discard review or restart expensive preparation.
+  // Caption edits preserve these references and must not discard review or
+  // restart expensive preparation. Snapshots check values at action boundaries.
   const source = edl?.source
   const segments = edl?.segments
   const analysisEdl = useMemo<EDL | null>(
@@ -43,55 +63,71 @@ export function useClarityReview(edl: EDL | null, transcript: Transcript | null)
       : { version: 1, source, segments, captions: [] },
     [source, segments],
   )
-  const input = useMemo(
-    () => prepareClarityReview(analysisEdl, transcript, draft),
-    [analysisEdl, transcript, draft],
-  )
-
-  // Render never exposes results for a different input, even before effects
-  // run. Cleanup stops obsolete requests without scheduling background work.
-  useEffect(() => () => {
-    const active = activeRef.current
-    if (active?.input === input) {
-      activeRef.current = null
-      active.controller.abort()
+  const session = useMemo<ReviewSession>(() => {
+    const input = prepareClarityReview(analysisEdl, transcript, draft)
+    return {
+      input, edl: analysisEdl, transcript, draft, revision,
+      snapshot: input.status === 'ready' && analysisEdl !== null && transcript !== null
+        ? captureClaritySnapshot(analysisEdl, transcript, draft)
+        : null,
     }
-    if (acceptedRef.current?.input === input) acceptedRef.current = null
-  }, [input])
+  }, [analysisEdl, transcript, draft, revision])
+  const { input } = session
+
+  // Publish ownership at commit, before browser events or promise continuations.
+  // Cleanup revokes callbacks as well as requests, including on unmount. Merely
+  // returning to earlier settings never restores an earlier session's authority.
+  useLayoutEffect(() => {
+    sessionRef.current = session
+    return () => {
+      if (sessionRef.current === session) sessionRef.current = null
+      const active = activeRef.current
+      if (active?.session === session) {
+        activeRef.current = null
+        active.controller.abort()
+      }
+      if (outcomeRef.current?.owner.session === session) outcomeRef.current = null
+    }
+  }, [session])
+
+  function publish(next: ReviewOutcome | null) {
+    outcomeRef.current = next
+    setOutcome(next)
+  }
 
   function clearReview() {
     const active = activeRef.current
     activeRef.current = null
-    acceptedRef.current = null
+    publish(null)
     active?.controller.abort()
-    setOutcome(null)
   }
 
-  /** Call before an editor input change, closing the pre-render callback gap. */
+  /** Editor callbacks may be older than the current review. Invalidate the
+   * current owner synchronously, before dispatch or the next React commit. */
   function invalidate() {
-    invalidatedInputRef.current = activeRef.current?.input ?? acceptedRef.current?.input ?? input
+    sessionRef.current = null
     clearReview()
+    setRevision((previous) => previous + 1)
   }
 
-  /** Async editor callbacks may come from an older render. Compare the EDL
-   * actually under review, not the EDL captured by that callback's closure. */
   function invalidateForEdl(next: EDL | null): boolean {
-    const reviewed = activeRef.current?.edl ?? acceptedRef.current?.edl ?? analysisEdl
-    if (reviewed?.source === next?.source && reviewed?.segments === next?.segments) {
+    const reviewed = activeRef.current?.session ?? outcomeRef.current?.owner.session ?? sessionRef.current
+    if (reviewed?.snapshot == null || isClaritySnapshotEdlCurrent(reviewed.snapshot, next)) {
       return false
     }
     invalidate()
     return true
   }
 
-  function changeDraft(next: ClarityDraft) {
-    if (
+  function changeDraft(next: ClarityDraft): boolean {
+    if (sessionRef.current !== session || (
       next.targetDuration === draft.targetDuration &&
       next.audience === draft.audience &&
       next.mustStay === draft.mustStay
-    ) return
+    )) return false
     invalidate()
     setDraft({ ...next })
+    return true
   }
 
   function reset() {
@@ -99,37 +135,38 @@ export function useClarityReview(edl: EDL | null, transcript: Transcript | null)
     setDraft(createClarityDraft())
   }
 
-  async function analyze() {
-    if (
-      input.status !== 'ready' ||
-      analysisEdl === null ||
-      activeRef.current !== null ||
-      invalidatedInputRef.current === input
-    ) return
-    const active: ActiveAnalysis = { input, edl: analysisEdl, controller: new AbortController() }
+  function validateSession(candidate: ReviewSession): candidate is ReadySession {
+    if (sessionRef.current !== candidate) return false
+    if (isSessionFresh(candidate)) return true
+    // Also fail closed if a caller accidentally mutated otherwise stable input
+    // objects. Rebuild preparation before permitting another explicit request.
+    if (candidate.snapshot !== null) invalidate()
+    return false
+  }
+
+  async function analyze(onStart?: () => void) {
+    if (!validateSession(session) || activeRef.current !== null) return
+    const active: ActiveAnalysis = { session, controller: new AbortController() }
     activeRef.current = active
-    acceptedRef.current = null
-    setOutcome({ input, status: 'analyzing' })
+    publish({ owner: active, status: 'analyzing' })
     try {
+      onStart?.()
       const reply = await analyzeClarityContext(
-        input.context, undefined, undefined, active.controller.signal,
+        session.input.context, undefined, undefined, active.controller.signal,
       )
-      if (activeRef.current !== active) return
-      const result = normalizeClarityAnalysisResult(reply, input.context)
+      if (activeRef.current !== active || !validateSession(session)) return
+      const result = normalizeClarityAnalysisResult(reply, session.input.context)
       if (result === null) throw new Error('Received an invalid clarity proposal.')
-      const complete: CompleteReview = {
-        input,
-        edl: active.edl,
+      publish({
+        owner: active,
         status: 'complete',
         result,
         selectedIds: result.suggestions.map((suggestion) => suggestion.sentenceId),
-      }
-      acceptedRef.current = complete
-      setOutcome(complete)
+      })
     } catch (cause) {
-      if (activeRef.current !== active) return
-      setOutcome({
-        input,
+      if (activeRef.current !== active || !validateSession(session)) return
+      publish({
+        owner: active,
         status: 'error',
         error: cause instanceof Error ? cause.message : 'Clarity analysis failed. Try again.',
       })
@@ -138,21 +175,19 @@ export function useClarityReview(edl: EDL | null, transcript: Transcript | null)
     }
   }
 
-  const visible = outcome?.input === input ? outcome : null
+  const visible = outcome?.owner.session === session && isSessionFresh(session) ? outcome : null
   const complete = visible?.status === 'complete' ? visible : null
   const summary = useMemo(
     () => complete === null || analysisEdl === null ? null : summarizeClaritySelection(
-      analysisEdl, complete.input.catalog, complete.result, complete.selectedIds,
+      analysisEdl, complete.owner.session.input.catalog, complete.result, complete.selectedIds,
     ),
     [analysisEdl, complete],
   )
 
   function currentReview(): CompleteReview | null {
-    const latest = acceptedRef.current
-    return latest !== null && latest.input === input &&
-      latest.result === complete?.result && invalidatedInputRef.current !== input
-      ? latest
-      : null
+    if (!validateSession(session)) return null
+    const latest = outcomeRef.current
+    return latest?.status === 'complete' && latest.owner === complete?.owner ? latest : null
   }
 
   function select(sentenceId: string, selected: boolean) {
@@ -164,20 +199,24 @@ export function useClarityReview(edl: EDL | null, transcript: Transcript | null)
     if (ids.has(sentenceId) === selected) return
     if (selected) ids.add(sentenceId)
     else ids.delete(sentenceId)
-    const next = { ...latest, selectedIds: [...ids] }
-    acceptedRef.current = next
-    setOutcome(next)
+    publish({ ...latest, selectedIds: [...ids] })
   }
 
-  /** The player receives a locally validated sentence, never a model range. */
+  /** The player receives a freshly checked local sentence, never a model range. */
   function sentenceForPlayback(sentenceId: string) {
     const latest = currentReview()
     if (latest === null || !latest.result.suggestions.some(
       (suggestion) => suggestion.sentenceId === sentenceId,
     )) return null
-    return latest.input.catalog.find(
+    return latest.owner.session.input.catalog.find(
       (sentence) => sentence.id === sentenceId && sentence.removalRange !== null,
     ) ?? null
+  }
+
+  function discard(): boolean {
+    if (sessionRef.current !== session || outcomeRef.current?.owner !== outcome?.owner) return false
+    clearReview()
+    return true
   }
 
   const status: ReviewOutcome['status'] | 'idle' = visible?.status ?? 'idle'
@@ -190,7 +229,7 @@ export function useClarityReview(edl: EDL | null, transcript: Transcript | null)
     invalidate,
     invalidateForEdl,
     analyze,
-    discard: clearReview,
+    discard,
     select,
     sentenceForPlayback,
     status,

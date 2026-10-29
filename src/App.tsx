@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type {
   ChangeEvent,
   CSSProperties,
@@ -319,9 +319,9 @@ function App() {
     }
   }, [])
 
-  // Only stop an audition owned by the obsolete clarity input. Retake and
-  // ordinary playback are independent of clarity review state.
-  useEffect(() => {
+  // Stop an obsolete audition at commit, before another playback event. Retake
+  // and ordinary playback are independent of clarity review state.
+  useLayoutEffect(() => {
     const input = clarity.input
     return () => {
       const preview = claritySourcePreviewRef.current
@@ -1914,8 +1914,7 @@ function App() {
                   <ClarityPanel
                     draft={clarity.draft}
                     onDraftChange={(next) => {
-                      stopClaritySourcePreview()
-                      clarity.changeDraft(next)
+                      if (clarity.changeDraft(next)) stopClaritySourcePreview()
                     }}
                     availability={clarity.input.status}
                     message={clarity.input.status === 'ready' ? undefined : clarity.input.message}
@@ -1925,15 +1924,11 @@ function App() {
                     currentDurationSeconds={clarity.currentDurationSeconds}
                     proposedDurationSeconds={clarity.proposedDurationSeconds}
                     targetDurationSeconds={clarity.targetDurationSeconds}
-                    onAnalyze={() => {
-                      stopClaritySourcePreview()
-                      return clarity.analyze()
-                    }}
+                    onAnalyze={() => clarity.analyze(stopClaritySourcePreview)}
                     onSelect={clarity.select}
                     onPlaySentence={playClaritySentence}
                     onDiscard={() => {
-                      stopClaritySourcePreview()
-                      clarity.discard()
+                      if (clarity.discard()) stopClaritySourcePreview()
                     }}
                   />
                   {transcript === null && transcribeButton('sm')}
