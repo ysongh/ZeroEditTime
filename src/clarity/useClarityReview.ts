@@ -4,6 +4,7 @@ import type { EDL } from '../edl/types'
 import type { Transcript } from '../transcript/types'
 import { normalizeClarityAnalysisResult, type ClarityAnalysisResult } from './analysis'
 import { analyzeClarityContext } from './analysisApi'
+import type { ClarityCutProposal } from './edit'
 import {
   captureClaritySnapshot,
   isClaritySnapshotCurrent,
@@ -27,7 +28,12 @@ type ReviewSession = {
   snapshot: ClaritySnapshot | null
   revision: number
 }
-type ReadySession = ReviewSession & { input: ReadyInput; snapshot: ClaritySnapshot }
+type ReadySession = ReviewSession & {
+  input: ReadyInput
+  snapshot: ClaritySnapshot
+  edl: EDL
+  transcript: Transcript
+}
 type ActiveAnalysis = { session: ReadySession; controller: AbortController }
 type CompleteReview = {
   owner: ActiveAnalysis
@@ -39,6 +45,14 @@ type ReviewOutcome =
   | { owner: ActiveAnalysis; status: 'analyzing' }
   | { owner: ActiveAnalysis; status: 'error'; error: string }
   | CompleteReview
+
+export type ClarityEditSelection = {
+  key: object
+  proposal: ClarityCutProposal
+  transcript: Transcript
+  draft: ClarityDraft
+  isCurrent: () => boolean
+}
 
 function isSessionFresh(session: ReviewSession): session is ReadySession {
   return session.input.status === 'ready' && session.snapshot !== null &&
@@ -190,16 +204,35 @@ export function useClarityReview(edl: EDL | null, transcript: Transcript | null)
     return latest?.status === 'complete' && latest.owner === complete?.owner ? latest : null
   }
 
-  function select(sentenceId: string, selected: boolean) {
+  function select(sentenceId: string, selected: boolean): boolean {
     const latest = currentReview()
     if (latest === null || !latest.result.suggestions.some(
       (suggestion) => suggestion.sentenceId === sentenceId,
-    )) return
+    )) return false
     const ids = new Set(latest.selectedIds)
-    if (ids.has(sentenceId) === selected) return
+    if (ids.has(sentenceId) === selected) return false
     if (selected) ids.add(sentenceId)
     else ids.delete(sentenceId)
     publish({ ...latest, selectedIds: [...ids] })
+    return true
+  }
+
+  /** Capture the latest selection only after synchronous ownership/freshness
+   * checks. The editor resolves these IDs again against its latest EDL. */
+  function editSelection(): ClarityEditSelection | null {
+    const latest = currentReview()
+    if (latest === null) return null
+    return {
+      key: latest,
+      proposal: {
+        snapshot: latest.owner.session.snapshot,
+        result: latest.result,
+        selectedIds: latest.selectedIds,
+      },
+      transcript: latest.owner.session.transcript,
+      draft: latest.owner.session.draft,
+      isCurrent: () => currentReview() === latest,
+    }
   }
 
   /** The player receives a freshly checked local sentence, never a model range. */
@@ -231,6 +264,8 @@ export function useClarityReview(edl: EDL | null, transcript: Transcript | null)
     analyze,
     discard,
     select,
+    editSelection,
+    selectionKey: complete as object | null,
     sentenceForPlayback,
     status,
     error: visible?.status === 'error' ? visible.error : undefined,

@@ -13,6 +13,8 @@ export interface ClarityPanelProps {
   message?: string
   status: 'idle' | 'analyzing' | 'complete' | 'error'
   error?: string
+  actionError?: string
+  isPreviewing: boolean
   suggestions: readonly ClarityReviewSuggestion[]
   currentDurationSeconds: number
   proposedDurationSeconds: number | null
@@ -20,6 +22,9 @@ export interface ClarityPanelProps {
   onAnalyze: () => void | Promise<void>
   onSelect: (sentenceId: string, selected: boolean) => void
   onPlaySentence: (sentenceId: string) => void | Promise<void>
+  onPreview: () => void | Promise<void>
+  onStopPreview: () => void
+  onApply: () => void
   onDiscard: () => void
 }
 
@@ -44,6 +49,8 @@ export default function ClarityPanel({
   message,
   status,
   error,
+  actionError,
+  isPreviewing,
   suggestions,
   currentDurationSeconds,
   proposedDurationSeconds,
@@ -51,12 +58,17 @@ export default function ClarityPanel({
   onAnalyze,
   onSelect,
   onPlaySentence,
+  onPreview,
+  onStopPreview,
+  onApply,
   onDiscard,
 }: ClarityPanelProps) {
   const isAnalyzing = status === 'analyzing'
   const isReady = availability === 'ready'
   const showResult = isReady && status === 'complete'
   const selectedCount = suggestions.filter((suggestion) => suggestion.selected).length
+  const showEditActions = status === 'complete' && suggestions.length > 0
+  const canEdit = showResult && selectedCount > 0
   const feedback = message?.trim() || AVAILABILITY_MESSAGES[availability]
   const showProposedDuration = showResult && proposedDurationSeconds !== null
   const targetNotReached =
@@ -143,6 +155,9 @@ export default function ClarityPanel({
       >
         {feedback !== '' && <p>{feedback}</p>}
         {isAnalyzing && <p>Analyzing the kept speech for clarity edits…</p>}
+        {isPreviewing && (
+          <p>Previewing selected cuts. Export still uses the current edit until you apply.</p>
+        )}
         {showResult && (
           suggestions.length === 0 ? (
             <>
@@ -162,6 +177,11 @@ export default function ClarityPanel({
         <div className="clarity-panel__error" role="alert">
           <strong>Couldn’t suggest clarity edits.</strong>
           <p>{error?.trim() || 'Try again.'}</p>
+        </div>
+      )}
+      {actionError?.trim() && (
+        <div className="clarity-panel__error" role="alert">
+          <p>{actionError}</p>
         </div>
       )}
 
@@ -189,6 +209,38 @@ export default function ClarityPanel({
         <p className="clarity-panel__target-note">
           <strong>Target not reached.</strong> The proposed edit is longer than your target.
         </p>
+      )}
+
+      {(showEditActions || isPreviewing) && (
+        <div className="clarity-panel__actions">
+          {isPreviewing ? (
+            <button type="button" className="btn btn--outline" onClick={onStopPreview}>
+              <Icon name="pause" />
+              Stop preview
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn--outline"
+              disabled={!canEdit}
+              onClick={() => void onPreview()}
+            >
+              <Icon name="play" />
+              Preview edited version
+            </button>
+          )}
+          {showEditActions && (
+            <button
+              type="button"
+              className="btn btn--primary"
+              disabled={!canEdit}
+              onClick={onApply}
+            >
+              <Icon name="check" />
+              Apply selected cuts
+            </button>
+          )}
+        </div>
       )}
 
       {showResult && suggestions.length > 0 && (

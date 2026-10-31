@@ -27,7 +27,9 @@ import RetakesPanel, {
 } from './retakes/RetakesPanel'
 import RetakeTimelineTrack from './retakes/RetakeTimelineTrack'
 import ClarityPanel from './clarity/ClarityPanel'
-import { useClarityReview } from './clarity/useClarityReview'
+import { useClarityReview, type ClarityEditSelection } from './clarity/useClarityReview'
+import { deriveClarityEdit, type ClarityCutProposal } from './clarity/edit'
+import type { ClarityDraft } from './clarity/review'
 import Icon from './ui/Icon'
 import IconBadge from './ui/IconBadge'
 import { formatClock, formatSeconds } from './ui/time'
@@ -123,6 +125,14 @@ type ClaritySourcePreview = RetakeSourcePreview & {
   video: HTMLVideoElement
 }
 
+type ClaritySelectionKey = ReturnType<typeof useClarityReview>['selectionKey']
+type ClarityEditedPreview = {
+  selectionKey: ClaritySelectionKey
+  selection: ClarityEditSelection
+  edl: EDL
+  video: HTMLVideoElement
+}
+
 type SuccessfulRetakeAnalysis = {
   transcript: Transcript
   sourceId: string
@@ -137,6 +147,7 @@ type ActiveRetakeAnalysis = {
 type EditorAction =
   | { type: 'replace-edl'; edl: EDL }
   | { type: 'commit-edl'; edl: EDL }
+  | { type: 'apply-clarity'; proposal: ClarityCutProposal; transcript: Transcript; draft: ClarityDraft }
   | { type: 'commit-overlays'; action: OverlayEditorAction }
   | { type: 'update-retakes'; action: RetakeEditorAction }
   | { type: 'undo' }
@@ -178,6 +189,18 @@ function editorReducer(state: EditorState, action: EditorAction): EditorState {
         edl: action.edl,
         history: [...state.history, snapshotEditor(state)],
       }
+    case 'apply-clarity': {
+      if (state.edl === null) return state
+      // Rebuild validated cuts against the latest EDL, including caption edits
+      // queued before this action. Never commit a preview's captured EDL.
+      const edit = deriveClarityEdit(state.edl, action.transcript, action.draft, action.proposal)
+      if (!edit.ok || edit.edl === state.edl) return state
+      return {
+        ...state,
+        edl: edit.edl,
+        history: [...state.history, snapshotEditor(state)],
+      }
+    }
     case 'commit-overlays': {
       const overlays = overlayEditorReducer(state.overlays, action.action)
       const contentChanged =
@@ -280,6 +303,12 @@ function App() {
   const [burnCaptions, setBurnCaptions] = useState(true)
   const [isExporting, setIsExporting] = useState(false)
   const clarity = useClarityReview(edl, transcript)
+  const [clarityEditedPreview, setClarityEditedPreview] = useState<ClarityEditedPreview | null>(null)
+  const [clarityActionError, setClarityActionError] = useState<{
+    selectionKey: ClaritySelectionKey; message: string
+  } | null>(null)
+  const isClarityPreviewing = clarityEditedPreview !== null &&
+    clarityEditedPreview.selectionKey === clarity.selectionKey
   // Ephemeral view state: which inspector tab is open, transport status,
   // whether playback jumps removed ranges, and the empty-state drop highlight.
   const [activeTab, setActiveTab] = useState<InspectorTab>('transcript')
@@ -294,6 +323,7 @@ function App() {
   // must never enter the EDL, output-time projection, editor history, or export.
   const retakeSourcePreviewRef = useRef<RetakeSourcePreview | null>(null)
   const claritySourcePreviewRef = useRef<ClaritySourcePreview | null>(null)
+  const clarityEditedPreviewRef = useRef<ClarityEditedPreview | null>(null)
   const retakeScriptCopyAttemptRef = useRef(0)
   // Object identity is both the synchronous double-start lock and the
   // latest-request token. Invalidating it before aborting makes every late
@@ -332,6 +362,20 @@ function App() {
     }
   }, [clarity.input])
 
+  // Selection/proposal replacement also revokes temporary edited playback.
+  // The rendered flag is keyed to the same selection, so stale state is hidden
+  // before cleanup without putting ephemeral playback into editor history.
+  useLayoutEffect(() => {
+    const selectionKey = clarity.selectionKey
+    return () => {
+      const preview = clarityEditedPreviewRef.current
+      if (preview?.selectionKey === selectionKey) {
+        clarityEditedPreviewRef.current = null
+        preview.video.pause()
+      }
+    }
+  }, [clarity.selectionKey])
+
   // An image URL remains live while reachable from current editor content OR
   // an Undo snapshot. This lets asset removal stay undoable and prevents early
   // revocation when two assets share one URL. A URL is revoked as soon as it
@@ -362,14 +406,14 @@ function App() {
     if (edl === null) {
       return
     }
-    if (clarity.invalidateForEdl(next)) stopClaritySourcePreview()
+    if (clarity.invalidateForEdl(next)) stopClarityPlayback()
     dispatchEditor({ type: 'commit-edl', edl: next })
   }
 
   function undo() {
     const previous = history.at(-1)?.edl
     if (previous !== undefined && clarity.invalidateForEdl(previous)) {
-      stopClaritySourcePreview()
+      stopClarityPlayback()
     }
     dispatchEditor({ type: 'undo' })
   }
@@ -381,15 +425,84 @@ function App() {
     preview.video.pause()
   }
 
-  function invalidateClarity() {
+  function stopClarityEditedPreview(pause = true) {
+    const preview = clarityEditedPreviewRef.current
+    if (preview === null) return
+    clarityEditedPreviewRef.current = null
+    setClarityEditedPreview(null)
+    if (pause) preview.video.pause()
+  }
+
+  function stopClarityPlayback() {
     stopClaritySourcePreview()
+    stopClarityEditedPreview()
+  }
+
+  function invalidateClarity() {
+    stopClarityPlayback()
     clarity.invalidate()
+  }
+
+  async function previewClarityEdit() {
+    const selection = clarity.editSelection()
+    const video = videoRef.current
+    if (selection === null || edl === null || video === null) return
+    const edit = deriveClarityEdit(edl, selection.transcript, selection.draft, selection.proposal)
+    if (!edit.ok) {
+      stopClarityPlayback()
+      setClarityActionError({ selectionKey: selection.key, message: edit.message })
+      return
+    }
+    if (edit.selectedCount === 0 || edit.edl === edl || edit.edl.segments.length === 0) return
+    // Switching audition modes keeps playback continuous; do not queue a pause
+    // event that could cancel the newly started mode.
+    claritySourcePreviewRef.current = null
+    retakeSourcePreviewRef.current = null
+    const preview: ClarityEditedPreview = {
+      selectionKey: selection.key, selection, edl: edit.edl, video,
+    }
+    clarityEditedPreviewRef.current = preview
+    setClarityEditedPreview(preview)
+    setClarityActionError(null)
+    video.currentTime = edit.edl.segments[0].start
+    setPlayhead(video.currentTime)
+    try {
+      await video.play()
+    } catch {
+      if (clarityEditedPreviewRef.current !== preview) return
+      stopClarityEditedPreview()
+      setClarityActionError({
+        selectionKey: preview.selectionKey,
+        message: 'Couldn’t play the edited preview. Try previewing again.',
+      })
+    }
+  }
+
+  function applyClarityCuts() {
+    const selection = clarity.editSelection()
+    if (selection === null || edl === null) return
+    const edit = deriveClarityEdit(edl, selection.transcript, selection.draft, selection.proposal)
+    stopClarityPlayback()
+    if (!edit.ok) {
+      setClarityActionError({ selectionKey: selection.key, message: edit.message })
+      return
+    }
+    if (edit.selectedCount === 0 || edit.edl === edl) return
+    // Revoke the proposal synchronously; a double click cannot apply it twice.
+    // The reducer still revalidates using the latest state before committing.
+    clarity.discard()
+    setClarityActionError(null)
+    dispatchEditor({
+      type: 'apply-clarity', proposal: selection.proposal,
+      transcript: selection.transcript, draft: selection.draft,
+    })
   }
 
   async function playClaritySentence(sentenceId: string) {
     const sentence = clarity.sentenceForPlayback(sentenceId)
     const video = videoRef.current
     if (sentence === null || video === null) return
+    stopClarityEditedPreview(false)
     // Both audition modes share the source player, but retain separate owners.
     retakeSourcePreviewRef.current = null
     const preview = { ...sentence.sourceRange, input: clarity.input, video }
@@ -568,7 +681,7 @@ function App() {
   function loadSourceFile(selected: File) {
     activeTranscriptionRef.current = null
     cancelActiveRetakeAnalysis()
-    stopClaritySourcePreview()
+    stopClarityPlayback()
     clarity.reset()
     retakeSourcePreviewRef.current = null
     setSuccessfulRetakeAnalysis(null)
@@ -644,13 +757,27 @@ function App() {
       return
     }
 
-    if (edl === null || video.paused || !skipCuts) {
+    const editedPreview = clarityEditedPreviewRef.current
+    if (editedPreview !== null && !editedPreview.selection.isCurrent()) {
+      stopClarityEditedPreview()
+      setPlayhead(t)
+      return
+    }
+    const playbackEdl = editedPreview?.edl ?? edl
+    if (playbackEdl === null || video.paused || (editedPreview === null && !skipCuts)) {
       setPlayhead(t)
       return
     }
 
-    const next = nextSourceTime(edl, t)
+    const next = nextSourceTime(playbackEdl, t)
     if (next === null) {
+      if (editedPreview !== null) {
+        const end = playbackEdl.segments.at(-1)?.end ?? t
+        video.currentTime = end
+        stopClarityEditedPreview()
+        setPlayhead(end)
+        return
+      }
       video.pause()
       setPlayhead(t)
       return
@@ -667,18 +794,24 @@ function App() {
   // past the end, or skip forward if we're sitting inside a removed gap.
   function handlePlay(event: SyntheticEvent<HTMLVideoElement>) {
     const video = event.currentTarget
+    const editedPreview = clarityEditedPreviewRef.current
+    if (editedPreview !== null && !editedPreview.selection.isCurrent()) {
+      stopClarityEditedPreview()
+      return
+    }
     if (
       retakeSourcePreviewRef.current !== null ||
-      claritySourcePreviewRef.current !== null || !skipCuts
+      claritySourcePreviewRef.current !== null || (editedPreview === null && !skipCuts)
     ) {
       return
     }
-    if (edl === null || edl.segments.length === 0) {
+    const playbackEdl = editedPreview?.edl ?? edl
+    if (playbackEdl === null || playbackEdl.segments.length === 0) {
       return
     }
-    const next = nextSourceTime(edl, video.currentTime)
+    const next = nextSourceTime(playbackEdl, video.currentTime)
     if (next === null) {
-      const start = edl.segments[0].start
+      const start = playbackEdl.segments[0].start
       video.currentTime = start
       setPlayhead(start)
     } else if (next > video.currentTime + 1e-3) {
@@ -688,6 +821,7 @@ function App() {
   }
 
   function handleSeek(sourceTime: number) {
+    stopClarityEditedPreview()
     retakeSourcePreviewRef.current = null
     claritySourcePreviewRef.current = null
     if (videoRef.current !== null) {
@@ -730,6 +864,7 @@ function App() {
     }
 
     const preview: RetakeSourcePreview = { start, end }
+    stopClarityEditedPreview(false)
     claritySourcePreviewRef.current = null
     retakeSourcePreviewRef.current = preview
     const video = videoRef.current
@@ -1466,14 +1601,20 @@ function App() {
                     handlePlay(event)
                   }}
                   onPause={() => {
+                    // A queued pause from an earlier mode must not cancel a
+                    // newer play() that has already resumed this same video.
+                    if (videoRef.current?.paused === false) return
                     setIsPlaying(false)
                     cancelRetakeSourcePreview()
                     claritySourcePreviewRef.current = null
+                    stopClarityEditedPreview(false)
                   }}
                   onEnded={() => {
+                    if (videoRef.current?.paused === false) return
                     setIsPlaying(false)
                     cancelRetakeSourcePreview()
                     claritySourcePreviewRef.current = null
+                    stopClarityEditedPreview(false)
                   }}
                 />
                 {showCutNotice && (
@@ -1914,7 +2055,7 @@ function App() {
                   <ClarityPanel
                     draft={clarity.draft}
                     onDraftChange={(next) => {
-                      if (clarity.changeDraft(next)) stopClaritySourcePreview()
+                      if (clarity.changeDraft(next)) stopClarityPlayback()
                     }}
                     availability={clarity.input.status}
                     message={clarity.input.status === 'ready' ? undefined : clarity.input.message}
@@ -1924,12 +2065,22 @@ function App() {
                     currentDurationSeconds={clarity.currentDurationSeconds}
                     proposedDurationSeconds={clarity.proposedDurationSeconds}
                     targetDurationSeconds={clarity.targetDurationSeconds}
-                    onAnalyze={() => clarity.analyze(stopClaritySourcePreview)}
-                    onSelect={clarity.select}
+                    onAnalyze={() => clarity.analyze(stopClarityPlayback)}
+                    onSelect={(id, selected) => {
+                      if (clarity.select(id, selected)) stopClarityEditedPreview()
+                    }}
                     onPlaySentence={playClaritySentence}
                     onDiscard={() => {
-                      if (clarity.discard()) stopClaritySourcePreview()
+                      if (clarity.discard()) stopClarityPlayback()
                     }}
+                    isPreviewing={isClarityPreviewing}
+                    onPreview={previewClarityEdit}
+                    onStopPreview={() => {
+                      if (clarityEditedPreviewRef.current === clarityEditedPreview) stopClarityEditedPreview()
+                    }}
+                    onApply={applyClarityCuts}
+                    actionError={clarityActionError?.selectionKey === clarity.selectionKey
+                      ? clarityActionError?.message : undefined}
                   />
                   {transcript === null && transcribeButton('sm')}
                 </div>

@@ -1,8 +1,8 @@
 # AI Clarity Edit — implementation notes
 
-Parts 1–4 implement pure local sentence mapping, a bounded clarity-analysis API,
-a working Clarity inspector, and request/proposal freshness. Edited-version preview
-and applying selected cuts remain pending. Analysis runs only on an explicit click.
+Parts 1–5 implement pure local sentence mapping, a bounded clarity-analysis API,
+review/freshness guards, temporary edited preview, and applying selected cuts as
+one undoable action. Analysis runs only on an explicit click.
 
 ## Using the Clarity tab
 
@@ -14,16 +14,22 @@ and applying selected cuts remain pending. Analysis runs only on an explicit cli
    at its end. The regular transport also stops playback.
 4. Toggle **Remove this sentence** to compare the locally calculated proposed
    duration. An unmet target is shown explicitly; no extra request forces it.
-5. **Discard** clears review and cancels pending analysis or its active audition.
+5. **Preview edited version** plays the selected cuts from the first kept range.
+   **Stop preview**, pausing, or seeking returns to ordinary playback. Changing a
+   selection also stops preview so you can preview the revised choices explicitly.
+6. **Apply selected cuts** commits all selected removals together. One **Undo**
+   restores the content from immediately before Apply.
+7. **Discard** clears review and cancels pending analysis or active Clarity playback.
 
 An empty proposal is a successful result. Deselecting every suggestion still
 shows the returned cards, with zero selected. Oversized input is rejected with
 the applicable limit, without sending a truncated recording for analysis.
 
 The tab stays mounted while hidden, preserving draft settings and review state.
-Analysis, selection, audition, and Discard do not change editor content, Undo,
+Analysis, selection, audition, edited preview, and Discard do not change editor content, Undo,
 caption text, overlays, audio settings, retake workflow, or export inputs. The
-proposed duration is a comparison only; export still reads the committed edit.
+proposed duration is calculated locally; export reads the committed edit even
+during preview. Empty/deselected proposals cannot start edited preview or Apply.
 
 ## Sentence mapping
 
@@ -64,8 +70,8 @@ The existing punctuation-based parser can split abbreviations and treats an
 unpunctuated transcript as one sentence. This step does not change that policy.
 Range eligibility does not prove a sentence is unnecessary or establish proposal
 freshness. The response validator now rejects proposals covering every context
-entry, including when silence would remain. Later editor integration must still
-revalidate freshness and actual local ranges synchronously before Apply.
+entry, including when silence would remain. Apply revalidates freshness and
+rebuilds actual local ranges synchronously before committing.
 
 ## Clarity-analysis API
 
@@ -171,19 +177,43 @@ Reference replacement of source, ranges, or transcript conservatively creates a
 fresh session, even when values compare equal. Value checks additionally reject
 accidental in-place changes before effects or another render.
 
-Future Apply must use the same snapshot check synchronously against the latest
-editor content, then validate selected ranges before its single history commit.
-This part does not yet add the Apply action.
+Apply uses the same snapshot check synchronously, then validates selected ranges
+again against the latest reducer state before its single history commit.
 
 `review.ts` keeps draft validation, card mapping, and selected-duration calculation
 pure. `useClarityReview.ts` owns ephemeral request/selection state, and
 `ClarityPanel.tsx` is a controlled view. `App.tsx` owns bounded source playback.
-Clarity and retake auditions have separate owners; clearing clarity review does
+Clarity and retake playback have separate owners; clearing clarity review does
 not stop ordinary playback or a retake audition.
 
 Only normalized text, IDs, eligibility, durations, and settings are sent to the
 same-origin relay and then the model. Source URLs, filenames, raw media, actual
 source ranges, editor content, and credentials are excluded from this request.
+
+## Edited preview and Apply
+
+[`edit.ts`](../src/clarity/edit.ts) shares pure edit derivation between preview and
+Apply. It checks snapshot values, rebuilds the current catalog, validates the full
+proposal and selected IDs, and resolves source ranges locally. Every selected cut
+passes through `applyRemovedRange` in source order. Existing cuts remain intact;
+protected sentences, unknown IDs, and all-speech removal are rejected. Empty or
+unchanged derivations return the original EDL so they cannot create history.
+
+Edited playback uses a temporary EDL and a token bound to the exact proposal and
+selection. It forces that EDL's cuts while preserving the ordinary **Skip Cuts**
+setting. Stop, pause/end, seek, selection changes, a new analysis, Discard, Apply,
+source/input invalidation, or switching to an original/retake audition exits the
+temporary mode. Old Stop callbacks and late playback failures cannot cancel newer
+playback. Export, timeline, and transcript stay bound to committed content.
+Captions and image overlays retain their current source-time content during preview.
+
+Apply captures the current selected IDs and revokes the review's ownership to
+prevent a double click from committing twice. The dedicated `apply-clarity` reducer
+action revalidates and derives cuts against its latest EDL, preserving caption text
+and any caption/overlay edits queued before Apply. It snapshots the latest content
+once and preserves retake workflow and export settings. Captions are never
+regenerated. A single Undo restores that pre-Clarity EDL and overlay content;
+discarded advice does not return with Undo.
 
 ## Verification
 
@@ -214,7 +244,21 @@ settings, late success/failure after cancellation, completed-proposal audition
 cleanup, and preservation of newer review and caption edits. Build and lint passed;
 the full suite passed **1,439 tests across 64 files**. The same desktop/mobile
 Chrome smoke check also passed again with mocked media, transcription, and model
-responses. Synchronous freshness at Apply will be tested when Apply is added.
+responses. Apply was not part of that step.
+
+Part 5 adds 29 pure derivation tests, 12 component tests, and 32 App integration
+regressions. Coverage includes selected/deselected cuts, existing gaps and protected
+speech, temporary playback lifecycle, stale callbacks and queued media events,
+freshness at Apply, queued caption/overlay edits, export isolation, no-op/double
+Apply, and one-step Undo. `pnpm build` and `pnpm lint` passed; `pnpm test` passed
+**1,512 tests across 65 files**.
+
+A headless Chrome check passed at 1480×1100 and 390×844; both screenshots were
+visually inspected. With mocked media metadata/playback, transcription, extraction,
+and model responses, it verified temporary cut skipping, Stop, selection changes,
+Discard, Apply, ordinary playback after Apply, and one-step Undo, with exactly
+three explicit analysis requests and no runtime exceptions. These checks exercised
+the actual React UI, including Strict Mode; they did not decode or listen to media.
 
 Live-model proposal quality and real-recording playback remain unverified. Actual
 media decoding, sentence-boundary sound, and encoded-output quality are not proved
@@ -234,5 +278,12 @@ by mocked browser or automated tests.
 - Keep hand-edited captions, overlays, audio settings, and dismissed retakes.
   Confirm review/Discard leave them and Undo unchanged; compare exported output
   before and after review.
-- After the later preview/Apply step is implemented, verify temporary edited
-  playback, one-step Undo, caption/overlay alignment, and the actual exported edit.
+- Preview selected cuts with **Skip Cuts** both on and off. Check playback starts
+  at the first kept range, skips earlier and selected cuts, and stops at the final
+  kept range. Check Stop, pause, seek, selection edits, and Discard restore ordinary
+  playback without changing the saved edit or Undo.
+- Make caption and overlay edits after analysis, then Apply multiple selections.
+  Verify one Undo restores the pre-Clarity edit while preserving those prior edits,
+  audio settings, and retake workflow. Export during preview and after Apply; verify
+  the first uses committed cuts and the second includes accepted Clarity cuts,
+  with aligned captions/overlays and synchronized audio in the encoded output.

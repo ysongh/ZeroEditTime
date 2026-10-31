@@ -84,6 +84,10 @@ function renderPanel(patch: Partial<ClarityPanelProps> = {}): ReactElement {
     onAnalyze: vi.fn(),
     onSelect: vi.fn(),
     onPlaySentence: vi.fn(),
+    isPreviewing: false,
+    onPreview: vi.fn(),
+    onStopPreview: vi.fn(),
+    onApply: vi.fn(),
     onDiscard: vi.fn(),
     ...patch,
   })
@@ -327,5 +331,93 @@ describe('ClarityPanel', () => {
         id: 'clarity-panel-status', 'aria-live': 'polite', 'aria-atomic': 'true',
       })
     }
+  })
+
+  it('forwards explicit preview and apply actions without invoking analysis or selection', () => {
+    const onPreview = vi.fn()
+    const onApply = vi.fn()
+    const onAnalyze = vi.fn()
+    const onSelect = vi.fn()
+    const onStopPreview = vi.fn()
+    const view = renderPanel({ onPreview, onApply, onAnalyze, onSelect, onStopPreview })
+
+    expect(onPreview).not.toHaveBeenCalled()
+    expect(onApply).not.toHaveBeenCalled()
+    expect(findButton(view, 'Preview edited version').props.disabled).toBe(false)
+    expect(findButton(view, 'Apply selected cuts').props.disabled).toBe(false)
+    findButton(view, 'Preview edited version').props.onClick?.()
+    findButton(view, 'Apply selected cuts').props.onClick?.()
+
+    expect(onPreview).toHaveBeenCalledExactlyOnceWith()
+    expect(onApply).toHaveBeenCalledExactlyOnceWith()
+    expect(onAnalyze).not.toHaveBeenCalled()
+    expect(onSelect).not.toHaveBeenCalled()
+    expect(onStopPreview).not.toHaveBeenCalled()
+  })
+
+  it('disables preview and apply while every suggestion is deselected', () => {
+    const view = renderPanel({
+      suggestions: SUGGESTIONS.map((suggestion) => ({ ...suggestion, selected: false })),
+    })
+    expect(findButton(view, 'Preview edited version').props.disabled).toBe(true)
+    expect(findButton(view, 'Apply selected cuts').props.disabled).toBe(true)
+  })
+
+  it.each(['unavailable', 'invalid', 'oversized'] as const)(
+    'disables completed-proposal actions when input becomes %s',
+    (availability) => {
+      const view = renderPanel({ availability })
+      expect(findButton(view, 'Preview edited version').props.disabled).toBe(true)
+      expect(findButton(view, 'Apply selected cuts').props.disabled).toBe(true)
+    },
+  )
+
+  it.each(['idle', 'analyzing', 'error', 'complete'] as const)(
+    'omits preview and apply for an empty %s result',
+    (status) => {
+      const view = renderPanel({ status, suggestions: [] })
+      const labels = findHosts(view, 'button').map(textOf)
+      expect(labels).not.toContain('Preview edited version')
+      expect(labels).not.toContain('Stop preview')
+      expect(labels).not.toContain('Apply selected cuts')
+    },
+  )
+
+  it('announces preview, switches to Stop, and keeps Apply available', () => {
+    const onStopPreview = vi.fn()
+    const onPreview = vi.fn()
+    const onApply = vi.fn()
+    const view = renderPanel({ isPreviewing: true, onStopPreview, onPreview, onApply })
+    expect(statusText(view)).toContain(
+      'Previewing selected cuts. Export still uses the current edit until you apply.',
+    )
+    expect(findHosts(view, 'button').map(textOf)).not.toContain('Preview edited version')
+    expect(findButton(view, 'Apply selected cuts').props.disabled).toBe(false)
+    expect(findButton(view, 'Stop preview').props.disabled).not.toBe(true)
+    findButton(view, 'Stop preview').props.onClick?.()
+    expect(onStopPreview).toHaveBeenCalledExactlyOnceWith()
+    expect(onPreview).not.toHaveBeenCalled()
+    expect(onApply).not.toHaveBeenCalled()
+  })
+
+  it('always permits Stop during an active preview even when input becomes unavailable', () => {
+    const view = renderPanel({
+      isPreviewing: true, availability: 'unavailable', suggestions: [], status: 'idle',
+    })
+    expect(findButton(view, 'Stop preview').props.disabled).not.toBe(true)
+    expect(findHosts(view, 'button').map(textOf)).not.toContain('Apply selected cuts')
+  })
+
+  it('shows an action failure independently of a successful analysis', () => {
+    const view = renderPanel({ actionError: 'The video could not start playback. Try preview again.' })
+    const alerts = findHosts(view, 'div').filter((node) => node.props.role === 'alert')
+    expect(alerts).toHaveLength(1)
+    expect(textOf(alerts[0])).toBe('The video could not start playback. Try preview again.')
+    expect(textOf(view)).not.toContain('Couldn’t suggest clarity edits.')
+    expect(findHosts(view, 'article')).toHaveLength(2)
+    expect(findButton(view, 'Preview edited version').props.disabled).toBe(false)
+    expect(findHosts(renderPanel({ actionError: ' ' }), 'div').filter(
+      (node) => node.props.role === 'alert',
+    )).toEqual([])
   })
 })
