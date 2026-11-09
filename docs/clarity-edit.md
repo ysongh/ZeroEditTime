@@ -1,8 +1,9 @@
 # AI Clarity Edit — implementation notes
 
-Parts 1–5 implement pure local sentence mapping, a bounded clarity-analysis API,
+Parts 1–6 implement pure local sentence mapping, a bounded clarity-analysis API,
 review/freshness guards, temporary edited preview, and applying selected cuts as
-one undoable action. Analysis runs only on an explicit click.
+one undoable action, plus export integration tests and repeatable verification
+scripts. Analysis runs only on an explicit click.
 
 ## Using the Clarity tab
 
@@ -260,9 +261,15 @@ Discard, Apply, ordinary playback after Apply, and one-step Undo, with exactly
 three explicit analysis requests and no runtime exceptions. These checks exercised
 the actual React UI, including Strict Mode; they did not decode or listen to media.
 
-Live-model proposal quality and real-recording playback remain unverified. Actual
-media decoding, sentence-boundary sound, and encoded-output quality are not proved
-by mocked browser or automated tests.
+Part 6 adds three integration tests connecting Clarity-derived cuts to caption/SRT,
+overlay, and audio/video export preparation. It also adds repeatable Chrome and
+live-relay checks. Build and lint passed; the full suite passed **1,515 tests across
+66 files**. A generated-media browser run decoded actual MP4 exports before
+Apply, after Apply, and after Undo; one live synthetic transcript produced the
+expected redundant/tangent removals while retaining its essential sentences.
+See [verification evidence and commands](clarity-verification.md) for exact scope.
+Real-recording playback, sentence-boundary sound, and broader semantic quality
+remain unverified. Generated media and mocked speech cannot establish these.
 
 ## Manual recording checklist (pending)
 

@@ -126,5 +126,7 @@ The [AI Clarity Edit implementation notes](docs/clarity-edit.md) describe the
 sentence-mapping foundation, bounded analysis API, Clarity review tab, and
 request/proposal freshness checks. Changing analysis inputs clears old advice.
 Edited preview leaves content and export unchanged until Apply.
+The [Clarity verification notes](docs/clarity-verification.md) include reproducible
+browser/live checks, their results, and remaining real-recording checks.
 Use the [Phase 9A image-overlay manual verification checklist](docs/phase-9a-manual-verification.md)
 for browser end-to-end and export release checks.
